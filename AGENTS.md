@@ -5,6 +5,13 @@
 - 定位问题时，未明确要求修改代码就先调查原因。结合源码、日志和运行时证据，区分已确认原因与待验证假设。
 - 保留与任务无关的本地改动，不自行恢复已移除的模块或内部依赖。
 
+## 上游同步（ZCode fork）
+
+本仓库是 `zai-org/ZCode` 的长期商业 fork，ZCode 按上游供应商对待；完整策略与命令见 `UPSTREAM-SYNC.md`。
+
+- 低 diff 原则：产品逻辑（路由、鉴权、计费、品牌、编排等）优先做成新模块、adapter、hook 或包装，落在上游模块之外；尽量不改上游拥有的文件，必须改时保持补丁小、局部、易移除，先过 `UPSTREAM-SYNC.md` 的五个自检问题。
+- 上游同步走 `upstream/main` → `vendor/zcode`（只 ff-only）→ merge 进 `main`；不对长期产品分支 rebase upstream，不 force-push 共享分支；短期 feature 分支可 rebase `origin/main`。
+
 ## 命令与仓库结构
 
 开工前运行 `node scripts/check-workspace-freshness.mjs` 检查基线。Node 版本以 `mise.toml` 为准。
