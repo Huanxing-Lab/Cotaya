@@ -24,12 +24,18 @@ const SUITES = {
   unit: {
     description: "单元测试（U-01…U-08：契约、策略、纯领域规则）",
     kind: "node-test",
-    files: ["packages/services/test/continuous/contract.test.ts"],
+    files: [
+      "packages/services/test/continuous/contract.test.ts",
+      "apps/zcode-cli/packages/bootstrap/test/continuous/scope.test.ts",
+    ],
   },
   integration: {
-    description: "存储与事务集成（I-01…；真实 SQLite migration/FK/事务）",
+    description: "存储与工作区集成（I-01…I-04；真实 SQLite/Git/文件事实）",
     kind: "node-test",
-    files: ["packages/services/test/continuous/repository.test.ts"],
+    files: [
+      "packages/services/test/continuous/repository.test.ts",
+      "packages/services/test/continuous/workspace.test.ts",
+    ],
   },
   recovery: {
     description: "崩溃与重启恢复（R-01…；CT-07 起加入）",

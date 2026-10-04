@@ -351,7 +351,7 @@ Decision
 
 ## 7. 执行、交付与验证
 
-创建 Program worktree 从用户明确选择的现有 HEAD 开始。分支名默认 `codex/continuous-<program-id>`。原工作区有未提交变更时不复制、不覆盖；页面明确说明本轮以 HEAD 为基础。只创建并管理本功能自己的 worktree，不清理用户 worktree。
+创建 Program worktree 从用户明确选择的现有 HEAD 开始。分支名默认 `codex/continuous-<program-id>`。worktree 由本功能管理，位于产品数据目录（`~/.cotaya/continuous-worktrees/<program-id>`），不落在用户仓库或其父目录内。原工作区有未提交变更时不复制、不覆盖；页面明确说明本轮以 HEAD 为基础。只创建并管理本功能自己的 worktree，不清理用户 worktree。
 
 每轮记录起始 commit。每个候选修改前建立受控检查点，限制只改当前授权路径。测试、浏览器验证和独立 Review 全部通过，才允许本地提交并标记 done。
 

@@ -134,10 +134,56 @@ export interface WorkspacePreparationResult {
   baseCommit: string;
 }
 
+// ── 候选检查点（规格 §7：修改前受控检查点；验证失败只恢复归属明确的本候选文件）──
+
+/** 候选检查点元数据；baseCommit 为建立检查点时 worktree 的 HEAD。 */
+export interface CandidateCheckpointMeta {
+  programId: string;
+  candidateId: string;
+  executionPath: string;
+  baseCommit: string;
+  /** 归属明确的候选授权路径（相对 executionPath 的 repo 相对路径）。 */
+  ownedPaths: string[];
+  createdAt: number;
+}
+
+/** 候选写入归属证据：路径 + 最后一次写入后的 git blob OID（git hash-object 语义）。 */
+export interface CandidateWriteFingerprint {
+  path: string;
+  contentOid: string;
+}
+
+export interface CandidateRestoreRequest {
+  programId: string;
+  candidateId: string;
+  /** 候选最后写入指纹；未登记指纹的路径若相对检查点有变化，视为归属不明。 */
+  candidateWrites: CandidateWriteFingerprint[];
+}
+
+/** 恢复是逐路径决策：归属不明的路径保持原样并返回 refused，不整仓回滚。 */
+export interface CandidateRestoreOutcome {
+  path: string;
+  action: "restored" | "deleted" | "unchanged" | "refused";
+  reason?:
+    | "externally_modified"
+    | "missing_after_write"
+    | "symlink_present"
+    | "modified_without_attribution";
+}
+
 export interface WorkspacePreparationPort {
   prepare(request: WorkspacePreparationRequest): Promise<WorkspacePreparationResult>;
   /** 只释放本功能自己的 worktree 管理；保留分支与提交，不清理用户 worktree。 */
   release(programId: string): Promise<void>;
+  /** 候选修改前建立检查点；ownedPaths 必须已通过执行策略的路径检查。 */
+  createCandidateCheckpoint(request: {
+    programId: string;
+    candidateId: string;
+    executionPath: string;
+    ownedPaths: string[];
+  }): Promise<CandidateCheckpointMeta>;
+  /** 验证失败时恢复：只动「确认是本候选所写且无人外部修改」的路径（I-04/E-12/E-14）。 */
+  restoreCandidateFiles(request: CandidateRestoreRequest): Promise<CandidateRestoreOutcome[]>;
 }
 
 // ── Clock：可注入时间（测试用可控时钟；生产为系统时钟）──
