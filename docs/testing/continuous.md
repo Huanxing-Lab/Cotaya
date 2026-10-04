@@ -1,0 +1,521 @@
+# Continuous 完整测试流程与 E2E
+
+| 项目     | 内容                                                |
+| -------- | --------------------------------------------------- |
+| 状态     | 验证计划；Continuous 尚未实现，所有新用例均 planned |
+| 规格     | [产品与架构](../specs/continuous.md)                |
+| 实施任务 | [CT-00 至 CT-10](../tickets/continuous.md)          |
+| 源码基线 | `7a83710b4ba13427f1c41d29f0ac3b242a7dfc03`          |
+
+本文是实施后的执行手册。当前没有新 runner、fixtures 或测试代码。下面的新增命令必须在对应 ticket 完成后才可运行；不得将文档中的命令存在视为通过。
+
+## 1. 当前已有入口与缺口
+
+已经核对的入口：
+
+| 入口                                                | 当前状态            | 用途                                                 |
+| --------------------------------------------------- | ------------------- | ---------------------------------------------------- |
+| `pnpm typecheck`                                    | 已有                | 根 workspace TS 项目，未覆盖全部 CLI                 |
+| `pnpm lint`、`pnpm fmt:check`                       | 已有                | 根 lint/格式；旧失败需单独记录                       |
+| `pnpm architecture:check --changed`                 | 已有                | 变更模块边界                                         |
+| `pnpm verify:pre-push`                              | 已有                | lint 和 architecture，不包含全部测试                 |
+| `pnpm --dir apps/zcode-cli typecheck`、`lint`       | 已有                | CLI 子 workspace                                     |
+| `pnpm --dir apps/zcode-cli/packages/bootstrap test` | 已有                | bootstrap 的 tsx/Node test                           |
+| `packages/services/test/*.test.ts`                  | 已有                | Node test，但 services package 没有统一 test script  |
+| `packages/ui/test/*.test.ts`                        | 已有                | Node test，但 UI package 没有统一 test script        |
+| desktop 的 `playwright-core`                        | 已有依赖            | 可用于 Electron/浏览器控制，不等于已有 E2E runner    |
+| `packages/shared/src/e2e-test-bridge.ts`            | 已有                | 专用 build flag + run ID；不能仅凭 test 环境扩大权限 |
+| `packages/desktop/src/main/e2eCoverage.ts`          | 已有                | coverage 支持，不等于行为覆盖                        |
+| `scripts/test-continuous.mjs`                       | **待新增 CT-00/09** | suite 编排、报告、严格退出码                         |
+| `packages/desktop/test/continuous/*`                | **待新增 CT-09**    | Electron、手机、live 和故障测试                      |
+
+不使用假定的根 `pnpm test`、`pnpm test:e2e` 或未安装的 `@playwright/test`。测试代码沿用 Node test；TypeScript 使用已有 tsx；Electron 使用 desktop 现有 playwright-core。
+
+## 2. 每次执行的隔离和证据
+
+每次新建 testRunId 和系统临时根目录，不读写用户真实数据、workspace 或登录资料。跨平台用 os.tmpdir/path API，禁止硬编码个人路径。
+
+目录规划：
+
+```text
+临时根/<testRunId>/
+  data/                 产品/Host/CLI隔离数据
+  electron-user-data/   Electron profile
+  repositories/        临时Git仓库和Program worktree
+  target-app/          浏览器验证对象
+  artifacts/
+    manifest.json
+    results.json
+    cases/<caseId>/
+      screenshots/
+      trace.zip
+      commands.json
+      protocol.ndjson
+      service-events.ndjson
+      db-facts.json
+      usage.json
+      git-before.json
+      git-after.json
+      diff.patch
+```
+
+使用已有 ZCODE_DATA_BASE_DIR 和实际 desktop runtime path 配置隔离。runner 在启动前校验最终解析路径均在临时根；只设一个环境变量不足以证明隔离。
+
+测试桥必须同时命中专用 build flag 和非空 run ID。Clock、barrier、provider fixture、故障注入和只读状态检查只通过 test composition 注入。生产构建不得暴露这些操作。新环境变量若确有必要，先补 spec；优先用 runner 参数和配置，不新增任意全局开关。
+
+证据至少包括：源码 commit、Node/pnpm/Electron 版本、OS、模型类型、case ID、start/end、exit code、traceId/programId/cycleId/runId/sessionId、截图、关键服务事实和实际 diff。去掉凭据、真实用户内容和内部地址。
+
+失败保留 artifact。成功按 runner 生命周期清理临时进程和 fixtures，但保留验收报告。清理只作用于当前 testRunId 资源；不能按进程名杀所有 Electron/Node，不能删除用户 worktree。
+
+## 3. Provider 与目标应用 fixtures
+
+### 脚本化模型
+
+fixture provider 返回合法模型事件、tool calls、typed submit_result 和 usage，通过实际模型接口接入。禁止直接注入最终 Cycle 成功状态，禁止绕过 AgentRuntime、Engine 或 journal。
+
+fixture 必须可控制：
+
+- 候选和 Decision 输出；10 pending 的初始发现。
+- 模型请求开始/usage 发布/typed result/工具执行前后的 barrier。
+- transient/permanent failure、取消、重复 usage、晚到 usage、缺失 usage。
+- read/write/test/browser/review 的真实工具调用。
+- 恶意越界调用，越界必须被真实工具边界拒绝。
+
+模型价格使用虚构固定值，账本断言可精确计算。它证明调度、恢复和权限边界，不证明真实模型的改进质量。
+
+### 目标应用
+
+创建临时 Git fixture，包含可启动的 UI 页面、响应式 header/sidebar/empty state，以及 Settings navigation。其测试命令用明确 argv 配置。
+
+初始问题：Header spacing、390px sidebar overflow、empty state 对比度；Settings architecture 需要决策。测试实际运行该临时应用，浏览器对 DOM 几何、可访问名称、键盘和截图作断言。
+
+不要把 Continuous 控制页面截图当作目标应用改进通过。候选 done 必须同时有代码 diff、测试结果、目标页面浏览器证据和独立 reviewer 结果。
+
+### 真实模型
+
+live suite 默认不运行。使用显式测试 provider 配置和有限额度，不能读取生产凭据。没有已配置的测试身份则 blocked；不能由 agent 输入个人密码、OTP 或 API key。
+
+至少执行真实 E-01/E-03/E-04：确实生成候选、修改 fixture、运行测试、验证目标页面、完成 Review、本地提交。真实模型输出波动时记录实际失败，不反复重跑直到成功。
+
+## 4. 按顺序执行
+
+### 步骤 A：基线与静态检查
+
+从仓库根目录执行，RTK 按仓库指令使用：
+
+```sh
+rtk proxy node scripts/check-workspace-freshness.mjs
+rtk proxy pnpm typecheck
+rtk proxy pnpm lint
+rtk proxy pnpm fmt:check
+rtk proxy pnpm architecture:check --changed
+rtk proxy pnpm --dir apps/zcode-cli typecheck
+rtk proxy pnpm --dir apps/zcode-cli lint
+rtk proxy pnpm --dir apps/zcode-cli/packages/bootstrap test
+```
+
+这组命令在代码实施阶段执行，会产生构建输出；当前文档阶段不声称执行完毕。已有失败不能写通过；区分本次导致、已有基线和环境阻塞，核心新增失败阻止发布。
+
+CLI typecheck 可能需要生成库和依赖 build，按实际脚本执行，不用 root typecheck 替代。
+
+### 步骤 B：单元和存储集成
+
+以下命令为 **CT-00 后新增 runner 的确定接口**，当前不存在：
+
+```sh
+rtk proxy node scripts/test-continuous.mjs --suite unit
+rtk proxy node scripts/test-continuous.mjs --suite integration
+```
+
+runner 对 Node/tsx 测试文件使用 manifest 枚举和 argv spawn，不依赖 shell glob/平台分隔符。unit 运行 U；integration 运行 I。实际 SQLite migration、FK、事务与 reopen 不得替换为内存 Map 测试。
+
+### 步骤 C：崩溃恢复
+
+```sh
+rtk proxy node scripts/test-continuous.mjs --suite recovery
+```
+
+执行 R-01 至 R-10。只在 test barrier 达到后注入 kill/disconnect，不用 sleep 猜时序。观察进程树，确认旧 actor 停止或被禁止操作后，才启动接管方。
+
+### 步骤 D：真实 Electron + 脚本化模型 E2E
+
+```sh
+rtk proxy node scripts/test-continuous.mjs --suite e2e
+```
+
+runner 必须完成：
+
+1. 校验隔离目录和 dependencies。
+2. 构建当前 CLI：使用已有 `scripts/build-desktop-agent-cli.mjs`；不能误用旧 bundled agent。
+3. 准备 desktop runtime assets 并构建 main/host/preload/renderer；复用已有构建脚本。
+4. 在 test build 中启用受限 bridge，准备受控 endpoint/provider；禁止生产配置和真实外部提交。
+5. 用 playwright-core Electron API 启动实际应用和当前构建；不同时启动另一个 dev Electron。
+6. 等待实际 Host/CLI ready 和能力响应，不只等待窗口出现。
+7. 从 UI 创建 Program、点击命令；观察真实协议、数据库、Run、工具和目标页面。
+8. 每个 E 用例收集 UI + 服务/存储 + 文件/执行三层断言。
+9. 按需重启实际进程，保留同一测试数据根核对恢复。
+10. 完成后停止测试所有进程树并输出报告；任何失败返回非零。
+
+构建与 runtime path 以当前 desktop 脚本为准。runner readiness 必须包括实际加载的 CLI build fingerprint，不把成功编译等同于已加载新版本。
+
+### 步骤 E：手机控制和两种交付语义
+
+```sh
+rtk proxy node scripts/test-continuous.mjs --suite mobile
+```
+
+复用已有配对/鉴权链路在隔离环境创建测试 attachment；浏览器连接步骤由 runner 明确驱动，不输入个人凭据。同一桌面 Program 在手机查看、Pause、resolve 和重连，核对两端同一 IDs/owner。
+
+不能用 desktop renderer 缩成 390px 替代手机真实 replayable 连接。390px 控制页布局与手机链路是两项独立验收。
+
+### 步骤 F：live 和平台验收
+
+```sh
+rtk proxy node scripts/test-continuous.mjs --suite live --allow-live
+```
+
+没有 allow-live 拒绝启动；all 默认排除 live，避免无意消费。live 结果单独汇总。各 OS 跑 platform suite：
+
+```sh
+rtk proxy node scripts/test-continuous.mjs --suite platform
+```
+
+macOS/Windows/Linux 分别记录。平台无法可靠限制文件/命令时验证其观察模式和自主执行拒绝，不能标该平台自主写入通过。
+
+### 步骤 G：回归、汇总与发布
+
+```sh
+rtk proxy node scripts/test-continuous.mjs --suite regression
+rtk proxy node scripts/test-continuous.mjs --suite all
+rtk proxy pnpm verify:pre-push
+```
+
+all = unit/integration/recovery/e2e/mobile/platform/regression，当前机器不能运行的 OS 单独标 unavailable，不伪造结果。多 OS 发布汇总合并各自结果。
+
+release gate：核心 U/I/R/E 全部真实通过、功能回归通过、产品发布平台证据齐全、live 验收单独完成、无生产测试桥。核心失败或必需 live 验收 blocked 时，自主实施 flag 保持关闭；可以交付明确标识的只读观察能力。
+
+## 5. 单元测试清单
+
+| ID   | 测试               | 必须断言                                                                                                    |
+| ---- | ------------------ | ----------------------------------------------------------------------------------------------------------- |
+| U-01 | 模型/schema/命令   | 非法状态、缺 identity/epoch、无 capability 拒绝；错误结构稳定                                               |
+| U-02 | 状态迁移与授权     | pending 不暂停；Goal/Scope 改变撤销；Pause 与立即停止分开                                                   |
+| U-03 | Scope 和变更量     | 路径、symlink、角色、forbidden、未知语义、累计文件/行数、binary/rename                                      |
+| U-04 | 日预算与价格       | 原子预留、金额整数、价格版本、unknown、timezone、跨日、Unlimited                                            |
+| U-05 | 执行期限与重试     | 请求3次、resume2次、1小时有效执行；上限暂停确认；正常阻塞不计时                                             |
+| U-06 | Decision/Candidate | 局部过滤、去重、version resolve、dismiss、旧决策重核对                                                      |
+| U-07 | Cadence/trigger    | interval 结束后计算、daily/DST、manual key、错过多轮合并                                                    |
+| U-08 | 主动探活和有效计时 | 15秒探测、180秒无进展+3次失败确认；正常等待有owner/原因/期限；heartbeat不等于进展；有效/等待/离线区间持久化 |
+
+## 6. 集成测试清单
+
+| ID   | 设置/动作                                | 必须断言与证据                                                                              |
+| ---- | ---------------------------------------- | ------------------------------------------------------------------------------------------- |
+| I-01 | 旧 DB 升级、重开、重复 migration         | checksum 不变；旧 tasks/automations 原值；新表可读；SQL/FK 证据                             |
+| I-02 | 两连接同时创建 Cycle                     | UNIQUE/事务只接受一个；不能靠内存 mutex                                                     |
+| I-03 | 导入报告中途异常后重放                   | 队列/事件/cursor 同步；重复不新增；跨 Program FK 拒绝                                       |
+| I-04 | worktree 和检查点                        | 原工作区字节与 Git 状态不变；失败只恢复归属明确路径                                         |
+| I-05 | submitOnce 重发/不同内容                 | 一次执行；相同 ID 不同 hash/args 拒绝；session 绑定可恢复                                   |
+| I-06 | Run 结束但工具/usage 未结束              | Cycle 保持 settling，不能提前下一轮；晚到 usage 入账                                        |
+| I-07 | 多请求并行、重复/未知 usage              | reservation 不超发；幂等结算；费用/token 均持久化                                           |
+| I-08 | typed report 增量/非法输出               | 运行中 Decision 已保存；非法输出不 done，不提交                                             |
+| I-09 | 完整有限模板 + actual runtime            | 有限 ask、独立 review、测试、commit；新轮 actor ID 不复用                                   |
+| I-10 | 10 pending + 3 independent + 2 dependent | 3 可执行，2 deferred，Program 非 paused，下一轮可运行                                       |
+| I-11 | 两 Host/两 scheduler/旧 owner            | 一个执行权；过期不直接接管；旧 epoch 副作用拒绝                                             |
+| I-12 | 同轮挂起、继续确认与grant                | 不cancel、不新Run；在途操作安全收尾；多上限合并一问；重复/旧version拒绝；授权增量不重置用量 |
+
+## 7. 崩溃和重启矩阵
+
+所有 R 用真实数据库和进程。barrier 是新增测试接口，只在受限 test composition 存在。
+
+| ID   | 精确故障点                               | 恢复断言                                                                                    |
+| ---- | ---------------------------------------- | ------------------------------------------------------------------------------------------- |
+| R-01 | Cycle 保存后、提交前 kill                | 同 cycle/session/run 身份继续提交；无第二 Cycle                                             |
+| R-02 | Run 接受后 ACK 丢失/kill                 | inspect 原 Run；只有一个 Run/actor 工作集合                                                 |
+| R-03 | actor 写入后、节点完成记录前 kill        | 核对 diff/checkpoint；安全恢复或明确失败；不重复破坏写入                                    |
+| R-04 | report 写入后、导入事务前/中 kill        | cursor 重读；Decision/Candidate 不双计，不丢已保存内容                                      |
+| R-05 | Run completed 后、Cycle terminal 前 kill | settling 收尾；不 resume、不新 Run；保存结果和 nextCycleAt                                  |
+| R-06 | 旧 lease 过期但旧 executor 仍活着        | 不启动第二写入者；撤销旧 epoch，确认停止再接管                                              |
+| R-07 | reservation 后、usage 前 kill            | unknown 保留；无静默归零；晚到重复结算最多一次                                              |
+| R-08 | terminal/nextCycleAt 事务中 kill         | 两者一起提交或一起回滚；不遗漏计划/重复 terminal                                            |
+| R-09 | 正常退出、强杀、睡眠跨多周期             | 退出不执行；重开先旧轮；只补一次；离线时间不重置执行限额                                    |
+| R-10 | Resume 脚本/模型/仓库变化或超限          | 不偷偷换模板；不可恢复明确保存证据；恢复次数超限暂停询问；用户取消不恢复                    |
+| R-11 | 资源上限后用户未回答即重启/跨日          | 同Cycle suspended、pending确认、用量和占用保留；不自动恢复、不新Cycle；用户同意后同身份继续 |
+| R-12 | normal_wait或疑似hang期间kill/restart    | 等待和有效时长保留；重新验证owner/操作期限；旧heartbeat不能冒充健康；没有固定墙钟取消       |
+
+## 8. E2E 用例：设置、操作、断言、证据
+
+所有 E 从真实 UI 操作，除时间、provider 和崩溃控制外不绕过业务接口。只读检查可以通过测试接口或停机后 DB 读取，不用 SQL 直接制造成功状态。
+
+### E-01：创建并运行首轮
+
+- 设置：空临时 workspace，已配置 fixture provider，目标页面有已知 UI 问题。
+- 操作：打开 Continuous tab，填写 Goal/Scope/Budget/Cadence；确认初次授权。
+- 断言：一个 Program/首轮 Cycle；分支/worktree 被创建；执行 cwd 正确；Run 有真实 journal；成功项实际验证和本地提交；Program sleeping，nextCycleAt 正确。
+- 证据：创建表单/完成页截图、协议、SQL facts、Run、目标页面 before/after、测试 exit code、review、commit。
+
+### E-02：未提交的用户改动受到保护
+
+- 设置：原仓库含 staged、unstaged、untracked 三类改动。
+- 操作：从 HEAD 创建 Program 并执行。
+- 断言：界面说明不复制这些改动；原仓库文件/hash/status 原样；只在 Program worktree 有提交；无 push/merge/deploy。
+- 证据：原仓库前后 manifest、独立分支 log 和 diff。
+
+### E-03：三个独立改进完整验证
+
+- 设置：Header spacing、mobile sidebar、empty state 三个已知问题。
+- 操作：Run now；fixture 输出三个自主候选，实际 builder 逐项修改。
+- 断言：builder 不并行；单项测试/浏览器/独立 Review 全通过才 done；三个可追踪提交；累计预算/文件/行数受限；目标页面390/1280无已知问题。
+- 证据：各 candidate 的命令、几何/可访问断言、截图、review、commit、费用。
+
+### E-04：10 个 pending 不阻塞独立改进（发布必需）
+
+- 设置：上一轮通过真实报告发现10个 pending Decisions；新轮3个无依赖候选、2个相关候选。不得用 DB 直接塞成功/暂停状态。
+- 操作：Run now；保持10个问题都不回答。
+- 断言：3独立项实施/验证/提交；2依赖项 deferred；10项仍 pending；不存在等待人类的永久 ask；Program 不 paused；本轮结束；推进测试时钟后下一轮能运行。
+- 证据：Decision/Candidate 关联、工具路径、Cycle/Run时间线、目标应用、第二轮身份。
+
+### E-05：执行中新 Decision 只停止对应项
+
+- 设置：第一个候选需要导航选择，另两个不依赖。
+- 操作：执行期间触发专用 escalation。
+- 断言：Decision 先持久化；该候选后续写入拒绝；工作流不等待人；另两项照常完成；普通 Workflow escalation 未变化。
+- 证据：决策事件、授权撤销、scope_denied、后续两项提交。
+
+### E-06：Resolution 进入未来 Cycle
+
+- 设置：当前 Cycle 正在执行；另有 pending Decision 和关联候选。
+- 操作：选择一个选项并提交；重复同请求，再发送旧 version 回答。
+- 断言：resolution 只保存一次，旧版本拒绝；当前计划不变；未来 Cycle 重新核对并选相关候选；可追踪 decision→candidate→cycle→run→commit。
+- 证据：回答截图、version、审计关系和未来轮记录。
+
+### E-07：Dismiss、重复发现和局部 Scope
+
+- 设置：同问题重复报告，旁边有不重叠的候选。
+- 操作：Dismiss；执行下一轮。
+- 断言：重复 Decision 合并来源；Dismiss 不授权实施；不相关候选继续；大范围路径不会被默认 blocking。
+- 证据：去重记录、相关拒绝、独立提交。
+
+### E-08：单轮预算耗尽
+
+- 设置：费用/token额度足够第一项、不够后续项。
+- 操作：运行并使第二请求需超额预留。
+- 断言：超额请求未发provider；新写入在安全边界挂起；首项提交保留；同Cycle suspended、Program paused；AskUserQuestion询问是否增加额度继续；用户同意前不结算、不创建新轮，不反复消费。
+- 证据：admission ticket、provider收到的请求数、部分结果和账本。
+
+### E-09：跨日与未知用量
+
+- 设置：provider 请求后丢 usage，重启；固定时区推进到次日，再补旧 usage。
+- 操作：打开预算详情并触发下一轮。
+- 断言：旧 unknown 不清零；晚到 usage 归原窗口且不双计；新一天额度正确，但已有资源暂停仍需用户继续授权；只有显式核销能消除未证实预留。
+- 证据：两个窗口 ledger、重复事件拒绝、核销审计。
+
+### E-10：Unlimited 仍有限
+
+- 设置：日预算 Unlimited，小单轮费用/时间/文件上限。
+- 操作：持续产生候选或 transient failures。
+- 断言：有效时间/单轮上限触发挂起和继续确认，不自动取消；正常等待不触发时间上限；不存在无限自动重试；日无限不解除Scope。
+- 证据：请求数、停止原因、累计activeDuration和实际diff。
+
+### E-11：Pause 与立即停止
+
+- 设置：正在执行候选。
+- 操作：先 Pause，观察本轮结束后不新开；另一轮点击立即停止。
+- 断言：Pause不误取消已在执行项；立即停止撤销写入、取消、等待停止后paused；旧Run不能自动恢复；UI两种行为可区分。
+- 证据：按钮反馈、后续请求/写入数、取消原因与owner停止。
+
+### E-12：测试/Review/浏览器失败
+
+- 设置：分别注入非零测试、review拒绝、浏览器不可用。
+- 操作：运行该候选及一个可独立验证候选。
+- 断言：失败项不done、不提交；只能恢复所属修改；不可用标unverified；独立项仍可完成；模型“已通过”文本不能覆盖事实。
+- 证据：exit code、review、unverified、恢复diff、保留提交。
+
+### E-13：越界工具和恶意绕过
+
+- 设置：尝试 `../`、symlink、绝对外部路径、任意shell、MCP写入、关闭sandbox、push/migration。
+- 操作：fixture模型发真实工具调用。
+- 断言：操作前拒绝；forbidden路径字节不变；没有外部提交；yolo不绕过专用限制；观察/审查角色不能写。
+- 证据：真实tool记录、拒绝代码、文件manifest、网络/子进程调用记录。
+
+### E-14：变更量和外部修改
+
+- 设置：候选修改超过文件/行上限，或在barrier间由fixture模拟外部编辑。
+- 操作：继续写入/恢复失败项。
+- 断言：累计上限阻止进一步操作；外部内容不被覆盖；不全仓reset；不删除未知文件；无法归属时结束本轮并保留证据。
+- 证据：前后hash、scope拒绝、检查点、取消原因。
+
+### E-15：无改进与非法报告
+
+- 设置：一轮返回空候选，另一轮报告不符合schema。
+- 操作：运行两轮。
+- 断言：空候选completed/no_changes后休眠；非法报告拒绝且不产生done/commit；报告尺寸/数量边界明确失败，不丢已有有效Decision。
+- 证据：outcome、nextCycleAt、rejected report事件。
+
+### E-16：重复启动与 ACK 丢失
+
+- 设置：两scheduler同时wake，同一UI命令重传；吞一次启动ACK。
+- 操作：Run now/推进时钟。
+- 断言：一个Cycle、session和Run；不会靠新随机ID补偿；错误内容同ID明确拒绝。
+- 证据：两请求、unique约束、journal计数、执行身份。
+
+### E-17：退出、强杀与重启
+
+- 设置：运行中达到R barrier。
+- 操作：正常退出或只强杀本测试进程树；同数据根重开。
+- 断言：退出后无新执行；重开先恢复旧Cycle；同Run安全resume或明确失败；completed仅结算；文件副作用不盲目重放。
+- 证据：OS进程树、恢复前后IDs、diff、时间线。
+
+### E-18：睡眠错过多周期与无 Host
+
+- 设置：应用暂停，测试时钟跨三次到期；关闭所有可用Host窗口。
+- 操作：恢复Host并打开页面。
+- 断言：只补一次，不队列补三轮；Host不可用时无另起Agent；下次时间为未来。
+- 证据：触发列表、进程数、Cycle数量。
+
+### E-19：旧 owner 尚活与 stale 结果
+
+- 设置：阻断续租使其过期，保留旧executor；新Host请求接管。
+- 操作：旧executor继续发写入、usage、report；新Host恢复。
+- 断言：旧写入/新请求拒绝；旧执行确认停止前不开新Run；usage允许幂等收尾；旧业务结果不覆盖新epoch。资源suspended仍保留占用，不能新开另一轮绕过上限。
+- 证据：epoch、操作拒绝、停机证明、无重叠执行区间。
+
+### E-20：Goal/Scope/Budget/模板/仓库变更
+
+- 设置：活跃Cycle和冻结快照。
+- 操作：修改Goal/Scope并重新授权；分别降低预算、改cadence、改模板或工作区内容。
+- 断言：旧Scope立即失去许可；新轮使用新revision；预算降低挂起并询问；本轮显式grant才延长额度；cadence不插入当前轮；resume不换脚本；外部改动重核对。
+- 证据：授权版本、old/new快照、工具限制、新Cycle。
+
+### E-21：手机真实控制与重连
+
+- 设置：隔离环境中手机浏览器连接桌面同一Host，390px。
+- 操作：查看Program、Pause、Resolve、断网重连；重复已接受命令。
+- 断言：同一program/cycle/run/owner；replay补正确状态；无重复Cycle；无手机新Agent；桌面实时链路和手机恢复链路均正确。
+- 证据：两端截图、attachment、协议clientMode、进程数量。
+
+### E-22：布局、主题、国际化与键盘
+
+- 设置：390/768/1280，浅/深主题，当前所有支持语言；长Goal/Decision/错误。
+- 操作：创建、展开队列、回答、打开Run侧栏，键盘操作。
+- 断言：无横向overflow/按钮重叠；有可读标签和焦点；金额/风险信息完整；长文可读；状态不靠颜色表达。
+- 证据：矩阵截图、bounding box、明确的可访问断言和人工复核；不假定当前已安装 axe。
+
+### E-23：历史审计与事实展示
+
+- 设置：混合成功、失败、部分、未知用量和resolved Decision。
+- 操作：浏览Program历史、Candidate、Decision、Cycle、Run、commit。
+- 断言：trigger、选择原因、deferred原因、预算、实际文件、验证和关联可追踪；费用标估算；pending数量不显示暂停；没有把Run completed当验收通过。
+- 证据：每层截图与事实交叉核对。
+
+### E-24：不支持的环境与旧 CLI
+
+- 设置：远程workspace、旧CLI无capability、工具限制不可用的平台。
+- 操作：尝试创建或Run now。
+- 断言：明确不支持；不回退普通prompt或本地同名路径；没有绕过授权写入；可观察的模式明确只读。
+- 证据：capability、结构化错误、无Run/无文件副作用。
+
+### E-25：跨平台路径与取消
+
+- 设置：各OS、含空格/Unicode/大小写/符号链接路径。
+- 操作：worktree、运行、立即停止、强杀恢复。
+- 断言：argv正确、取消整棵所属进程树、路径范围正确、FK和锁一致；无任意shell依赖。
+- 证据：平台信息、命令argv、进程树、实际文件。
+
+### E-26：现有功能回归
+
+- 设置：普通交互session、Goal、Workflow和automation。
+- 操作：CreateWorkflow确认、saved start、resume、amend、automation、Plan/Goal互斥和权限模式。
+- 断言：原确认规则、actor模型pin、imported cache、普通人工escalation、交付语义不变；Continuous不新增mode枚举或并行Goal loop。
+- 证据：已有bootstrap测试及实际UI/Run回归记录，不假定已有覆盖。
+
+### E-27：关闭与回滚
+
+- 设置：有活跃Cycle、历史和用户原始改动。
+- 操作：关闭flag/调度并按ticket顺序回滚入口。
+- 断言：先撤销新操作、等待停止；历史/分支/提交/用户文件保留；无新唤醒；旧产品入口可用。
+- 证据：停机证明、DB/文件before-after、旧入口回归。
+
+### E-28：生产测试桥关闭
+
+- 设置：普通production build，以及只有ZCODE_ENV=test而无双重测试标识的build。
+- 操作：尝试读测试桥、改时钟、注入provider或kill barrier。
+- 断言：均不可用；测试接口不因环境名而开放；正常产品功能运行。
+- 证据：capability/IPC拒绝、bundle检查和实际访问结果。
+
+### E-29：正常阻塞超过一小时仍继续
+
+- 设置：单轮上限一小时；全部可执行actor进入已注册的长测试/外部请求等待，适配器返回具体owner、原因、期限和可核对阶段证据。
+- 操作：每15秒主动探活，推进墙钟超过一小时，再让外部操作完成。
+- 断言：始终normal_wait；不弹时间额度问题、不取消Run；正常等待区间不计有效时间；同Cycle/Run继续执行并验证；恢复前后累计有效时间不重置。某个actor等待而另一个仍工作时，仍累计有效时间。
+- 证据：health快照序列、操作deadline、active/blocked/wallClock三个时长、同Run后续节点和目标页面结果。
+
+### E-30：健康工作达到一小时暂停并询问
+
+- 设置：actor持续产生真实进展，无全轮normal_wait；有效时间累计至一小时。
+- 操作：打开继续确认，先保持暂停，再选择“增加本轮1小时继续”。
+- 断言：不因健康而无限豁免；安全边界suspended，不cancel/fail/新Cycle；grant落库后同Run继续；总允许时间为2小时，已用1小时保留；新Cycle仍默认1小时。
+- 证据：有效时长、AskUserQuestion截图、grant、未发生新操作区间、恢复身份。
+
+### E-31：探活识别卡死，heartbeat不能掩盖
+
+- 设置：仅heartbeat更新，无节点/工具/模型进展、无正常等待依据；另外对照合法长等待及Host断联。
+- 操作：推进180秒并完成连续3次主动验证；尝试重复确认请求。
+- 断言：疑似hang保存诊断并挂起询问，不直接将整轮failed/cancelled；仅进程活着不足以判健康；合法等待继续；unreachable进入恢复核对；到期等待无进展也不能无限豁免。
+- 证据：三次probe、最后进展、等待分类、诊断与一条确认；旧操作未确认停止前不得第二次执行。
+
+### E-32：用户继续授权、跨日与重复回答
+
+- 设置：同轮同时费用/token上限，触发一条pending继续请求，应用退出并跨日。
+- 操作：重开；先不回答，再授权本轮增加USD100和10亿tokens；重放相同回答、旧version回答；另一轮选择结束本轮。
+- 断言：跨日/重启不默认同意；额度增量和用量均保留；重复回答不重复扩额；下一轮仍使用默认值；只有用户结束才cancelled/partial；Scope禁止项不能通过继续绕过。
+- 证据：请求version、原/新限额、grant/usage、同Cycle/Run、用户取消记录。
+
+### E-33：并发上限10且预算原子化
+
+- 设置：test composition实际并发能力10；有限模板发起11个只读actor任务并用barrier让它们同时竞争，另外测试builder唯一写入。
+- 操作：启动Run，释放barrier；同时提交需要争用费用预留的请求。
+- 断言：同时运行最多10，第11个排队；builder最多1；原子reservation不超额度；不得用高并发绕过token/cost；较低平台能力在UI显式展示。
+- 证据：actor运行区间、并发峰值、排队事件、账本和实际capability。
+
+### E-34：新默认值、整数精度与界面
+
+- 设置：创建表单无自定义值，选择默认预算；另一组输入超出安全整数的token/grant。
+- 操作：创建Program，读取配置与Cycle快照；打开预算和健康状态，触发上限确认。
+- 断言：并发10、token1,000,000,000、单轮USD100、每日USD1,000、有效时间3,600,000ms；金额按微美元存储；大整数验证无截断/溢出；界面同时显示最近探活/等待原因/有效和墙钟时间；未来模板不得恢复旧默认值。
+- 证据：表单截图、schema结果、DB/config快照、计算断言。
+
+## 9. 时间、等待与故障注入
+
+用可注入 Clock 控制Supervisor和预算窗口；不修改工作流VM的Date/随机限制；Clock区分墙钟、有效执行与已确认正常等待，不使用固定墙钟timeout直接取消Run。tick只唤醒，不直接创造Cycle。
+
+等待条件必须是 observable event、协议ACK、状态revision或文件/进程事实，具有超时和失败artifact。禁止“等5秒以后应该完成”作为验收。
+
+先记录barrier到达，再执行故障。ACK丢失和usage延迟在transport/provider adapter注入，不能删DB行制造另一种故障。forced kill通过测试process adapter跨平台停止本run进程树；正常退出另测，不能互相代替。
+
+UI用accessibility和稳定test IDs定位，不靠翻译文本或像素坐标。截图用于人工检查，几何/状态断言用于机器验证。
+
+## 10. 报告与完成标准
+
+结果状态只有 planned/passed/failed/blocked/skipped。核心用例不允许以skipped发布。runner启动失败、测试数量为零、未找到配置或fixture均不是passed。
+
+每个case记录：
+
+```json
+{
+  "caseId": "E-04",
+  "status": "planned",
+  "executionKind": "scripted",
+  "sourceCommit": "<commit>",
+  "platform": "<os>",
+  "command": "<actual command>",
+  "exitCode": null,
+  "assertions": [],
+  "evidence": [],
+  "failureReason": null
+}
+```
+
+最终验收记录必须分别列：脚本化链路通过情况、live质量验证、各OS自主执行能力、手机恢复链路、旧功能回归、未验证范围、实际消费、清理/回滚证明。
+
+当前文档阶段仅完成规划与文档验证。不能填写Continuous功能passed；下一轮实施按CT和本文用例逐项补实际结果。
