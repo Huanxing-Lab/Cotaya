@@ -1,5 +1,6 @@
 import {
   BIGMODEL_PROVIDER_ID,
+  isOpenAIPlanModelProviderId,
   type OAuthProviderId,
   type ProviderFamilyDomain,
   type ZCodeAccountAccess,
@@ -52,6 +53,12 @@ interface AccountProviderRequestAuthServiceOptions {
   resolveTeamPlanApiKey(
     access: Extract<ZCodeAccountAccess, { planKind: "team-coding-plan" }>,
   ): Promise<string | null>;
+  /**
+   * OpenAI（ChatGPT 账号）请求鉴权：返回刷新后 access_token 与 chatgpt-account-id 头。
+   * openai 是独立身份域，planKind/family 分支都是 z.ai 域语义，因此按内置
+   * provider id（account:openai-plan）单独注入解析器（含 60s 过期主动刷新 + single-flight）。
+   */
+  resolveOpenAIRequestAuth?(): Promise<AccountRequestAuthMaterial | null>;
 }
 
 class AccountProviderRequestAuthService implements AccountRequestAuthResolver {
@@ -67,6 +74,21 @@ class AccountProviderRequestAuthService implements AccountRequestAuthResolver {
 
   async resolveCurrent(input: AccountRequestAuthInput): Promise<AccountRequestAuthMaterial> {
     const providerId = input.providerId.trim();
+
+    // openai 分支先于 z.ai 域 planKind 解析：chatgpt-account access 不进入
+    // zhipu-account 身份/套餐语义，动态材料（access_token + chatgpt-account-id 头）
+    // 全部由注入的 refresher 从本地凭据解析。
+    if (isOpenAIPlanModelProviderId(providerId)) {
+      if (!this.#options.resolveOpenAIRequestAuth) {
+        throw new AccountRequestCredentialUnavailableError(providerId);
+      }
+      const material = await this.#options.resolveOpenAIRequestAuth();
+      if (!material?.apiKey) {
+        throw new AccountRequestCredentialUnavailableError(providerId);
+      }
+      return material;
+    }
+
     const access = await this.#resolveAccess(input.accountAccess);
     if (!access) throw new AccountRequestCredentialUnavailableError(providerId);
 

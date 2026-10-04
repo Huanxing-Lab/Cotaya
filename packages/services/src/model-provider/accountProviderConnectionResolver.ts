@@ -22,6 +22,7 @@ import type {
 } from "#src/model-provider/codingPlanProviderAvailability.js";
 import {
   validateBigModelAccountProviderAvailability,
+  validateOpenAIAccountProviderAvailability,
   validateZaiAccountProviderAvailability,
 } from "#src/model-provider/codingPlanProviderAvailability.js";
 
@@ -91,17 +92,22 @@ export function createAccountProviderConnectionResolver(
     };
     const availabilityByProviderId = new Map<string, CodingPlanAvailabilityResult>();
 
-    for (const family of ["zai", "bigmodel"] as const) {
-      const configured = configuredProviders
-        .entries()
-        .flatMap(([providerId, config]) =>
-          config.access?.type === "zhipu-account" &&
+    for (const family of ["zai", "bigmodel", "openai"] as const) {
+      const configured = configuredProviders.entries().flatMap(([providerId, config]) => {
+        if (family === "openai") {
+          // openai 是独立身份域的单一账号 provider：chatgpt-account access 无 z.ai
+          // 套餐 mode；planKind 仅满足投影接口形状，可用性查询不消费它。
+          return config.access?.type === "chatgpt-account" && config.access.accountType === "openai"
+            ? [{ providerId, config, planKind: "start-plan" as const }]
+            : [];
+        }
+        return config.access?.type === "zhipu-account" &&
           config.access.accountType === family &&
           config.access.mode &&
           config.access.mode !== "off-peak"
-            ? [{ providerId, config, planKind: config.access.mode }]
-            : [],
-        );
+          ? [{ providerId, config, planKind: config.access.mode }]
+          : [];
+      });
       if (configured.length === 0) continue;
 
       // 旧团队身份补全只限制付费访问，Start 只依赖当前登录账号。
@@ -119,7 +125,9 @@ export function createAccountProviderConnectionResolver(
         for (const { providerId } of queryable) {
           availabilityByProviderId.set(providerId, {
             kind: "unavailable",
-            reason: "coding_plan_not_connected",
+            // openai 的"未登录"是身份缺失而非套餐未连接，沿用 not-authenticated 语义。
+            reason:
+              family === "openai" ? "coding_plan_not_authenticated" : "coding_plan_not_connected",
           });
         }
         continue;
@@ -130,8 +138,9 @@ export function createAccountProviderConnectionResolver(
           providerId,
           family,
           planKind,
+          // openai 无 z.ai Coding Plan API key 派生链路，不做 key 加载。
           apiKey:
-            planKind !== "team-coding-plan"
+            family !== "openai" && planKind !== "team-coding-plan"
               ? await options
                   .loadCodingPlanApiKey(providerId, family, accountIdentity, forceCredentialRefresh)
                   .catch(() => null)
@@ -152,6 +161,32 @@ export function createAccountProviderConnectionResolver(
     const scopes = new Map<string, string>();
     for (const [providerId, config] of configuredProviders.entries()) {
       const access = config.access;
+
+      if (access?.type === "chatgpt-account") {
+        // openai 投影：已登录即 current/entitled——token 有效性（availability）给出
+        // entitled，providerFamilyDomain 指向 openai 且账号身份存在即 current；
+        // 不进入 z.ai 域的套餐连接选择逻辑。
+        const accountIdentity = await loadAccountIdentity("openai");
+        const availability = availabilityByProviderId.get(providerId) ?? {
+          kind: "unknown" as const,
+        };
+        scopes.set(providerId, JSON.stringify([accountIdentity, "openai", null]));
+        connections.push({
+          providerId,
+          status: availability.kind,
+          ...(availability.kind === "unavailable"
+            ? {
+                unavailableReason: resolveAccountUnavailableReason(availability.reason),
+              }
+            : {}),
+          current: settings.providerFamilyDomain === "openai" && Boolean(accountIdentity),
+          connectionKey: createHash("sha256")
+            .update(JSON.stringify([accountIdentity, "openai", { kind: "openai-plan" }]))
+            .digest("hex"),
+        });
+        continue;
+      }
+
       if (access?.type !== "zhipu-account") continue;
       if (!access.accountType || !access.mode) {
         connections.push({ providerId, status: "unavailable" });
@@ -292,9 +327,14 @@ export function createCodingPlanFamilyAvailabilityResolver(
       credentialService: options.credentialService,
       providerFamilyConnectionSelections: selections,
     };
-    return family === "zai"
-      ? validateZaiAccountProviderAvailability(providers, context)
-      : validateBigModelAccountProviderAvailability(providers, context);
+    if (family === "zai") {
+      return validateZaiAccountProviderAvailability(providers, context);
+    }
+    if (family === "openai") {
+      // openai 以本地 token 有效性为 entitled，无 zcode 后端套餐校验。
+      return validateOpenAIAccountProviderAvailability(providers, context);
+    }
+    return validateBigModelAccountProviderAvailability(providers, context);
   };
 }
 

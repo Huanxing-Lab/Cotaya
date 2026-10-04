@@ -3,12 +3,14 @@ import type { z } from "zod";
 import type { completeModelConfigDataSchema } from "@zcode/shared/model-config";
 import type {
   completeApiKeyAccessDataSchema,
+  completeChatGPTAccountAccessDataSchema,
   completeZhipuAccountAccessDataSchema,
   completeProviderConfigDataSchema,
 } from "./config/provider-data-schema.js";
 import type { ConfigValidationIssue } from "./config-overlay.js";
 import {
   type ApiKeyAccessConfig,
+  type ChatGPTAccountAccessConfig,
   ModelConfig,
   ModelConfigRules,
   type ZhipuAccountAccessConfig,
@@ -25,9 +27,14 @@ import type { AccountProviderStates } from "./account-provider-state.js";
 export type RegistryZhipuAccountAccessConfig = ZhipuAccountAccessConfig &
   z.infer<typeof completeZhipuAccountAccessDataSchema>;
 
+/** openai 域（ChatGPT 账号）登录型 access 的 Registry 完整形态。 */
+export type RegistryChatGPTAccountAccessConfig = ChatGPTAccountAccessConfig &
+  z.infer<typeof completeChatGPTAccountAccessDataSchema>;
+
 export type RegistryProviderAccessConfig =
   | (ApiKeyAccessConfig & z.infer<typeof completeApiKeyAccessDataSchema>)
-  | RegistryZhipuAccountAccessConfig;
+  | RegistryZhipuAccountAccessConfig
+  | RegistryChatGPTAccountAccessConfig;
 
 export type RegistryProviderConfig = ProviderConfig &
   z.infer<typeof completeProviderConfigDataSchema> & {
@@ -43,20 +50,27 @@ export function serializeRegistryProviderConfig(
     group: config.group,
     ...(config.logo === undefined ? {} : { logo: config.logo }),
     access:
-      config.access.type !== "zhipu-account"
+      config.access.type === "zhipu-account"
         ? {
-            type: config.access.type,
-            apiKey: config.access.apiKey,
-            ...(config.access.apiKeyManagementUrl === undefined
-              ? {}
-              : { apiKeyManagementUrl: config.access.apiKeyManagementUrl }),
-          }
-        : {
             type: config.access.type,
             accountType: config.access.accountType,
             mode: config.access.mode,
             entitled: config.access.entitled,
-          },
+          }
+        : config.access.type === "chatgpt-account"
+          ? {
+              // openai 域账号 access：无套餐 mode，只序列化身份域与权益事实。
+              type: config.access.type,
+              accountType: config.access.accountType,
+              entitled: config.access.entitled,
+            }
+          : {
+              type: config.access.type,
+              apiKey: config.access.apiKey,
+              ...(config.access.apiKeyManagementUrl === undefined
+                ? {}
+                : { apiKeyManagementUrl: config.access.apiKeyManagementUrl }),
+            },
     api: {
       type: config.api.type,
       baseUrl: config.api.baseUrl,
@@ -246,8 +260,12 @@ export class ProviderConfigResolver {
         personalIdsInOrder,
         config.modelOrder ?? [],
       );
+      // 账号型 access（z.ai 域 zhipu-account / openai 域 chatgpt-account）都以第三层
+      // entitled 投影为可执行门槛；openai 的 entitled 来自本地 token 有效性，
+      // 未登录时不向 Registry 发布模型。
       const accessEntitled =
-        config.access?.type !== "zhipu-account" || config.access.entitled === true;
+        (config.access?.type !== "zhipu-account" && config.access?.type !== "chatgpt-account") ||
+        config.access.entitled === true;
       // 账号权益与当前连接是两件事。非当前账号仍保留设置展示，不向普通 Registry 发布模型。
       // Off-Peak 不定义 current，沿用其独立调度、隐藏和鉴权规则。
       const accountCurrent = input.accountStates?.[providerId]?.current !== false;

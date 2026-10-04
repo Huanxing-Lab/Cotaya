@@ -126,12 +126,44 @@ export interface OAuthStartRequest {
   provider: OAuthProviderId;
 }
 
+/** 设备码 fallback 启动后客户端需要展示的信息（userCode + 输码页地址）。 */
+export interface OAuthDeviceCodeStartInfo {
+  /** 用户在输码页输入的一次性码（原样展示，不打开浏览器也能完成登录）。 */
+  userCode: string;
+  /** 用户输入 userCode 的页面地址。 */
+  inputPageUrl: string;
+  /** 客户端轮询登录状态的间隔（毫秒）。 */
+  pollIntervalMs: number;
+  /** 设备码流程过期时刻（毫秒时间戳）。 */
+  expiresAt: number;
+}
+
 /** 发起 OAuth 返回 */
 export interface OAuthStartResponse {
   provider: OAuthProviderId;
   authorizeUrl: string;
   state: string;
+  /**
+   * 存在时表示已降级为设备码流程（loopback 端口被占 / 无浏览器环境）。
+   * authorizeUrl 此时是输码页地址；客户端必须展示 userCode 并继续轮询登录状态。
+   */
+  deviceCode?: OAuthDeviceCodeStartInfo;
 }
+
+/** 设备码流程发起结果（host 内部轮询编排使用；deviceAuthId 不下发给 renderer）。 */
+export interface OAuthDeviceCodeChallenge {
+  deviceAuthId: string;
+  userCode: string;
+  inputPageUrl: string;
+  pollIntervalMs: number;
+  expiresAt: number;
+}
+
+/** 设备码轮询结果：403/404 继续等待、410 过期、2xx 拿到授权码与服务端下发的 code_verifier。 */
+export type OAuthDeviceCodePollResult =
+  | { status: "pending" }
+  | { status: "expired" }
+  | { status: "ready"; authorizationCode: string; codeVerifier: string };
 
 /** 应用登录回调结果 */
 export interface OAuthSessionCallbackResult {

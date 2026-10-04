@@ -224,6 +224,7 @@ export class BigModelProviderAdapter implements OAuthProviderAdapter {
     tokenSet: OAuthTokenSet,
     _context: OAuthProviderContext,
   ): Promise<OAuthUserProfile> {
+    // BigModel 运行时配置始终填充 userinfoUrl；接口上该字段因 openai（无远端 userinfo）为可选。
     if (tokenSet.zcodeJwtToken && tokenSet.accessToken === tokenSet.zcodeJwtToken) {
       // 移除 tokenByAuthCode 后 callback 阶段没有 BigModel access token。
       // zcode JWT 不能调用 bigmodel.cn 的 customer 接口，避免无意义的鉴权失败请求。
@@ -236,7 +237,7 @@ export class BigModelProviderAdapter implements OAuthProviderAdapter {
 
     const userinfoPayload = await readApiJson<{
       data?: BigModelCustomerInfo;
-    }>(this.apiClient, this.config.userinfoUrl, {
+    }>(this.apiClient, this.config.userinfoUrl!, {
       method: "GET",
       // 启动恢复登录态依赖这条 userinfo 校验链路。
       // 没有超时时网络层可能长期 pending，导致 UI 一直显示“恢复中”。

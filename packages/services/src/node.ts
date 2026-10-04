@@ -358,6 +358,7 @@ import { createOAuthService } from "./oauth/oauthService.js";
 import { isCurrentOAuthCredentialRequest } from "#src/oauth/oauthUnauthorizedRequest.js";
 import { createOAuthProviderLogoutHandler } from "./oauth/oauthProviderLogout.js";
 import { OAuthCredentialRepo } from "./oauth/repo/oauthCredentialRepo.js";
+import { createOpenAIRequestAuthRefresher } from "./oauth/openaiRequestAuthRefresher.js";
 import { readLegacyZCodeConfigProviders } from "./model-provider/legacyZCodeConfigProviderReader.js";
 import { resolveAccountTeamPlanRuntimeApiKey } from "./model-provider/accountProviderTeamPlanRequestKey.js";
 import { createAccountProviderCredentialStore } from "./model-provider/accountProviderCredentialStore.js";
@@ -505,6 +506,7 @@ import {
   isStartPlanModelProviderId,
   OFF_PEAK_PROVIDER_IDS,
   BIGMODEL_PROVIDER_ID,
+  OPENAI_PROVIDER_ID,
   type ProviderFamilyDomain,
   type ServiceAuthorityMode,
   resolveRuntimeZCodeEndpointOrigin,
@@ -1488,9 +1490,30 @@ export function createLocalServices(options: {
     };
   };
   const loadAccountIdentity = async (family: ProviderFamilyDomain) => {
-    const oauthProviderId = family === "zai" ? ZAI_PROVIDER_ID : BIGMODEL_PROVIDER_ID;
+    // openai 是独立身份域：账号身份读 oauth:openai:user_info 的 chatgpt_account_id。
+    const oauthProviderId =
+      family === "zai"
+        ? ZAI_PROVIDER_ID
+        : family === "openai"
+          ? OPENAI_PROVIDER_ID
+          : BIGMODEL_PROVIDER_ID;
     return (await oauthCredentialRepo.loadUserProfile(oauthProviderId))?.id ?? null;
   };
+  // openai 请求鉴权 refresher：60s 过期主动刷新 + single-flight 轮换互斥。
+  // refresh 明确失效时的会话清理依赖 OAuthService（在下方创建），
+  // 沿用 zcodeJwtLogoutHandlerRef 的前向引用模式，避免为接线顺序重排初始化。
+  const invalidateOpenAISessionRef: { current: (() => Promise<void>) | null } = { current: null };
+  const openAIRequestAuthRefresher = createOpenAIRequestAuthRefresher({
+    apiClient,
+    env: process.env,
+    loadTokenSet: () => oauthCredentialRepo.loadTokenSet(OPENAI_PROVIDER_ID),
+    saveTokenSet: (tokenSet) => oauthCredentialRepo.saveTokenSet(OPENAI_PROVIDER_ID, tokenSet),
+    loadChatGPTAccountId: async () =>
+      (await oauthCredentialRepo.loadUserProfile(OPENAI_PROVIDER_ID))?.id ?? null,
+    onCredentialInvalid: async () => {
+      await invalidateOpenAISessionRef.current?.();
+    },
+  });
   const accountRequestAuthService = createAccountRequestAuthService(
     createAccountProviderRequestAuthService({
       resolveCurrentAccountAccess: (access) =>
@@ -1499,6 +1522,7 @@ export function createLocalServices(options: {
           readSettings: readAccountProviderSettings,
           loadAccountIdentity,
         }),
+      resolveOpenAIRequestAuth: openAIRequestAuthRefresher.resolveRequestAuth,
       loadOAuthTokenSet: (providerId) => oauthCredentialRepo.loadTokenSet(providerId),
       async loadIndividualPlanApiKey(providerId, family) {
         const oauthProviderId = family === "zai" ? ZAI_PROVIDER_ID : BIGMODEL_PROVIDER_ID;
@@ -2344,6 +2368,14 @@ export function createLocalServices(options: {
     apiClient,
     onProviderLogout: handleOAuthProviderLogout,
   });
+  // openai 请求鉴权刷新失败（refresh_token 过期/重放/作废）时的会话清理：
+  // 只在 openai 仍是 active provider 时登出（clearActiveSession 仅清 oauth:openai:*
+  // 与 active 指针，不触碰 z.ai 域凭据），并复用 onProviderLogout 刷新账号投影。
+  invalidateOpenAISessionRef.current = async () => {
+    if ((await oauthCredentialRepo.getActiveProvider()) === OPENAI_PROVIDER_ID) {
+      await oauthService.logout();
+    }
+  };
   const zcodeJwtLogoutLogger = createServiceLogger("zcode-jwt-logout");
   zcodeJwtLogoutHandlerRef.current = (input, headers) => {
     // 条件退出本身已串行去重；不能丢弃等待旧候选期间到来的新凭据 401。

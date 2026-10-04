@@ -1,4 +1,5 @@
 import {
+  ChatGPTAccountAccessConfig,
   ProviderConfig,
   ProviderConfigMap,
   ZhipuAccountAccessConfig,
@@ -77,7 +78,11 @@ export function createAccountProviderConfigResolver(
         ...(connection.status === "unknown" ? previous : {}),
         availability:
           connection.status === "unknown" && previous ? previous.availability : connection.status,
-        entitled: access?.type === "zhipu-account" && access.entitled === true,
+        // 账号型 access（z.ai 域 zhipu-account / openai 域 chatgpt-account）都以第三层
+        // entitled 投影为权益事实；openai 的 entitled 来自本地 token 有效性。
+        entitled:
+          (access?.type === "zhipu-account" || access?.type === "chatgpt-account") &&
+          access.entitled === true,
         ...(unavailableReason === undefined ? {} : { unavailableReason }),
         ...(connection.current === undefined ? {} : { current: connection.current }),
         connectionKey: connection.connectionKey,
@@ -96,6 +101,36 @@ export function resolveAccountProviderConfigs(
   const resolved: Array<readonly [ProviderId, ProviderConfig]> = [];
   for (const [providerId, configured] of input.configuredProviders.entries()) {
     const access = configured.access;
+
+    if (access?.type === "chatgpt-account") {
+      // openai（ChatGPT 账号）是独立身份域的单一账号 provider：无套餐 mode 分层，
+      // available 即 entitled，模型清单由 Built-in 层声明，Overlay 只发布权益事实。
+      const connection = connectionByProviderId.get(providerId) ?? {
+        providerId,
+        status: "unknown" as const,
+      };
+      if (connection.status === "available" || connection.status === "pending") {
+        resolved.push([
+          providerId,
+          new ProviderConfig({
+            access: new ChatGPTAccountAccessConfig({
+              entitled: connection.status === "available",
+            }),
+          }),
+        ]);
+        continue;
+      }
+      if (connection.status === "unavailable") {
+        resolved.push([providerId, createChatGPTEntitlementOverlay(false)]);
+        continue;
+      }
+      const previous = connection.resetPrevious
+        ? undefined
+        : input.previousProviders.get(providerId);
+      resolved.push([providerId, previous ?? createChatGPTEntitlementOverlay(false)]);
+      continue;
+    }
+
     if (access?.type !== "zhipu-account") continue;
     const connection = connectionByProviderId.get(providerId) ?? {
       providerId,
@@ -144,6 +179,10 @@ function createEntitlementOverlay(entitled: boolean): ProviderConfig {
   return new ProviderConfig({ access: new ZhipuAccountAccessConfig({ entitled }) });
 }
 
+function createChatGPTEntitlementOverlay(entitled: boolean): ProviderConfig {
+  return new ProviderConfig({ access: new ChatGPTAccountAccessConfig({ entitled }) });
+}
+
 function indexConnections(
   configuredProviders: ProviderConfigMap,
   connections: readonly AccountProviderConnectionResult[],
@@ -166,7 +205,8 @@ function indexConnections(
 }
 
 function isAccountConstrainedProvider(config: ProviderConfig): boolean {
-  return config.access?.type === "zhipu-account";
+  // 账号受限 provider 含两个身份域：z.ai 域（zhipu-account）与 openai 域（chatgpt-account）。
+  return config.access?.type === "zhipu-account" || config.access?.type === "chatgpt-account";
 }
 
 function normalizeModelIds(values: readonly ModelId[] | null | undefined): readonly ModelId[] {

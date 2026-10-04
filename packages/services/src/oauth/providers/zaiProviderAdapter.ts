@@ -401,7 +401,8 @@ export class ZaiProviderAdapter implements OAuthProviderAdapter {
 
     const userinfoPayload = await readApiJson<ZaiUserInfoPayload>(
       this.apiClient,
-      this.config.userinfoUrl,
+      // ZAI 运行时配置始终填充 userinfoUrl；接口上该字段因 openai（无远端 userinfo）为可选。
+      this.config.userinfoUrl!,
       {
         method: "GET",
         // 启动恢复登录态会阻塞 UI 的“恢复中”落定。

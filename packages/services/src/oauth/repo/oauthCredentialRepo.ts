@@ -6,14 +6,25 @@ import type {
   OAuthTokenSet,
   OAuthUserProfile,
 } from "@zcode/shared";
-import { BIGMODEL_PROVIDER_ID, isCredentialDecryptError, ZAI_PROVIDER_ID } from "@zcode/shared";
+import {
+  BIGMODEL_PROVIDER_ID,
+  isCredentialDecryptError,
+  OPENAI_PROVIDER_ID,
+  ZAI_PROVIDER_ID,
+} from "@zcode/shared";
 import type { ICredentialService } from "../../credential/credential.js";
 import { createServiceLogger } from "../../logger/serviceLogger.js";
 
 const ACTIVE_PROVIDER_KEY = "oauth:active_provider";
 const LOGIN_ATTRIBUTION_KEY = "oauth:login_attribution";
 const ZCODE_JWT_TOKEN_KEY = "zcodejwttoken";
-const KNOWN_OAUTH_PROVIDER_IDS = [BIGMODEL_PROVIDER_ID, ZAI_PROVIDER_ID] as const;
+// openai 是独立身份域（spec openai-oauth-provider §2.3）：凭据命名空间与 z.ai 域并列，
+// 登录/登出互不删除对方 key，仅由 oauth:active_provider 单指针表达当前登录。
+const KNOWN_OAUTH_PROVIDER_IDS = [
+  BIGMODEL_PROVIDER_ID,
+  ZAI_PROVIDER_ID,
+  OPENAI_PROVIDER_ID,
+] as const;
 const log = createServiceLogger("oauthCredentialRepo");
 
 interface OAuthCredentialRepoOptions {
@@ -31,6 +42,15 @@ function refreshTokenKey(provider: OAuthProviderId): string {
 
 function userInfoKey(provider: OAuthProviderId): string {
   return `oauth:${provider}:user_info`;
+}
+
+/**
+ * openai 的 token 过期时刻 key（毫秒时间戳字符串）。
+ * z.ai 域恢复按共享 zcode JWT exp 判定，无需该 key；openai 无 zcodejwttoken，
+ * 60s 主动刷新与启动恢复都依赖这里持久化的 expires_at（spec §2.4）。
+ */
+function openAIExpiresAtKey(): string {
+  return `oauth:${OPENAI_PROVIDER_ID}:expires_at`;
 }
 
 function collectKnownOAuthProviderIds(
@@ -303,10 +323,17 @@ export class OAuthCredentialRepo {
           ? await this.credentialService.load(ZCODE_JWT_TOKEN_KEY)
           : null;
 
+      // openai 的 expires_at 单独落盘（z.ai 域 token 生命周期由 zcode JWT 承载）。
+      const openAIExpiresAt =
+        provider === OPENAI_PROVIDER_ID
+          ? this.parseExpiresAt(await this.credentialService.load(openAIExpiresAtKey()))
+          : undefined;
+
       return {
         accessToken,
         ...(refreshToken ? { refreshToken } : {}),
         ...(zcodeJwtToken ? { zcodeJwtToken } : {}),
+        ...(openAIExpiresAt !== undefined ? { expiresAt: openAIExpiresAt } : {}),
       };
     } catch (error) {
       if (!isCredentialDecryptError(error)) {
@@ -316,6 +343,11 @@ export class OAuthCredentialRepo {
       await this.clearCorruptOAuthSession();
       return null;
     }
+  }
+
+  private parseExpiresAt(raw: string | null): number | undefined {
+    const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
   }
 
   async saveTokenSet(provider: OAuthProviderId, tokenSet: OAuthTokenSet): Promise<void> {
@@ -335,6 +367,14 @@ export class OAuthCredentialRepo {
         await this.credentialService.save(ZCODE_JWT_TOKEN_KEY, tokenSet.zcodeJwtToken);
       } else {
         await this.credentialService.delete(ZCODE_JWT_TOKEN_KEY);
+      }
+    }
+
+    if (provider === OPENAI_PROVIDER_ID) {
+      if (typeof tokenSet.expiresAt === "number" && Number.isFinite(tokenSet.expiresAt)) {
+        await this.credentialService.save(openAIExpiresAtKey(), String(tokenSet.expiresAt));
+      } else {
+        await this.credentialService.delete(openAIExpiresAtKey());
       }
     }
   }
@@ -416,6 +456,9 @@ export class OAuthCredentialRepo {
     await this.credentialService.delete(accessTokenKey(provider));
     await this.credentialService.delete(refreshTokenKey(provider));
     await this.credentialService.delete(userInfoKey(provider));
+    if (provider === OPENAI_PROVIDER_ID) {
+      await this.credentialService.delete(openAIExpiresAtKey());
+    }
     if (shouldClearZcodeJwtOnLogout(provider)) {
       await this.credentialService.delete(ZCODE_JWT_TOKEN_KEY);
     }
@@ -448,5 +491,6 @@ export class OAuthCredentialRepo {
 }
 
 function shouldClearZcodeJwtOnLogout(provider: OAuthProviderId): boolean {
+  // openai 域不写 zcodejwttoken，登出不得触碰共享 JWT（z.ai 域凭据可能仍在使用）。
   return provider === ZAI_PROVIDER_ID || provider === BIGMODEL_PROVIDER_ID;
 }

@@ -4,6 +4,7 @@ import {
   BIGMODEL_PROVIDER_ID,
   buildBigModelApiUrl,
   buildRuntimeZaiBusinessUrl,
+  OPENAI_PROVIDER_ID,
   resolveBigModelApiOrigin,
   ZAI_PROVIDER_ID,
   type ApiClient,
@@ -160,6 +161,30 @@ export async function validateBigModelAccountProviderAvailability(
     individualProvider,
     teamProvider,
   });
+}
+
+/**
+ * OpenAI（ChatGPT 账号）可用性：以本地 token 有效性为 entitled，无 zcode 后端套餐校验。
+ * access_token 存在即视为有效——过期 token 由请求鉴权的 60s 主动刷新续期，
+ * 这里按过期时间降级会把"可刷新"误判成"未连接"。
+ */
+export async function validateOpenAIAccountProviderAvailability(
+  providers: readonly CodingPlanAvailabilityProvider[],
+  context: CodingPlanAvailabilityContext,
+): Promise<Partial<Record<string, CodingPlanAvailabilityResult>>> {
+  const provider = providers.find((candidate) => candidate.family === "openai");
+  if (!provider) {
+    return {};
+  }
+  const accessToken = (
+    await context.credentialService?.load(`oauth:${OPENAI_PROVIDER_ID}:access_token`)
+  )?.trim();
+  if (!accessToken) {
+    return {
+      [provider.providerId]: { kind: "unavailable", reason: "coding_plan_not_authenticated" },
+    };
+  }
+  return { [provider.providerId]: { kind: "available" } };
 }
 
 function findAvailabilityProvider(
