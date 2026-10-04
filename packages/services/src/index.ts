@@ -309,3 +309,28 @@ export type {
   FeedbackTicketType,
 } from "@zcode/shared";
 export { IClientConfigService } from "./client-config/clientConfig.js";
+
+// Continuous（长期自主改进）受控模块公开入口；实现细节在 src/continuous 内部（CT-00 锁定契约）。
+export type { IContinuousService } from "./continuous/contract.js";
+export {
+  CONTINUOUS_DEFAULT_BUDGET,
+  CONTINUOUS_DEFAULT_CADENCE,
+  CONTINUOUS_ERROR_CODES,
+  CONTINUOUS_MANAGED_CYCLE_CAPABILITY,
+  CONTINUOUS_METHODS,
+  decisionBlocksProgram,
+  isAuthorizationStale,
+  isOpenCycleStatus,
+  isTerminalCycleStatus,
+  requiresProgramReauthorization,
+} from "./continuous/contract.js";
+export type {
+  Candidate,
+  ContinuationRequest,
+  Cycle,
+  CycleHealthState,
+  CycleResult,
+  Decision,
+  Program,
+  WorkspaceLease,
+} from "./continuous/contract.js";

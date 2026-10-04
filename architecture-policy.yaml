@@ -31,6 +31,14 @@ modules:
     layers: { domain: domain, app: app, adapters: adapters }
     layerOrder: [domain, app, adapters]
     owner: desktop-settings
+  - id: continuous
+    roots: [packages/services/src/continuous]
+    managed: true
+    requires: [shared]
+    publicEntrypoints: [packages/services/src/continuous/contract.ts]
+    layers: { domain: domain, app: application, adapters: adapters }
+    layerOrder: [domain, app, adapters]
+    owner: continuous
   - id: client
     roots: [packages/client/src]
     managed: false

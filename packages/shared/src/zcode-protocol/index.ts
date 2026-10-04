@@ -22,6 +22,8 @@ export * from "../background-bash-output.js";
 import { executionOutputPreviewSchema } from "../execution-output-preview.js";
 import { z } from "zod";
 export * from "../process-diagnostic.js";
+// Continuous wire 契约（capability/命令/结构化错误）单一来源；经根 index 对外可见。
+export * from "../continuous-protocol.js";
 import { errorAttributionSchema } from "../zcode-protocol-v4/snapshot.js";
 import { modelSelectionSchema } from "../model-selection.js";
 import { completeModelPropertiesDataSchema } from "../model-config.js";
