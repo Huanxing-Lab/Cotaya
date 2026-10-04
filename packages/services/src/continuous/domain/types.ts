@@ -159,6 +159,19 @@ export interface DecisionResolution {
   resolvedAt: number;
 }
 
+/**
+ * 决策的发现来源（§8「fingerprint 去重，追加来源和证据」）：同一 fingerprint 的重复发现
+ * 合并为一条来源记录（按 cycleId 去重）；首见的 title/context/options 保持决策的稳定身份，
+ * 后续发现的 context 留在来源里作为证据。可选字段：旧行/旧协议无此字段时按缺席解码。
+ */
+export interface DecisionSourceRecord {
+  cycleId: string;
+  discoveredAt: number;
+  /** 该次发现的补充上下文（重复发现时的措辞差异留在这里，不覆盖决策首见面孔）。 */
+  context?: string;
+  evidence?: unknown[];
+}
+
 export interface Decision {
   id: string;
   programId: string;
@@ -175,6 +188,8 @@ export interface Decision {
   blockingScope?: DecisionBlockingScope;
   status: ContinuousDecisionStatus;
   resolution?: DecisionResolution;
+  /** 重复发现的来源清单（CT-06 合并语义；首见行可缺省）。 */
+  sources?: DecisionSourceRecord[];
   createdAt: number;
   updatedAt: number;
 }

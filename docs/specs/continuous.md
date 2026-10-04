@@ -397,9 +397,11 @@ Decision 通过 fingerprint 去重，追加来源和证据；保留来源 Cycle�
 
 选择时过滤 forbidden、依赖 pending Decision 及与 blockingScope 重叠的候选。其余候选照常排序和实施。所有候选都依赖决策时，Cycle completed/no_changes，等待 cadence 或 resolution；不暂停 Program。
 
-执行中发现需决策事项：专用适配器持久化 Decision，撤销该候选写入许可，返回结构化 defer；骨架跳过该候选，不 await 人类输入。普通 Workflow 的 escalation 不改变。
+执行中发现需决策事项：专用适配器持久化 Decision，撤销该候选写入许可，返回结构化 defer；骨架跳过该候选，不 await 人类输入。普通 Workflow 的 escalation 不改变：Continuous 决策闸门经 run service 的可选升级端口包装点接入，接缝缺席或未登记的 run 逐字不变。
 
-Resolve 使用 version 防止覆盖其他回答；resolution 和相关入队事件同事务保存。相关候选在下一轮按现仓库、Scope 和预算重新检查，不能插入正在执行的冻结计划。Dismiss 不授权实施。用户回答不自动扩大 forbidden 范围；需要改 Scope 并重新授权。
+Resolve 使用 version 防止覆盖其他回答；resolution 和相关入队事件同事务保存。相关候选在下一轮按现仓库、Scope 和预算重新检查，不能插入正在执行的冻结计划。Dismiss 不授权实施：被 Dismiss 决策按 blockingScope 关联的未终态候选一并标记 rejected（同事务），重复发现不重开。resolve/dismiss 的重复回答幂等（同 version 同答案 no-op），旧 version 拒绝。用户回答不自动扩大 forbidden 范围；需要改 Scope 并重新授权。
+
+重复发现按 fingerprint 合并到同一 Decision 行：首见身份（title/context/options）与 resolution/version 保持稳定，追加来源 Cycle 与证据（sources），blockingScope 取并集；终态（resolved/dismissed）不因重复发现重开。候选行的终态（done/rejected）同样不被重复上报重置。
 
 ## 9. 预算和请求所有权
 

@@ -8,6 +8,7 @@
 // 纯函数：不做 IO、不读时钟；输入由调用方（supervisor/reportIngestion）备好。
 
 import type { Candidate, Decision } from "./types.js";
+import { decisionBlocksCandidate } from "./decisionPolicy.js";
 import type { ContinuousScopePolicy } from "@zcode/shared";
 
 /** 参与选择的候选最小面（报告导入后的队列行即满足）。 */
@@ -98,8 +99,9 @@ export function selectCandidates(input: CandidateSelectionInput): CandidateSelec
       deferred.push({ candidate, reason: "outside_allowed_paths", decisionIds: [] });
       continue;
     }
+    // 局部阻塞判定复用 decisionPolicy.decisionBlocksCandidate（CT-06 起单一实现）。
     const blockingIds = input.pendingDecisions
-      .filter((decision) => blocksCandidate(decision, candidate))
+      .filter((decision) => decisionBlocksCandidate(decision, candidate))
       .map((decision) => decision.id);
     if (blockingIds.length > 0) {
       deferred.push({ candidate, reason: "blocked_by_pending_decision", decisionIds: blockingIds });
@@ -129,17 +131,7 @@ export function selectCandidates(input: CandidateSelectionInput): CandidateSelec
   return { selected, deferred, rationale };
 }
 
-/**
- * blockingScope 重叠判定：candidateIds 命中或 paths 与候选路径前缀重叠。
- *
- * capability 字段刻意**不**单独触发阻塞：一个 capability 级决策（如“design system 替换须决策”）
- * 只有同时经 candidateIds/paths 显式点名候选才推迟它们——否则它会默认覆盖整个 Program 的
- * 候选面，违反 §8「pending Decision 不默认阻止当前 Cycle、blockingScope 不默认覆盖整个
- * UI 包」。capability 是决策的声明影响面（审计用），不是全局阻塞位。
- */
-function blocksCandidate(decision: BlockingDecision, candidate: SelectableCandidate): boolean {
-  const scope = decision.blockingScope;
-  if (scope === undefined) return false;
-  if (scope.candidateIds.includes(candidate.id)) return true;
-  return underAnyPrefix(scope.paths, candidate.targetPaths);
-}
+// 局部阻塞判定（candidateIds/paths 命中；capability 刻意不单独阻塞——一个 capability 级
+// 决策若默认覆盖整个 Program 的候选面，就违反 §8「pending Decision 不默认阻止当前 Cycle、
+// blockingScope 不默认覆盖整个 UI 包」）自 CT-06 起唯一实现在 decisionPolicy.decisionBlocksCandidate；
+// 本文件经 import 复用，不再保留第二份。

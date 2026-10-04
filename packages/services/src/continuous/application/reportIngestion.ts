@@ -23,6 +23,7 @@ import {
   type ContinuousReportDecisionItem,
 } from "@zcode/shared";
 import type { Candidate, ContinuousEvent, Decision, ReportImportItem } from "../domain/types.js";
+import { continuousDecisionRowId } from "./continuousIds.js";
 import type { ContinuousReportItem } from "./ports.js";
 import type { ContinuousClockPort, ContinuousRepositoryPort } from "./ports.js";
 
@@ -292,10 +293,8 @@ function candidateOf(
   };
 }
 
-/** 决策行 id：同样由 fingerprint 派生（UNIQUE(program_id,fingerprint)）。 */
-function decisionIdOf(fingerprint: string): string {
-  return `dec:${createHash("sha256").update(fingerprint, "utf8").digest("hex").slice(0, 24)}`;
-}
+/** 决策行 id：唯一派生在 domain/decisionPolicy（与 decisionService 的直读共用同一构造）。 */
+const decisionIdOf = continuousDecisionRowId;
 
 function decisionOf(
   input: ReportBatchInput,
@@ -321,6 +320,8 @@ function decisionOf(
         : { capability: item.blockingScope.capability }),
     },
     status: "pending",
+    // 首见来源（CT-06 合并语义）：重复发现经 saveDecision 的 merge 追加来源，不整行覆盖。
+    sources: [{ cycleId: input.cycleId, discoveredAt: now, context: item.context }],
     createdAt: now,
     updatedAt: now,
   };

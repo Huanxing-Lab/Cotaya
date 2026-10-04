@@ -34,6 +34,21 @@ Invariants that types cannot express (rules: `docs/specs/continuous.md`):
   不丢批次内其余条目；`candidate_result` 的 done 只有在 tests/browser/review 三阶段
   validation 事实（本批 + 已导入事件）全 passed 时才被采信——模型自述不能覆盖验证事实。
   候选/决策行 id 由 fingerprint 确定派生（UNIQUE(program_id,fingerprint) 的稳定主键）。
+- `ContinuousDecisionService`（CT-06）是 Decision 回答与执行中决策持久化的唯一写入者：
+  resolve/dismiss 按 version 乐观校验（同 version 同答案重放幂等 no-op、旧 version/异答
+  version_conflict）；resolution 与入队事件（decision.resolved/dismissed、
+  decision.candidates_requeued）经 `applyDecisionResolution` 单事务落库；dismiss 的关联
+  未终态候选同事务 rejected（不授权实施，重复上报不重开）；resolve 不改当前执行计划——
+  关联候选在未来 Cycle 的选择期按现仓库、Scope、预算重新核对。
+- 决策行的重复发现按 fingerprint 合并（`mergeDecisionOnRediscovery`）：首见身份与
+  resolution/version 稳定、来源（sources）按 cycleId 去重追加、blockingScope 取并集且
+  仍然局部；终态不重开。候选行终态（done/rejected）不被重复上报重置。
+- 分类是**双检查**（`evaluateCandidateClassification`）：操作能力（forbidden/allowed 路径）
+  独立于模型标签先行裁决；模型分类不是授权，未知类别默认进入决策（unknownToDecision
+  锁定），决策回答不扩大 allowed/forbidden（Scope 变更需重新授权）。
+- 局部阻塞谓词唯一实现是 `decisionBlocksCandidate`（candidatePolicy 选择期过滤复用）：
+  candidateIds/paths 命中才阻塞，capability 不单独阻塞，空 scope 阻塞零候选——
+  pending Decision 从不暂停 Program（`decisionBlocksProgram` 恒 false）。
 - 本模块不得导入 AgentRuntime 或 CLI 具体实现；执行经 `application/ports.ts`
   的注入端口（adapters 由 CLI bootstrap 侧实现）；固定模板（bootstrap
   `continuous-templates`）经 Host 注入的 `ContinuousTemplateSource` 进入，模板 hash 与

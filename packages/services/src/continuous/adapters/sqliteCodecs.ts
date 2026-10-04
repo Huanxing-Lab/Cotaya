@@ -15,7 +15,6 @@ import type {
   ContinuousEvent,
   Cycle,
   CycleHealthState,
-  Decision,
   Program,
   ProgramAuthorization,
 } from "../domain/types.js";
@@ -84,6 +83,17 @@ export const decisionBodySchema = z.strictObject({
       capability: z.string().optional(),
     })
     .optional(),
+  /** 重复发现的来源清单（CT-06 合并语义；可选——首见行与旧协议无此字段）。 */
+  sources: z
+    .array(
+      z.strictObject({
+        cycleId: z.string().min(1),
+        discoveredAt: z.number().int().nonnegative(),
+        context: z.string().optional(),
+        evidence: z.array(z.unknown()).optional(),
+      }),
+    )
+    .optional(),
 });
 
 export const decisionResolutionSchema = z.strictObject({
@@ -91,6 +101,9 @@ export const decisionResolutionSchema = z.strictObject({
   text: z.string().optional(),
   resolvedAt: z.number().int().nonnegative(),
 });
+
+// decision 行的编解码自 CT-06 起住在 sqliteDecisionStore.ts（本文件到顶，同 CT-04 把
+// continuation 编解码移入对应 store 的先例）；schema 保留在此处供其导入。
 
 // provider usage / 报告 payload 是自由 JSON 事实：校验边界是「可安全 JSON 往返」，
 // 结构解释权在读取方（CT-04/CT-05）；undefined/函数等无法落库的值在此拒绝。
@@ -117,13 +130,15 @@ function codecError(field: string, cause: unknown): Error {
   });
 }
 
-function encodeJson(field: string, schema: z.ZodType<unknown>, value: unknown): string {
+/** JSON 字段编码（校验后序列化）；导出供同层 store 复用（CT-06 起 decision 编解码在 sqliteDecisionStore）。 */
+export function encodeJson(field: string, schema: z.ZodType<unknown>, value: unknown): string {
   const parsed = schema.safeParse(value);
   if (!parsed.success) throw codecError(field, parsed.error);
   return JSON.stringify(parsed.data);
 }
 
-function decodeJson<T>(field: string, schema: z.ZodType<T>, raw: string): T {
+/** JSON 字段解码（解析+校验后还原）；导出供同层 store 复用。 */
+export function decodeJson<T>(field: string, schema: z.ZodType<T>, raw: string): T {
   let value: unknown;
   try {
     value = JSON.parse(raw);
@@ -313,49 +328,6 @@ export function decodeCandidate(row: CandidateRow): Candidate {
     ...body,
     status: row.status as Candidate["status"],
     executionCycleId: row.execution_cycle_id ?? undefined,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
-export function encodeDecision(decision: Decision): DecisionRow {
-  return {
-    id: decision.id,
-    program_id: decision.programId,
-    source_cycle_id: decision.sourceCycleId,
-    fingerprint: decision.fingerprint,
-    version: decision.version,
-    status: decision.status,
-    body_json: encodeJson("body_json", decisionBodySchema, {
-      title: decision.title,
-      context: decision.context,
-      options: decision.options,
-      recommendation: decision.recommendation,
-      classification: decision.classification,
-      blockingScope: decision.blockingScope,
-    }),
-    resolution_json: decision.resolution
-      ? encodeJson("resolution_json", decisionResolutionSchema, decision.resolution)
-      : null,
-    resolved_at: decision.resolution?.resolvedAt ?? null,
-    created_at: decision.createdAt,
-    updated_at: decision.updatedAt,
-  };
-}
-
-export function decodeDecision(row: DecisionRow): Decision {
-  const body = decodeJson("body_json", decisionBodySchema, row.body_json);
-  return {
-    id: row.id,
-    programId: row.program_id,
-    sourceCycleId: row.source_cycle_id,
-    fingerprint: row.fingerprint,
-    version: row.version,
-    ...body,
-    status: row.status as Decision["status"],
-    resolution: row.resolution_json
-      ? decodeJson("resolution_json", decisionResolutionSchema, row.resolution_json)
-      : undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

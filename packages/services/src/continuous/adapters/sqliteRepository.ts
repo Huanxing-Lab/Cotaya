@@ -1,8 +1,9 @@
 // Continuous 长期状态 sqlite 仓库（CT-01）：tasks-index 新表的唯一 SQL 写入方。
 // 职责拆分：行编解码在 sqliteCodecs；连接/事务在 sqliteConnection；
 // 队列/报告导入在 sqliteQueueStore；终态结算/租约在 sqliteLifecycleStore；
-// 使用账本在 sqliteUsageStore。唯一性、同 Program 复合 FK、一个 Program 一条
-// 未结束 Cycle 全部由数据库约束保证，不依赖内存锁（I-02/I-03）。
+// 使用账本在 sqliteUsageStore；决策合并/resolve 在 sqliteDecisionStore（CT-06）。
+// 唯一性、同 Program 复合 FK、一个 Program 一条未结束 Cycle 全部由数据库约束保证，
+// 不依赖内存锁（I-02/I-03）。
 
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
@@ -47,6 +48,13 @@ import {
   saveCandidateReady,
   saveDecisionReady,
 } from "./sqliteQueueStore.js";
+import {
+  applyDecisionResolutionReady,
+  getDecisionReady,
+  listDecisionCandidateLinksReady,
+  type DecisionResolutionApplyInput,
+  type DecisionResolutionApplyResult,
+} from "./sqliteDecisionStore.js";
 import {
   acquireLeaseReady,
   completeCycleReady,
@@ -219,12 +227,34 @@ export class SqliteContinuousRepository implements ContinuousRepositoryPort {
 
   async saveDecision(decision: Decision): Promise<void> {
     await this.ensureReady();
-    saveDecisionReady(this.database(), decision);
+    // 合并是读-改-写：独立调用时自带事务（导入事务路径内则被外层事务覆盖，不开嵌套）。
+    inContinuousTransaction(this.database(), () => {
+      saveDecisionReady(this.database(), decision);
+    });
   }
 
   async listPendingDecisions(programId: string): Promise<Decision[]> {
     await this.ensureReady();
     return listPendingDecisionsReady(this.database(), programId);
+  }
+
+  // ── 决策读面与 versioned resolve/dismiss（sqliteDecisionStore；CT-06）──
+
+  async getDecision(decisionId: string): Promise<Decision | null> {
+    await this.ensureReady();
+    return getDecisionReady(this.database(), decisionId);
+  }
+
+  async listDecisionCandidateLinks(decisionId: string): Promise<Array<{ candidateId: string }>> {
+    await this.ensureReady();
+    return listDecisionCandidateLinksReady(this.database(), decisionId);
+  }
+
+  async applyDecisionResolution(
+    input: DecisionResolutionApplyInput,
+  ): Promise<DecisionResolutionApplyResult> {
+    await this.ensureReady();
+    return applyDecisionResolutionReady(this.database(), input);
   }
 
   async appendEvent(event: ContinuousEvent): Promise<void> {

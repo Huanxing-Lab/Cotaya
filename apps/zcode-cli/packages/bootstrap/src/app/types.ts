@@ -196,6 +196,15 @@ export interface ZCodeAppOptions {
     modelBudgetGateFor?: (
       runId: string,
     ) => import("./continuous-model-budget.js").ContinuousModelBudgetGate | undefined;
+    /**
+     * CT-06 决策闸门登记处：Host 装配（CT-07/08）在 submitOnce 前按 workflowRunId 登记该轮
+     * 的决策适配器；run service 经 wrapEscalatePort 接缝为该 run 的每个 actor 升级端口包上
+     * 「持久化 Decision + 撤销候选写入许可 + 结构化 defer」。缺席/未登记的 runId 的
+     * escalation 逐字不变（普通 Workflow 不受影响）。
+     */
+    decisionGateFor?: (
+      runId: string,
+    ) => import("./continuous-decision-adapter.js").ContinuousDecisionGate | undefined;
   };
   /** 首次真实用户执行或 cold-resume fallback 时解析一次，之后由 app 生命周期缓存。 */
   resolveInitialBashShellSelection?: () => Promise<ExecutionShellSelection | undefined>;

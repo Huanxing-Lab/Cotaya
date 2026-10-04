@@ -62,6 +62,7 @@ export type {
   DecisionBlockingScope,
   DecisionOption,
   DecisionResolution,
+  DecisionSourceRecord,
   Program,
   ProgramAuthorization,
   WorkspaceLease,
@@ -148,6 +149,33 @@ export type {
   SelectableCandidate,
 } from "./domain/candidatePolicy.js";
 export { candidateScore, selectCandidates } from "./domain/candidatePolicy.js";
+// CT-06：Decision Queue 的纯规则与应用服务。decisionService 是 resolve/dismiss 与执行中
+// 决策持久化的唯一写入者（resolution 与入队事件同事务；Dismiss 不授权实施）；decisionPolicy
+// 是分类双检查/局部阻塞/合并/version 裁决的单一实现（candidatePolicy 复用其阻塞谓词）。
+export type {
+  BlockableCandidate,
+  CandidateClassificationAction,
+  ContinuousModelClassification,
+  DecisionResolutionInput,
+  DecisionResolutionPlan,
+} from "./domain/decisionPolicy.js";
+export {
+  CONTINUOUS_MODEL_CLASSIFICATIONS,
+  decisionBlocksCandidate,
+  evaluateCandidateClassification,
+  mergeDecisionOnRediscovery,
+  planDecisionResolution,
+} from "./domain/decisionPolicy.js";
+export { continuousDecisionRowId } from "./application/continuousIds.js";
+export type {
+  ContinuousDecisionServiceDeps,
+  DecisionAnswerResult,
+  EscalationDecisionInput,
+} from "./application/decisionService.js";
+export {
+  ContinuousDecisionService,
+  DecisionVersionConflictError,
+} from "./application/decisionService.js";
 
 /**
  * Continuous 服务接口（Host 持有唯一实例；业务写入唯一路径）。

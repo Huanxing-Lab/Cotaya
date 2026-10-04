@@ -7,15 +7,14 @@ import { isTerminalCycleStatus } from "../domain/types.js";
 import type { Candidate, ContinuousEvent, Decision, ReportImportInput } from "../domain/types.js";
 import {
   decodeCandidate,
-  decodeDecision,
   decodeEvent,
   encodeCandidate,
-  encodeDecision,
   encodeEvent,
   type CandidateRow,
   type DecisionRow,
   type EventRow,
 } from "./sqliteCodecs.js";
+import { decodeDecision, saveDecisionMergeReady } from "./sqliteDecisionStore.js";
 import { inContinuousTransaction, type ContinuousDatabaseSync } from "./sqliteConnection.js";
 
 const CANDIDATE_UPSERT = `
@@ -23,7 +22,11 @@ const CANDIDATE_UPSERT = `
     (id, program_id, source_cycle_id, fingerprint, status, body_json, execution_cycle_id, created_at, updated_at)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT (program_id, fingerprint) DO UPDATE SET
-    status = excluded.status,
+    status = CASE
+      WHEN continuous_candidate.status IN ('done', 'rejected')
+      THEN continuous_candidate.status
+      ELSE excluded.status
+    END,
     body_json = excluded.body_json,
     execution_cycle_id = excluded.execution_cycle_id,
     updated_at = excluded.updated_at`;
@@ -42,6 +45,12 @@ function runCandidateUpsert(db: ContinuousDatabaseSync, candidate: Candidate): v
     row.updated_at,
   );
 }
+
+// CT-06 终态粘性修复：旧 upsert 无条件用 excluded.status 覆盖——被 Dismiss 决策拒绝的候选
+// （rejected）在下一轮被重复上报时会重置回 candidate，从而绕过「Dismiss 不授权实施」；
+// done 同理（已完成的改进被重复发现不应重开实施）。修复依据：docs/specs/continuous.md §8
+// 「Dismiss 不获得实施许可」「重复发现合并」——终态（done/rejected）保持不变，仅未终态行
+// 照旧以上报值更新。
 
 export function saveCandidateReady(db: ContinuousDatabaseSync, candidate: Candidate): void {
   // 重复发现按 fingerprint 合并到同一行（UNIQUE(program_id,fingerprint)），
@@ -63,45 +72,13 @@ export function listQueueableCandidatesReady(
   return rows.map((row) => decodeCandidate(row as unknown as CandidateRow));
 }
 
-const DECISION_UPSERT = `
-  INSERT INTO continuous_decision
-    (id, program_id, source_cycle_id, fingerprint, version, status, body_json, resolution_json, resolved_at, created_at, updated_at)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  ON CONFLICT (program_id, fingerprint) DO UPDATE SET
-    body_json = excluded.body_json,
-    updated_at = excluded.updated_at
-  WHERE excluded.version >= continuous_decision.version`;
+// CT-06 起 decision 的写入（含报告导入路径）改走 sqliteDecisionStore 的合并语义：
+// 同 fingerprint 重复发现合并来源/证据，终态不重开；versioned resolve/dismiss 的乐观并发
+// 守卫在 applyDecisionResolutionReady（resolution 与入队事件同事务）。旧 DECISION_UPSERT
+// 的整行覆盖会丢掉已合并的来源与已落库的 resolution，故移除。
 
 export function saveDecisionReady(db: ContinuousDatabaseSync, decision: Decision): void {
-  const row = encodeDecision(decision);
-  const result = db
-    .prepare(DECISION_UPSERT)
-    .run(
-      row.id,
-      row.program_id,
-      row.source_cycle_id,
-      row.fingerprint,
-      row.version,
-      row.status,
-      row.body_json,
-      row.resolution_json,
-      row.resolved_at,
-      row.created_at,
-      row.updated_at,
-    );
-  // ON CONFLICT 的 WHERE 拦下 version 落后的写入（changes=0 必然来自该分支）：
-  // 显式抛 version_conflict，调用方必须重读最新 version 再回答（§8 resolve 防覆盖）。
-  if (Number(result.changes) === 0) {
-    const existing = db
-      .prepare("SELECT version FROM continuous_decision WHERE program_id = ? AND fingerprint = ?")
-      .get(decision.programId, decision.fingerprint) as { version: number } | undefined;
-    throw Object.assign(
-      new Error(
-        `decision version 冲突: ${decision.id}（现存 ${existing?.version ?? "?"} > ${decision.version}）`,
-      ),
-      { kind: "version_conflict", currentVersion: existing?.version },
-    );
-  }
+  saveDecisionMergeReady(db, decision);
 }
 
 export function listPendingDecisionsReady(

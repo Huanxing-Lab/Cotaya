@@ -757,6 +757,16 @@ export async function createZCodeApp(options: ZCodeAppOptions): Promise<ZCodeApp
                     options.continuousManagedCycles?.modelBudgetGateFor?.(runId)?.wrap(admission) ??
                     admission,
                 }),
+            // CT-06 决策闸门接缝（规格 §8）：同一条登记模式——只有 Host 登记过决策闸门的
+            // managed run 的 escalate 被替换为「持久化决策 + defer」；其余 runId 原端口，
+            // 普通 Workflow 的 escalation 逐字不变。
+            ...(options.continuousManagedCycles?.decisionGateFor === undefined
+              ? {}
+              : {
+                  wrapEscalatePort: ({ runId, escalatePort }) =>
+                    options.continuousManagedCycles?.decisionGateFor?.(runId)?.wrap(escalatePort) ??
+                    escalatePort,
+                }),
           });
     // Continuous managed cycle 的执行适配器（CT-03 专用组装）：只在三件事同时成立时构造——
     //   1. 开关（continuousManagedCycles.enabled，默认关闭，规格 §13；Host 接线属 CT-05+）；

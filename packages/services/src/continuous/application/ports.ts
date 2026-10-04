@@ -39,8 +39,28 @@ export interface ContinuousRepositoryPort {
   getLatestCycleSequence(programId: string): Promise<number>;
   saveCandidate(candidate: Candidate): Promise<void>;
   listQueueableCandidates(programId: string): Promise<Candidate[]>;
+  /**
+   * 保存（或合并）一条决策：同 (programId, fingerprint) 重复发现按 CT-06 合并语义并入
+   * （来源/证据追加、blockingScope 并集、终态与 version 保持现存值）。观察侧写入不走
+   * 乐观并发——resolve/dismiss 专用 applyDecisionResolution。
+   */
   saveDecision(decision: Decision): Promise<void>;
   listPendingDecisions(programId: string): Promise<Decision[]>;
+  /** 决策读面（resolve/dismiss 的 version 基准与幂等判定）。 */
+  getDecision(decisionId: string): Promise<Decision | null>;
+  /** 决策→候选关联（resolve/dismiss 的候选处置输入与审计载荷）。 */
+  listDecisionCandidateLinks(decisionId: string): Promise<Array<{ candidateId: string }>>;
+  /**
+   * versioned resolve/dismiss 同事务落库（§8「resolution 和相关入队事件同事务保存」）：
+   * 乐观守卫（WHERE version = 基准）失败抛 version_conflict；事件逐条幂等写入；
+   * dismiss 的候选处置（未终态关联候选 → rejected）同事务。输入由 decisionService 组装。
+   */
+  applyDecisionResolution(input: {
+    programId: string;
+    decision: Decision;
+    events: ContinuousEvent[];
+    candidateDisposition: "requeue_future_cycles" | "reject_blocked";
+  }): Promise<{ rejectedCandidateIds: string[] }>;
   /** 审计事件；event_key UNIQUE，重复写入被数据库拒绝（导入重放走 applyReportImport）。 */
   appendEvent(event: ContinuousEvent): Promise<void>;
   /**

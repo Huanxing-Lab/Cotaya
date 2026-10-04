@@ -269,6 +269,21 @@ export interface DynamicWorkflowRunServiceDeps {
     admission: ModelRequestAdmission | undefined;
   }) => ModelRequestAdmission | undefined;
   /**
+   * 会话级 escalate 端口的 per-run 包装点（CT-06，规格 §8「普通 Workflow 的 escalation 不
+   * 改变」+ §11「需要普通 driver 增加接缝时，只做无默认行为变化的可选接口」）：driver 为
+   * 每个 actor 铸出的升级端口在下传 runtime 之前经过这里。Continuous 的决策适配器经它
+   * 接入——managed cycle 的 escalate 变成「持久化 Decision + 撤销候选许可 + 结构化 defer」，
+   * 不停驻等待主代理/人类。
+   *
+   * **可选且只影响返回的包装**：缺席即行为逐字不变（普通 Workflow 的 escalation 零改动）；
+   * 在场但对某 runId 返回原端口时该 run 也不受影响——只有 managed cycle 的 run 被登记进
+   * 闭包（create-app 的 continuousManagedCycles.decisionGateFor）。
+   */
+  wrapEscalatePort?: (input: {
+    runId: string;
+    escalatePort: WorkflowEscalatePort;
+  }) => WorkflowEscalatePort;
+  /**
    * 把一次启动登记为父 runtime 的**常驻阻塞工作**。
    *
    * 引擎活在会话 App 的闭包里、不进 runtime task registry，而常驻池当时

@@ -270,6 +270,10 @@ export function launchDynamicWorkflowRun(
       const wrappedAdmission =
         deps.wrapModelRequestAdmission?.({ runId, admission: modelRequestAdmission }) ??
         modelRequestAdmission;
+      // CT-06 升级端口包装点（见 DynamicWorkflowRunServiceDeps.wrapEscalatePort）：同一
+      // 论证——缺席或返回原端口时普通 Workflow 的 escalation 逐字不变；只有 managed cycle
+      // 登记过的 runId 拿到决策闸门包装（escalate → 持久化决策 + 结构化 defer，不停驻）。
+      const wrappedEscalatePort = deps.wrapEscalatePort?.({ runId, escalatePort }) ?? escalatePort;
       const runtime = deps.createActorRuntime({
         runId,
         sessionId,
@@ -281,7 +285,7 @@ export function launchDynamicWorkflowRun(
         // 请求级准入端口与两个工具端口同路下传到 runtime deps（可能已带预算闸门）。
         ...(wrappedAdmission === undefined ? {} : { modelRequestAdmission: wrappedAdmission }),
         // 升级端口与 submit 端口同路下传：core 侧的注册门以端口存在为准，所以恒传。
-        escalatePort,
+        escalatePort: wrappedEscalatePort,
         // resume 的 pin：这个 actor 上一次跑在哪个模型上。必须在**造 runtime 之前**读，
         // 因为下面那行 journalActorResolvedModel 会把这一轮的解析结果写回同一个字段。
         //
