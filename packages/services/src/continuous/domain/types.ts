@@ -135,6 +135,8 @@ export interface Candidate {
   status: ContinuousCandidateStatus;
   executionCycleId?: string;
   evidence: unknown[];
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface DecisionOption {
@@ -171,6 +173,8 @@ export interface Decision {
   blockingScope?: DecisionBlockingScope;
   status: ContinuousDecisionStatus;
   resolution?: DecisionResolution;
+  createdAt: number;
+  updatedAt: number;
 }
 
 /** 资源上限/运行健康的用户继续确认（规格 §5/§6.1；与产品 Decision Queue 分开）。 */
@@ -219,6 +223,69 @@ export interface ContinuousEvent {
   type: string;
   payload: unknown;
   createdAt: number;
+}
+
+// ── CT-01 存储对象：使用记录、报告导入与终态结算（规格 §5/§9/§11）──
+
+/** 单次请求尝试的账本行（continuous_usage）；reserved→settled，证据不足为 unknown。 */
+export type UsageState = "reserved" | "settled" | "unknown";
+
+export interface UsageRecord {
+  id: string;
+  cycleId: string;
+  /** 请求尝试身份（UNIQUE）；重试是新的 requestKey，逐次预留。 */
+  requestKey: string;
+  state: UsageState;
+  provider: string;
+  model: string;
+  pricingVersion: string;
+  /** provider usage 原始事实；unknown 时保留 reservation，不清零。 */
+  usage?: unknown;
+  reservedCostMicros: number;
+  estimatedCostMicros?: number;
+  reservedTokens: number;
+  actualTokens?: number;
+  occurredAt: number;
+  updatedAt: number;
+}
+
+export interface UsageSettlementPatch {
+  requestKey: string;
+  actualTokens: number;
+  estimatedCostMicros: number;
+  usage: unknown;
+  updatedAt: number;
+}
+
+/** 报告导入条目（ContinuousReportV1 的 item 落库形态）；同事务写入并推进 cursor。 */
+export interface ReportImportItem {
+  candidate?: Candidate;
+  decision?: Decision;
+  /** 候选↔决策关联（continuous_candidate_decision；复合 FK 保证同一 Program）。 */
+  candidateDecisionLink?: {
+    programId: string;
+    candidateId: string;
+    decisionId: string;
+  };
+  event?: ContinuousEvent;
+}
+
+export interface ReportImportInput {
+  programId: string;
+  cycleId: string;
+  items: ReportImportItem[];
+  /** 本批导入成功后同事务推进的 cycle.reportCursor（journal sequence 去重基准）。 */
+  nextCursor: number;
+}
+
+/** Cycle 终态结算时同事务更新的 Program 字段（规格 §5：Cycle 结束与 nextCycleAt 同事务）。 */
+export interface ProgramCompletionPatch {
+  status?: Program["status"];
+  statusReason?: string;
+  nextCycleAt?: number;
+  lastCycleAt?: number;
+  consecutiveFailures?: number;
+  updatedAt: number;
 }
 
 // ── 纯领域规则（无 IO；U-02 锁定）──

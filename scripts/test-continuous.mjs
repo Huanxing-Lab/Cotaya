@@ -27,9 +27,9 @@ const SUITES = {
     files: ["packages/services/test/continuous/contract.test.ts"],
   },
   integration: {
-    description: "存储与事务集成（I-01…；CT-01 起加入 repository 测试）",
+    description: "存储与事务集成（I-01…；真实 SQLite migration/FK/事务）",
     kind: "node-test",
-    files: [],
+    files: ["packages/services/test/continuous/repository.test.ts"],
   },
   recovery: {
     description: "崩溃与重启恢复（R-01…；CT-07 起加入）",

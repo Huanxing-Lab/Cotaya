@@ -3,7 +3,18 @@
 // 端口签名锁定规格 §7/§9/§10/§11；实现 ticket：CT-01(Repository)、CT-02(WorkspacePreparation)、
 // CT-03(Execution)、CT-04(RequestAdmission/Clock 扩展)。
 
-import type { Candidate, Cycle, Decision, Program } from "../domain/types.js";
+import type {
+  Candidate,
+  ContinuousEvent,
+  Cycle,
+  Decision,
+  Program,
+  ProgramCompletionPatch,
+  ReportImportInput,
+  UsageRecord,
+  UsageSettlementPatch,
+  WorkspaceLease,
+} from "../domain/types.js";
 
 // ── Repository：长期状态持久化（tasks-index 新表，独立于 DWF journal）──
 export interface ContinuousRepositoryPort {
@@ -14,12 +25,30 @@ export interface ContinuousRepositoryPort {
   listPrograms(workspaceKey: string): Promise<Program[]>;
   insertCycle(cycle: Cycle): Promise<void>;
   saveCycle(cycle: Cycle): Promise<void>;
+  getCycle(cycleId: string): Promise<Cycle | null>;
   /** 同一 Program 最多一个未结束 Cycle（部分唯一索引保证，不靠内存 mutex）。 */
   getOpenCycle(programId: string): Promise<Cycle | null>;
+  /** 生成下一个 sequence 用；配合 UNIQUE(program_id,sequence) 在事务内原子去重。 */
+  getLatestCycleSequence(programId: string): Promise<number>;
   saveCandidate(candidate: Candidate): Promise<void>;
   listQueueableCandidates(programId: string): Promise<Candidate[]>;
   saveDecision(decision: Decision): Promise<void>;
   listPendingDecisions(programId: string): Promise<Decision[]>;
+  /** 审计事件；event_key UNIQUE，重复写入被数据库拒绝（导入重放走 applyReportImport）。 */
+  appendEvent(event: ContinuousEvent): Promise<void>;
+  /** 报告导入：队列/关联/事件/cursor 同事务提交；中断无半条队列（I-03）。 */
+  applyReportImport(input: ReportImportInput): Promise<void>;
+  /** 终态 Cycle 与 Program 的 nextCycleAt/失败计数同事务提交（I-03/R-08）。 */
+  completeCycle(cycle: Cycle, programPatch: ProgramCompletionPatch): Promise<void>;
+  // ── workspace 执行占用（continuous_workspace_lease；epoch 单调，释放保留）──
+  getLease(workspaceKey: string): Promise<WorkspaceLease | null>;
+  /** epoch 必须大于现存值；首次获取从 1 开始。违反抛 epoch_conflict。 */
+  acquireLease(lease: WorkspaceLease): Promise<void>;
+  /** 正常释放：cycle/owner/expiry 同步置空，epoch 保留不重置。 */
+  releaseLease(workspaceKey: string, updatedAt: number): Promise<void>;
+  // ── 使用账本（continuous_usage；CT-04 在此之上建 admission）──
+  insertUsageRecord(record: UsageRecord): Promise<void>;
+  settleUsageRecord(patch: UsageSettlementPatch): Promise<void>;
 }
 
 // ── Execution：现有 Dynamic Workflow 的受控执行边界（CLI bootstrap adapter 实现）──
