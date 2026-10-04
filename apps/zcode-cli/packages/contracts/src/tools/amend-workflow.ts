@@ -90,7 +90,9 @@ const AmendWorkflowModelInputSchema = z.object({
     .nullable()
     .optional()
     .describe(
-      "Omit to keep the predecessor's choice, null for the session model, a model id to set one (only when the user asks).",
+      // 收窄口径与 CreateWorkflow 的 subagent_model 一致：它只达「未声明模型的子代理」，
+      // persona 声明的 model 不受它影响（spec §2.3）。
+      "Omit to keep the predecessor's choice, null for the session model, a model id to set one (only when the user asks). Reaches only subagents without a script-declared model.",
     ),
 });
 

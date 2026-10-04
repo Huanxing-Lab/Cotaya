@@ -107,12 +107,16 @@ export function parseWorkflowSubagentModel(canonical: string | undefined): Model
  * `describeWorkflowConcurrencyLimit`）。**只在设了模型时出现**：跑在会话模型上的 run 没有
  * 可说的，多一句只会让模型以为自己选过什么。
  *
+ * 文案刻意收窄成「未声明模型的子代理」：per-actor 声明（persona 的 `model`，bootstrap 的
+ * workflow-actor-model.ts）排在 run 选择之上，一个在脚本里点名了模型的 actor 不受
+ * `subagent_model` 影响——再说「子代理跑在 X」会让声明过模型的 actor 显得没生效。
+ *
  * 括号里那半句是给模型自己听的：它最容易把「子代理换了模型」读成「我也换了」，然后在下一轮
  * 对用户复述一个假的当前模型。
  */
 export function describeWorkflowSubagentModel(canonical: string | undefined): string {
   if (canonical === undefined) return "";
-  return ` Subagents run on ${canonical} (the main agent stays on the session model).`;
+  return ` Subagents without a script-declared model run on ${canonical} (the main agent stays on the session model).`;
 }
 
 /** 目录条目的规范 id（不含档位）：`ListModels` 的 `id` 与失败清单里的那一行同一个形。 */

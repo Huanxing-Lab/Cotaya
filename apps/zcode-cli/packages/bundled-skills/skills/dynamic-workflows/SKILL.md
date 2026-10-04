@@ -111,8 +111,13 @@ and simply always start with an empty context.
 subagent contract — citing `path:line`, never reporting a check it did not run, saying
 plainly what it could not do, escalating instead of faking — so write the role and the
 standard of judgement, and leave those rules out; they are already there. Every subagent
-has the same tools — reading, searching, editing, running commands — and runs on the
-session's model; there is no per-subagent tool profile or model choice. What a subagent may
+has the same tools — reading, searching, editing, running commands; there is no per-subagent
+tool profile. The model is part of the persona: `agent("judge", { model: "openai/gpt-5" })`
+pins that one actor to a model of its own — same syntax as `subagent_model`, provider-qualified
+so one run can mix providers (§16.1) — and an actor without a declaration follows the run's
+`subagent_model`, or the session model when the run never chose one. A declared id this host
+cannot resolve fails the whole run at that actor's session creation, never silently falling
+back to another model. What a subagent may
 do with its tools is said in the ask: a reviewer that must not touch the code is told "do not
 edit any file", a judge of a string is handed the string and told to judge it as given. A
 subagent asked to run a check runs it; one told not to edit does not. None of this can
@@ -957,10 +962,33 @@ Either way the user confirms the run, and the confirmation shows the actual scri
   reaction to provider rate limits or errors, which the runtime already adapts to. A value
   above the machine's ceiling is lowered to it. Otherwise how many subagents run at once is
   the runtime's decision, not the script's.
-- `subagent_model`: the model the subagents run on, as `providerId/modelId` or a bare
-  model id (optionally `$reasoningLevel`). Set it only when the user asks for a specific
-  model; pass the name the user used, and if the tool cannot resolve it, pick from the ids
-  it lists or call `ListModels`. You stay on the session model either way.
+- `subagent_model`: the model subagents run on **when their `agent()` persona does not
+  declare one** (§2), as `providerId/modelId` or a bare model id (optionally
+  `$reasoningLevel`). Set it only when the user asks for a specific model; pass the name
+  the user used, and if the tool cannot resolve it, pick from the ids it lists or call
+  `ListModels`. You stay on the session model either way. It is a default, not an
+  override: a persona's `model` declaration always outranks it, so on a run where actors
+  declare their own models this setting reaches only the undeclared ones. Full chain,
+  highest first — an actor's declared `model` → this run's `subagent_model` → the session
+  model (on resume, an undeclared actor is additionally pinned to what it last ran on,
+  below both).
+
+**One run, several models.** `subagent_model` is one value for the whole run;
+per-actor models are declared in the script, in the persona, and only there:
+
+```ts
+const scout  = agent("scout",  { system: "Locate the relevant files.", model: "anthropic/claude-sonnet-4" });
+const coder  = agent("coder",  { system: "Write the fix.",             model: "openai/gpt-5$high" });
+const judge  = agent("judge",  { system: "Review the diff.",           model: "google/gemini-2.5-pro" });
+const scribe = agent("scribe", { system: "Write the summary." }); // no model: follows
+                                                                 // subagent_model, else the session model
+```
+
+Each declaration is frozen with its persona: it survives resume as part of the actor's
+identity, and amending it forfeits that actor's cache and re-runs it whole (§16.4). A
+declared id this host cannot resolve fails the run at that actor's session creation —
+with the same candidate list an unresolvable `subagent_model` gives you, never a silent
+fallback.
 
 This tool starts a new run. To change a run that exists — errored, completed, stopped or
 still running — call `AmendWorkflow` (§13, §16.4), never `CreateWorkflow` again.
@@ -988,6 +1016,18 @@ declare interface Node<T> extends PromiseLike<T> {}
 declare interface AgentPersona {
   /** System prompt describing the actor's role. */
   system?: string;
+  /**
+   * The model this actor runs on. A provider-qualified reference —
+   * "providerId/modelId" or "providerId/modelId$reasoningLevel" — in the same syntax
+   * subagent_model takes; the fully-qualified form is the recommended one, since one
+   * workflow may mix actors from different providers. A bare "modelId" works when
+   * exactly one provider offers it; when several do, the one the session currently
+   * runs wins, and only the remaining ambiguity fails. Highest precedence: it overrides
+   * both the run-level subagent_model and any resume pin. Frozen with the persona. A
+   * reference that cannot be resolved (unknown model, ambiguous bare id, disabled
+   * provider, unknown reasoning level) fails the whole run — never a silent fallback.
+   */
+  model?: string;
 }
 
 /**
@@ -1423,15 +1463,20 @@ same call, so never `TaskStop` it first and never rewrite it from scratch with
   number to change it (only when the user asks). A call carrying nothing but `run_id` and
   `max_concurrency`, against a run that is still going, retunes that run in place instead of
   starting a new one: same run, nothing stopped, nothing re-run.
-- `subagent_model`: omit to keep the predecessor's choice, pass `null` to put the subagents
-  back on the session model, pass a model id to change it (only when the user asks).
-  `ListModels` lists the ids.
+- `subagent_model`: omit to keep the predecessor's choice, pass `null` to put subagents
+  **without a script-declared model** back on the session model, pass a model id to change
+  it (only when the user asks). It never overrides a persona's `model` declaration — to
+  change one actor's model, edit its `agent()` call, which forfeits that actor's cache
+  (below). `ListModels` lists the ids.
 
 Changing only a setting on a running run still stops it; what it had in flight runs again in
 the new run, except that a named subagent whose unfinished ask you did not change picks that
 ask up where it left off instead of starting it over.
 
-**How the cache works.** Named subagents are matched by name across the two scripts; each
+**How the cache works.** Named subagents are matched by name across the two scripts, and
+each one's persona must match too — the normalized persona, `{ system, model }` included,
+compared as JSON — so editing an actor's system prompt or its declared `model` discards
+that actor's cache and re-runs it whole, while the other actors keep importing. Each
 one's asks are matched in order by byte-identical instructions. A match settles from the
 recorded result at zero tokens; a changed or added ask runs live. The cache stays open until a
 live subagent makes its first write to the workspace (or a live `world.run` executes): from

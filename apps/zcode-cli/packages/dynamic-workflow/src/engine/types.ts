@@ -55,16 +55,31 @@ export function refToString(ref: InstanceRef | ActorRef): string {
 /**
  * 冻结的 actor persona，交给 {@link WorkflowDriver.createActorSession}。
  *
- * persona 只剩身份（名字 + system prompt）。模型档位（`model?: "main" | "lite"`）
- * 与工具档位（`tools?: "default" | "readonly" | "none"`）都已退场：宿主没有 lite 模型来源，而
- * 工具档位买到的只有「裁判不能改文件」——普通子代理也不靠档位保证这一点，ask 文本说清即可。
- * 子代理一律跑在父会话当前模型上、拿完整工作工具集减去会悬挂/越权的交互工具。
+ * persona = 身份（名字 + system prompt）+ 可选的**模型声明**。历史上的模型档位
+ * （`model?: "main" | "lite"`）曾整个退场（宿主没有 lite 模型来源）；现在 model 回来了，但
+ * 形态不同：不是由宿主解释的 main/lite 档位名，而是一条完整的 provider 限定引用
+ * （`providerId/modelId[$reasoningLevel]`，语法与 CreateWorkflow 的 `subagent_model` 同一，
+ * core 的 `resolveModelReference` 解析），**作者也从宿主换成了脚本作者**——run 级
+ * `subagentModel` 是用户对「未声明模型的子代理」的一次性缺省，`model` 是脚本对**这一个
+ * actor** 的点名。优先级链因此是 model 声明 > run 选择 > resume pin > 父会话当前模型
+ * （展开见 bootstrap 的 workflow-actor-model.ts；声明在场即压过其余一切，pin 连解析都不做）。
+ * 引擎不解读这个字符串：它只随 persona 冻结、落 `dwf_actor.persona_json`，并作为 amend-resume
+ * 候选比对的一部分（imported-cache 的 canonicalJson）——改声明即弃该 actor 的导入候选、全新
+ * 重跑，缓存取舍零额外代码。解析失败（not_found / ambiguous / disabled /
+ * reasoning_level_unknown）大声失败：该 actor 会话创建抛错 → ask 失败 → run 失败，绝不静默回落。
+ * 工具档位（`tools?: "default" | "readonly" | "none"`）仍然退场：它买到的只有「裁判不能改
+ * 文件」，ask 文本说清即可；子代理拿完整工作工具集减去会悬挂/越权的交互工具。
  * 是否注册 submit_result 由 driver 结合站点图判定（全 untyped 的 actor 不注册），
- * 不在这里表达——保持 persona 只描述身份。
+ * 不在这里表达。
  */
 export interface PersonaSpec {
   name?: string;
   system?: string;
+  /**
+   * 脚本作者声明的模型引用：`providerId/modelId[$reasoningLevel]`，裸 `modelId` 唯一命中时
+   * 可用（歧义即失败）。是声明不是事实——实际跑在哪个模型见 {@link ActorRecord.resolvedModel}。
+   */
+  model?: string;
 }
 
 /**
@@ -479,10 +494,12 @@ export type RunEvent =
    * `phaseNames` 是脚本声明的阶段表（声明序），由提交方从因果图填入；侧栏迷你轨道据此画出前方
    * 的站点。同样只记一次，
    * 冷重放免费重建；脚本没有 `phase()` 标记时缺席。
-   * `subagentModel` 是本 run 的子代理跑在哪个模型上，规范形 `providerId/modelId[$reasoningLevel]`。与锚点、阶段表同一路宿主元数据：引擎**从不读它**，
+   * `subagentModel` 是本 run 的**未声明模型的**子代理跑在哪个模型上，规范形
+   * `providerId/modelId[$reasoningLevel]`。与锚点、阶段表同一路宿主元数据：引擎**从不读它**，
    * 只在建 run 那一世随这条事件记一次；宿主在 resume 与两条读面上从事件头读回同一个串
-   * （子代理会话按「本字段 > resume pin > 父会话模型」定选型，bootstrap 的
-   * workflow-actor-model.ts）。同样零 SQL——不在 `dwf_run` 列上。缺席即子代理跑在会话模型上。
+   * （子代理会话按「persona.model 声明 > 本字段 > resume pin > 父会话模型」定选型，bootstrap
+   * 的 workflow-actor-model.ts）。同样零 SQL——不在 `dwf_run` 列上。缺席即子代理跑在会话模型上
+   * （该 actor 的 persona 声明了 model 的除外）。
    * `phaseAlongside` 与 `phaseNames` **按位置对齐**：`phaseAlongside[i]` 是进入 `phaseNames[i]` 时
    * strand 仍在跑的其他阶段的下标（下标落在同一张 `phaseNames` 里）。侧栏据此把并行的两站画成
    * 双线段；没有阶段并行时缺席，缺席就是「这条轨道是一条直线」。
@@ -761,13 +778,19 @@ export interface ActorRecord {
   /**
    * actor 实际跑在哪个模型上（`providerId/modelId`），由 driver 侧写入。
    *
-   * 为什么不塞进 `persona`：persona 是引擎在 createActor 时同步写下的冻结身份，而模型是宿主
-   * 事实（父会话**当时**的选择），引擎看不见。分成两个字段，身份与宿主事实就各有一个作者，
-   * 谁写的谁负责。
+   * 与 `persona.model` 的分工（两个字段、两个作者）：`persona.model` 是脚本作者的**声明**
+   * （想跑在哪，随 persona 冻结、随 persona_json 落库、resume 时脚本重放自动重建）；本字段是
+   * 宿主的**事实**（实际跑在哪，权威是造出来的 child runtime 的
+   * `runtime.getSessionModelSelection()`，落库见 dynamic-workflow-run-launch.ts 的
+   * `journalActorResolvedModel`）。persona.model 引入后这条分离不是被吞并，反而更必要：声明
+   * 是作者的原始字符串，事实是宿主解析出的整条选择（含 reasoning 档位展开），一个 actor 完全
+   * 可以「声明短、事实长」；引擎在 createActor 时同步写下 persona，看不见模型事实，谁写的谁
+   * 负责——读面因此能同时回答「作者要什么」与「实际跑了什么」。
    *
    * 为什么要落库：run 的成本因此可审计，且 resume 能重新附着到**同一个**模型——父会话在两次
    * 运行之间换了主模型，也不会让同一个 run 的后半段悄悄换模型（pin，见 bootstrap 的
-   * workflow-actor-model.ts）。
+   * workflow-actor-model.ts）。persona.model 或 run 级选择在场时压过 pin：它们是显式决定，
+   * pin 守的只是隐式缺省的静默漂移。
    *
    * 与 `sessionId` 同属「driver 拥有的字段」：引擎的 putActor 只负责把已有值原样带过去
    * （见 engine.ts 的 createActor 与 scheduler.ts 的 ensureSession），绝不自己产出它。

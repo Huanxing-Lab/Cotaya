@@ -64,6 +64,11 @@ export {
   resolveBashTimeoutPolicy,
 } from "./tool/bash-timeout-policy.js";
 export type { BashTimeoutPolicy } from "./tool/bash-timeout-policy.js";
+// 模型引用解析（`providerId/modelId[$level]` → 一次选型）：dwf 的 per-actor 声明
+// （persona.model，bootstrap 的 createActorRuntime 装配点）与 `subagent_model` 共用同一份，
+// 同语法、同失败面。从 core 导出而不是让 bootstrap 再抄一份——两份解析各自演化的症状是
+// 「同一个名字 run 级解得开、persona 级解不开」，而这条缝只在用户点了名却 run 失败时可见。
+export { resolveModelReference } from "./tool/handlers/model-reference.js";
 export type {
   ToolMetadata,
   ToolHandler,

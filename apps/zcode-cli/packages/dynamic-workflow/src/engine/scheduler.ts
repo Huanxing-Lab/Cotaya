@@ -411,11 +411,18 @@ export class AskScheduler {
       // 把 cause 的文本带进 message：WorkflowError.toJSON 只落 code/message，cause 不进 journal 也
       // 无人记日志，于是「创建 actor 会话失败」在 GUI / journal 里成了无法诊断的黑盒
       // （实机上底层其实是 session_task_link 的 FOREIGN KEY constraint failed）。
+      // actor 定位（名字，缺席退 siteId@ordinal）也要写进 message：spec §2.4 要求纯读失败文本
+      // 就能定位是哪条 agent() 声明炸了；node-queued 事件只带 actor.ref 不带名字，
+      // 多 actor 工作流里没有定位的消息无法分诊。
+      const who =
+        node.actor.name !== undefined
+          ? `actor "${node.actor.name}"`
+          : `actor at ${refToString(node.actor.ref)}`;
       this.settleFailed(
         node,
         new WorkflowError(
           "DriverError",
-          `Failed to create the subagent session: ${describeCause(cause)}`,
+          `Failed to create the subagent session for ${who}: ${describeCause(cause)}`,
           { cause },
         ),
       );

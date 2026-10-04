@@ -101,9 +101,11 @@ function formatListModelsModelContent(output: unknown): ModelMessageContent {
 
   if (models.length === 0) {
     // 「一个都没配」必须说成一句话：空容器容易被读成「工具没答上来」。
+    // 子代理的口径与 describeWorkflowSubagentModel 一致：只说「未声明模型的子代理」——
+    // persona 声明过 model 的 actor 不吃 subagent_model，也不能说它跑在会话模型上。
     return [
       '<models count="0">',
-      "No models are configured on this host. Omit `subagent_model`: the workflow's subagents run on the session model.",
+      "No models are configured on this host. Omit `subagent_model`: subagents without a script-declared model run on the session model.",
       "</models>",
     ].join("\n");
   }

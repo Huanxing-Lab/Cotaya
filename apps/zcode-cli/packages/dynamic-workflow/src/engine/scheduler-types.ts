@@ -148,6 +148,12 @@ export function describeCause(cause: unknown): string {
   const text = cause instanceof Error ? cause.message : String(cause);
   const trimmed = text.trim();
   if (trimmed.length === 0) return "unknown error";
+  // 带 unboundedCauseMessage 标记的错误原样放行（如 persona.model 解析失败——message 里是
+  // resolveModelReference 的候选清单，spec §2.4 要求完整送达，与 subagent_model 直返全文的
+  // 失败面一致）。标记是跨包结构类型约定，见 bootstrap workflow-actor-model.ts 的错误类。
+  if (cause instanceof Error && (cause as { unboundedCauseMessage?: boolean }).unboundedCauseMessage === true) {
+    return trimmed;
+  }
   return trimmed.length > 300 ? `${trimmed.slice(0, 300)}…` : trimmed;
 }
 

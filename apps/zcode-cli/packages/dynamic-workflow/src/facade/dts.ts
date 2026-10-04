@@ -14,7 +14,18 @@
 
 export const FACADE_FILE_NAME = "workflow-facade.d.ts";
 
-/** actor 族：Node / AgentPersona / Agent / agent()。snippet 刻意不含。 */
+/**
+ * actor 族：Node / AgentPersona / Agent / agent()。snippet 刻意不含。
+ *
+ * per-actor 模型声明（persona.model）的裁决：优先级链 persona.model > run 级 subagent_model >
+ * resume pin > 父会话当前模型——声明在场即压过其余一切，pin 连解析都不做（与 run 选择在场时
+ * 同款处理）。解析失败（not_found / ambiguous / disabled / reasoning_level_unknown，core 的
+ * resolveModelReference）令该 actor 会话创建抛错 → ask 失败 → run 失败，绝不静默回落。
+ * 声明与事实分离：persona.model 是脚本作者的声明（随 persona 冻结、随 journal 的
+ * dwf_actor.persona_json 落库、resume 时脚本重放自动重建）；dwf_actor.resolved_model 仍是
+ * 宿主事实，两个字段两个作者。改声明随 persona 进 amend-resume 的 canonicalJson 比对
+ * （imported-cache.ts）：该 actor 的导入候选被弃、全新重跑，其余 actor 缓存照常导入。
+ */
 const FACADE_ACTOR_SEGMENT = String.raw`
 /**
  * A node: one task assigned to an actor, producing a typed result.
@@ -30,6 +41,18 @@ declare interface Node<T> extends PromiseLike<T> {}
 declare interface AgentPersona {
   /** System prompt describing the actor's role. */
   system?: string;
+  /**
+   * The model this actor runs on. A provider-qualified reference —
+   * "providerId/modelId" or "providerId/modelId$reasoningLevel" — in the same syntax
+   * subagent_model takes; the fully-qualified form is the recommended one, since one
+   * workflow may mix actors from different providers. A bare "modelId" works when
+   * exactly one provider offers it; when several do, the one the session currently
+   * runs wins, and only the remaining ambiguity fails. Highest precedence: it overrides
+   * both the run-level subagent_model and any resume pin. Frozen with the persona. A
+   * reference that cannot be resolved (unknown model, ambiguous bare id, disabled
+   * provider, unknown reasoning level) fails the whole run — never a silent fallback.
+   */
+  model?: string;
 }
 
 /**

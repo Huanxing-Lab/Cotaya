@@ -136,8 +136,10 @@ export function WorkflowPermissionBlock({
   // 已经过 resolveInput 的 clamp，所以窗上这个数就是会生效的那一条界。
   const maxConcurrency = readWorkflowMaxConcurrency(request.raw);
   // 子代理模型：与并发上限同族的一条「用户自己提的条件」，
-  // 而且比它更该说出口——批准的是「让这些子代理跑在另一个模型上」。入参到这里已被 resolveInput
-  // 解析成规范串，所以窗上这个 id 就是真会被用上的那个。主代理不受影响，文案因此只说子代理。
+  // 而且比它更该说出口——批准的是「让子代理换一个模型跑」。入参到这里已被 resolveInput
+  // 解析成规范串，所以窗上这个 id 就是真会被用上的那个。主代理不受影响，文案因此只说子代理；
+  // 脚本还可在 persona 里按 actor 声明模型（压过 run 级选择），所以词条说的是
+  // 「未在脚本内声明模型的子代理」——不是全体子代理。
   const subagentModel = readWorkflowSubagentModel(request.raw);
   // 规范串只进 tooltip：屏幕上说模型名（必要时加思考强度），拼名规则与模型菜单同一条。
   const subagentModelProviderName = useWorkflowSubagentModelProviderName(workspacePath);
@@ -248,7 +250,8 @@ export function WorkflowPermissionBlock({
       )}
 
       {/* 子代理模型：与并发上限同族，紧跟其后——两行都是「用户给这次 run 定下的条件」，
-          而这一条更该说出口：批准的是让这些子代理跑在另一个模型上。主代理不受影响。 */}
+          而这一条更该说出口：批准的是让子代理换一个模型跑。主代理不受影响；脚本里声明了
+          自己模型的 actor 不在这条条件的覆盖范围内（词条因此收窄成「未声明模型的子代理」）。 */}
       {describedSubagentModel === undefined ? null : (
         <p
           className="min-w-0 text-ui-xs text-foreground-subtlest"

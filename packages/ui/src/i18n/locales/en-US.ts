@@ -5576,10 +5576,10 @@ const enUS: Record<string, string> = {
   "chat.toolCall.workflow.run.throttle.reason.transient": "transient error",
   "chat.toolCall.workflow.run.concurrency.label": "Concurrency {cap}",
   "chat.toolCall.workflow.run.concurrency.cooldown": "cooling down until {time}",
-  "chat.toolCall.workflow.run.subagentModel.label": "Subagents {model}",
+  "chat.toolCall.workflow.run.subagentModel.label": "Subagents default to {model}",
   "chat.toolCall.workflow.subagentModel.withLevel": "{model} · thinking {level}",
   "chat.toolCall.workflow.subagentModel.tooltip":
-    "Subagents run on {model}. The main agent stays on the session model.",
+    "Subagents without a script-declared model run on {model}. The main agent stays on the session model.",
   "chat.toolCall.todo.updating": "Updating todos",
   "chat.toolCall.todo.updated": "Updated todo",
   "chat.toolCall.search.find": "Find",
@@ -5821,7 +5821,8 @@ const enUS: Record<string, string> = {
   "chat.permission.workflow.amends.running": "still running, will be stopped",
   "chat.permission.workflow.amends.scriptUnchanged": "script unchanged",
   "chat.permission.workflow.maxConcurrency": "At most {count} subagents at once",
-  "chat.permission.workflow.subagentModel": "Subagents run on {model}",
+  "chat.permission.workflow.subagentModel":
+    "Subagents without a script-declared model run on {model}",
   "chat.permission.workflow.saved.badge": "Saved workflow",
   "chat.permission.workflow.saved.scope.project": "project",
   "chat.permission.workflow.saved.args": "Arguments",

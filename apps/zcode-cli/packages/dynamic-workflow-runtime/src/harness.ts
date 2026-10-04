@@ -38,6 +38,7 @@ import {
   type AskSpec,
   type Caps,
   type ImportedRunCache,
+  type PersonaSpec,
   type RunSettlement,
   type ValidateFn,
   type WorkflowDriver,
@@ -466,7 +467,11 @@ function handleChildMessage(message: ChildMessage, deps: MessageDeps): void {
         const actorId = engine.createActor(
           message.siteId,
           message.name,
-          message.persona as string | undefined,
+          // 协议线上是 `unknown`（JSON 边界不传类型），实际到达的是 facade 的 persona：
+          // 字符串（旧形态，只有 system）或 AgentPersona 对象（PersonaSpec：name/system/model）。
+          // 引擎的 createActor 本就收 `string | PersonaSpec`，这里补上对象那一支，消掉
+          // 「实际是对象、类型说是字符串」的谎言——persona.model 的声明正是从这里进引擎的。
+          message.persona as string | PersonaSpec | undefined,
         );
         actorMap.set(message.localId, actorId);
       } catch (cause) {

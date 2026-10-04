@@ -21,6 +21,7 @@ import {
   AgentRuntime,
   PermissionService,
   buildPluginReferenceCatalog,
+  resolveModelReference,
   type AmendWorkflowRunSettingsInput,
   type ResumeSessionResult,
 } from "@zcode/core";
@@ -33,7 +34,9 @@ import {
   createSessionEvent,
   type ExecutionShellSelection,
   type MessageId,
+  type ModelCatalogPort,
 } from "@zcode/contracts";
+import type { ModelSelection } from "@zcode/shared/model-selection";
 import { isRemoteWorkspaceIdentity, resolveZCodeRuntimeEnv } from "@zcode/shared";
 import {
   ZCODE_ATTACHMENT_FAULT_CODES,
@@ -83,7 +86,10 @@ import { createDynamicWorkflowSnippetService } from "./dynamic-workflow-snippet-
 import { createModelCatalogPort } from "./model-catalog-port.js";
 import { createDynamicWorkflowRunProgressSink } from "./dynamic-workflow-run-progress-sink.js";
 import { createScriptWorkflowAgentRuntime } from "./script-workflow-child-runtime.js";
-import { workflowActorModelPolicy } from "./workflow-actor-model.js";
+import {
+  WorkflowActorPersonaModelError,
+  workflowActorModelPolicy,
+} from "./workflow-actor-model.js";
 import { workflowActorToolPolicy } from "./workflow-actor-tools.js";
 import {
   createNodeReplBrowserBroker,
@@ -139,6 +145,30 @@ function decodePromptAttachmentDataUrl(
     throw new Error("fault.attachment.previewTooLarge");
   }
   return { bytes, mediaType };
+}
+
+/**
+ * persona.model（脚本作者在 `agent(name, { model })` 里声明的模型引用）→ 一次选型，作
+ * workflowActorModelPolicy 的最高档。为什么解析在装配层而不是策略层：模型目录是宿主事实，
+ * createActorRuntime 这个闭包是它最近的注入点，而 persona 恰好就在手上——纯函数策略层刻意
+ * 不引 catalog（可测性），解析只能落在这里。语法与失败面与 `subagent_model` 完全一致：
+ * 同一份 core 的 resolveModelReference，绝不出现「同一个名字 run 级解得开、persona 级解不开」。
+ * 目录经 modelCatalogPort 现读、不缓存（model-catalog-port.ts 的纪律）。
+ *
+ * 解析失败沿现有 driver 错误通道大声冒出：这里抛 WorkflowActorPersonaModelError →
+ * actor 会话创建失败 → ask 失败 → run 失败，绝不静默回落到 run 选择 / pin / 父模型——
+ * 静默回落正是声明要防的事。persona 随 agent() 冻结不变，所以每个 actor 会话只在创建时
+ * 解析这一次。
+ */
+function resolveWorkflowActorPersonaModelSelection(
+  declared: string | undefined,
+  catalog: ModelCatalogPort,
+): ModelSelection | undefined {
+  // 未声明（undefined / 空串）即缺席：交给策略层走 run 选择 → pin → 父模型的既有链路。
+  if (declared === undefined || declared === "") return undefined;
+  const resolution = resolveModelReference(declared, catalog.listModels());
+  if (resolution.ok) return resolution.selection;
+  throw new WorkflowActorPersonaModelError(declared, resolution.message);
 }
 
 export async function createZCodeApp(options: ZCodeAppOptions): Promise<ZCodeApp> {
@@ -610,18 +640,24 @@ export async function createZCodeApp(options: ZCodeAppOptions): Promise<ZCodeApp
                   // actor 的工具面是减法（全集减去会悬挂/越权的交互工具），只能经 configOverrides
                   // 表达（request.opts.tools 只有 allowlist）。
                   ...workflowActorToolPolicy(),
-                  // 模型面：`runSubagentModel` 是本 run 自己的选择（`subagent_model`），在场时整条
-                  // 覆盖，排在 pin 之上——主代理不受它影响。没有它也没有 pin 就不覆盖——child runtime
-                  // 的基线本就是父会话当前模型（工厂的基线，见 script-workflow-child-runtime.ts）。
-                  // resume 带来的 pin 钉住上一次实际跑的模型（persona 冻结不变式的持久化那一半，见
-                  // workflow-actor-model.ts 的优先级表）；parentSelection 取父会话**当前**的选择，
-                  // 与工厂基线同源，pin 比对才不会漂移。
+                  // 模型面四级链（整表见 workflow-actor-model.ts）：persona.model 声明（脚本
+                  // 作者点名，就在下面第三参的位置解析）> `runSubagentModel`（本 run 的
+                  // `subagent_model`，只覆盖**未声明模型的**子代理——主代理也不受它影响）>
+                  // resume pin > 父会话当前模型。前两档在场时整条覆盖、更低档连解析都不做；
+                  // 都没有就不覆盖——child runtime 的基线本就是父会话当前模型（工厂的基线，见
+                  // script-workflow-child-runtime.ts）。pin 钉住上一次实际跑的模型（persona 冻结
+                  // 不变式的持久化那一半）；parentSelection 取父会话**当前**的选择，与工厂基线
+                  // 同源，pin 比对才不会漂移。
                   ...workflowActorModelPolicy(
                     {
                       parentSelection: getRuntime().getSessionModelSelection(),
                       ...(runSubagentModel === undefined ? {} : { runSelection: runSubagentModel }),
                     },
                     pinnedModel,
+                    // persona.model → 选型：为什么在装配层解析、失败沿哪条通道冒出，见
+                    // resolveWorkflowActorPersonaModelSelection 的注释（解析失败在那里抛出，
+                    // 走不到策略函数）。
+                    resolveWorkflowActorPersonaModelSelection(persona.model, modelCatalogPort),
                   ).configOverrides,
                 },
                 deps: {

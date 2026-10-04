@@ -5332,13 +5332,17 @@ const zhCN: Record<string, string> = {
   "chat.toolCall.workflow.run.concurrency.cooldown": "冷却至 {time}",
   // 子代理模型：只在这次 run 被指定过模型时在场。
   // 详情侧板摘要行的第一段——这一行本来就是「这条 run 的几个数」，模型是它的第一个词。
+  // 文案收窄成「默认」：脚本可在 persona 里按 actor 声明模型（`agent(name, { model })`），
+  // 声明压过 run 级选择——这个 chip 说的是未声明模型的子代理的缺省，不是所有子代理。
   // `{model}` 是**解析过的模型名**（describeWorkflowSubagentModel），不是规范串：规范串里的
   // providerId 可能是一个 UUID，它只住在 tooltip 里。
-  "chat.toolCall.workflow.run.subagentModel.label": "子代理 {model}",
+  "chat.toolCall.workflow.run.subagentModel.label": "子代理默认 {model}",
   // 模型名 + 思考强度：确认窗与 tooltip 说整句，卡与侧板只取模型名。
   "chat.toolCall.workflow.subagentModel.withLevel": "{model} · 思考 {level}",
   // 三个面共用的 tooltip：一句解释 + 换行 + 规范串（规范串由代码接在后面，不进词条）。
-  "chat.toolCall.workflow.subagentModel.tooltip": "子代理运行在 {model}。主代理仍使用会话模型。",
+  // 与确认窗同一句收窄：只说未在脚本内声明模型的子代理；声明了自己模型的 actor 不受影响。
+  "chat.toolCall.workflow.subagentModel.tooltip":
+    "未在脚本内声明模型的子代理运行在 {model}。主代理仍使用会话模型。",
   "chat.toolCall.todo.updating": "正在更新待办",
   "chat.toolCall.todo.updated": "已更新待办",
   "chat.toolCall.search.find": "查找",
@@ -5568,8 +5572,10 @@ const zhCN: Record<string, string> = {
   "chat.permission.workflow.maxConcurrency": "最多 {count} 个子代理同时运行",
   // 子代理模型：模型只在用户开口要求时才写 `subagent_model`，
   // 所以这一行也是用户自己提的条件。只说子代理——主代理无论如何都留在会话模型上。
+  // 收窄成「未在脚本内声明模型的」：脚本可在 persona 里按 actor 声明模型，声明压过
+  // run 级选择，这条说的是缺省而不是全体子代理。
   // `{model}` 是解析过的模型名（必要时带思考强度），不是规范串；规范串在这一行的 tooltip 里。
-  "chat.permission.workflow.subagentModel": "子代理运行在 {model}",
+  "chat.permission.workflow.subagentModel": "未在脚本内声明模型的子代理运行在 {model}",
   // ── 可复用工作流──
   // saved 来源徽标（运行确认窗）：只说明脚本来自哪个文件、带了什么实参。
   // 它不表达任何信任——保存不产生信任，已保存的工作流照样过完整的运行确认。

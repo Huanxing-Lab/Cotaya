@@ -191,10 +191,12 @@ function resolveAmendSubagentModel(
     };
   }
   // 沿用的那一个失败时必须说清它是**继承来的**：模型这次调用压根没提模型名，直接把解析
-  // 诊断丢给它，它会以为自己传错了参数，然后原样重试。
+  // 诊断丢给它，它会以为自己传错了参数，然后原样重试。引导句同样只说「未声明模型的子代理」
+  // （与 describeWorkflowSubagentModel 同口径）：persona 声明过 model 的 actor 不受
+  // subagent_model 影响，说「整个修订跑在会话模型上」会让声明显得没生效。
   return subagentModelFailure(
     choice.inherited
-      ? `This amend inherited the predecessor run's subagent model (\`${choice.text}\`), which is no longer usable. ${choice.message}\n\nPass \`subagent_model: null\` to run the revision on the session model instead.`
+      ? `This amend inherited the predecessor run's subagent model (\`${choice.text}\`), which is no longer usable. ${choice.message}\n\nPass \`subagent_model: null\` to run the revision's subagents without a script-declared model on the session model instead.`
       : choice.message,
   );
 }

@@ -136,6 +136,12 @@ export interface DynamicWorkflowActorRuntimeInput {
   runId: string;
   sessionId: SessionId;
   actor: ActorRef;
+  /**
+   * 冻结的 persona（身份 + 可选的模型声明）。`model` 声明由工厂在装配点用 core 的
+   * resolveModelReference 解析成选型、作策略最高档；解析失败以 WorkflowActorPersonaModelError
+   * 令 actor 会话创建失败（→ ask 失败 → run 失败），绝不静默回落（见 create-app.ts 的
+   * resolveWorkflowActorPersonaModelSelection）。
+   */
   persona: PersonaSpec;
   submitPort: WorkflowSubmitPort;
   /**
@@ -161,9 +167,11 @@ export interface DynamicWorkflowActorRuntimeInput {
    * 本 run 自己的子代理模型（`CreateWorkflow` / `AmendWorkflow` 的 `subagent_model`，从
    * journal 的 `run-launched` 事件解析回来）。整条选择，含 reasoning 档位。
    *
-   * 优先级**最高**，在 {@link DynamicWorkflowActorRuntimeInput.pinnedModel} 与父会话模型之上
-   * （workflow-actor-model.ts 的 `workflowActorModelPolicy`）：这一条是用户对这一次 run 的显式
-   * 表态，pin 只守没有它时的隐式缺省。只管子代理、不动主代理。缺席即跑在 pin 或会话模型上。
+   * 位置：**次高**——只覆盖**未声明模型的**子代理（persona 的 `model` 是脚本作者对**这一个**
+   * actor 的点名，压过它），在 {@link DynamicWorkflowActorRuntimeInput.pinnedModel} 与父会话
+   * 模型之上（workflow-actor-model.ts 的 `workflowActorModelPolicy`）：这一条是用户对这一次
+   * run 的显式表态，pin 只守没有它时的隐式缺省。只管子代理、不动主代理。缺席即跑在 pin 或
+   * 会话模型上。
    */
   runSubagentModel?: ModelSelection;
   /**
