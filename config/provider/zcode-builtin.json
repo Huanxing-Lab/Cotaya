@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "revision": 32,
+  "revision": 33,
   "config": {
     "providerConfigRules": {
       "templateRules": [
@@ -6259,56 +6259,104 @@
           "providerId": "account:openai-plan",
           "modelId": "gpt-6.1-sol",
           "config": {
-            "enabled": true
+            "enabled": true,
+            "optionSpecs": {
+              "reasoningLevel": {
+                "values": ["low", "medium", "high", "xhigh", "max", "ultra"],
+                "map": "{\"reasoning\": {\"effort\": reasoningLevel}}"
+              }
+            }
           }
         },
         {
           "providerId": "account:openai-plan",
           "modelId": "gpt-6-astra",
           "config": {
-            "enabled": true
+            "enabled": true,
+            "optionSpecs": {
+              "reasoningLevel": {
+                "values": ["low", "medium", "high", "xhigh", "max", "ultra"],
+                "map": "{\"reasoning\": {\"effort\": reasoningLevel}}"
+              }
+            }
           }
         },
         {
           "providerId": "account:openai-plan",
           "modelId": "gpt-6-sol",
           "config": {
-            "enabled": true
+            "enabled": true,
+            "optionSpecs": {
+              "reasoningLevel": {
+                "values": ["low", "medium", "high", "xhigh", "max", "ultra"],
+                "map": "{\"reasoning\": {\"effort\": reasoningLevel}}"
+              }
+            }
           }
         },
         {
           "providerId": "account:openai-plan",
           "modelId": "gpt-6-luna",
           "config": {
-            "enabled": true
+            "enabled": true,
+            "optionSpecs": {
+              "reasoningLevel": {
+                "values": ["low", "medium", "high", "xhigh", "max"],
+                "map": "{\"reasoning\": {\"effort\": reasoningLevel}}"
+              }
+            }
           }
         },
         {
           "providerId": "account:openai-plan",
           "modelId": "gpt-5.6-sol",
           "config": {
-            "enabled": true
+            "enabled": true,
+            "optionSpecs": {
+              "reasoningLevel": {
+                "values": ["low", "medium", "high", "xhigh", "max", "ultra"],
+                "map": "{\"reasoning\": {\"effort\": reasoningLevel}}"
+              }
+            }
           }
         },
         {
           "providerId": "account:openai-plan",
           "modelId": "gpt-5.6-terra",
           "config": {
-            "enabled": true
+            "enabled": true,
+            "optionSpecs": {
+              "reasoningLevel": {
+                "values": ["low", "medium", "high", "xhigh", "max", "ultra"],
+                "map": "{\"reasoning\": {\"effort\": reasoningLevel}}"
+              }
+            }
           }
         },
         {
           "providerId": "account:openai-plan",
           "modelId": "gpt-5.6-luna",
           "config": {
-            "enabled": true
+            "enabled": true,
+            "optionSpecs": {
+              "reasoningLevel": {
+                "values": ["low", "medium", "high", "xhigh", "max", "ultra"],
+                "map": "{\"reasoning\": {\"effort\": reasoningLevel}}"
+              }
+            }
           }
         },
         {
           "providerId": "account:openai-plan",
           "modelId": "gpt-5.5",
           "config": {
-            "enabled": true
+            "enabled": true,
+            "optionSpecs": {
+              "reasoningLevel": {
+                "values": ["low", "medium", "high", "xhigh"],
+                "map": "{\"reasoning\": {\"effort\": reasoningLevel}}"
+              }
+            }
           }
         }
       ]

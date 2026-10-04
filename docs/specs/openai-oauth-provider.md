@@ -212,6 +212,14 @@ env 覆盖见 §2.7 deviation 补记）。
     同源实测：`context_window=272000`、支持图片输入，经
     `providerSiteRules`（`baseUrlMatch: https://chatgpt\.com/backend-api/codex/?`）
     单条规则下发，不动全局 `.*` 兜底（revision 32）。
+  - **reasoning 档位校准（revision 33）**：全局 `.*` 兜底的
+    `reasoningLevel: ["disabled","enabled"]`（空 map）不适用于 codex 模型；按
+    `/models` 的 `supported_reasoning_levels` 逐模型配置真实档位（gpt-6-luna 到
+    `max`、gpt-5.5 到 `xhigh`、其余到 `ultra`），map 用嵌套模板
+    `{"reasoning":{"effort": reasoningLevel}}`（model-option-map 支持嵌套
+    merge-patch，已实测展开正确）。用户不选时不下发，由后端
+    `default_reasoning_level` 兜底。`max_context_window=872000` 与
+    `verbosity` 暂未消费（无对应运行时选项），留待需要时接。
 - 可用性：`codingPlanProviderAvailability.ts:129-163` 的 openai 版本**以本地
   token 有效性为 entitled**（无 zcode 后端套餐校验）；family 投影
   `accountProviderConnectionResolver.ts:94`（`["zai","bigmodel"]` 硬循环）加
