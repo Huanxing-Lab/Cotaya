@@ -43,6 +43,12 @@ export interface LocalhostOAuthCallbackServer {
 export async function createLocalhostOAuthCallbackServer(input: {
   callbackPath: string;
   state: string;
+  /**
+   * 固定回调端口：OpenAI OAuth 的 redirect_uri 在授权端注册为 localhost:1455，
+   * 必须显式监听该端口；缺省 0 维持 MCP OAuth 的随机端口行为（RFC 8252）。
+   * 端口被占时 listen 以 EADDRINUSE reject，由调用方决定是否降级设备码流程。
+   */
+  port?: number;
 }): Promise<LocalhostOAuthCallbackServer> {
   let resolveCallback: (value: LocalhostOAuthCallback) => void = () => undefined;
   let rejectCallback: (error: Error) => void = () => undefined;
@@ -118,7 +124,7 @@ export async function createLocalhostOAuthCallbackServer(input: {
 
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(0, LOCALHOST, () => {
+    server.listen(input.port ?? 0, LOCALHOST, () => {
       server.off("error", reject);
       resolve();
     });

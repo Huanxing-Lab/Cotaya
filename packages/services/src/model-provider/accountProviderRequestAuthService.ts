@@ -115,6 +115,11 @@ class AccountProviderRequestAuthService implements AccountRequestAuthResolver {
   #resolveAccess(
     access: ZCodeProviderAccountAccess | ZCodeAccountAccess,
   ): Promise<ZCodeAccountAccess | null> {
+    // chatgpt-account 是 openai 域 access：不是 z.ai planKind 身份，也没有已解析形态，
+    // 对 assertCurrent 等身份校验一律按不可用处理（openai 动态材料走独立 refresher）。
+    if (access.type === "chatgpt-account") {
+      return Promise.resolve(null);
+    }
     return "mode" in access
       ? this.#options.resolveCurrentAccountAccess(access)
       : Promise.resolve(access);

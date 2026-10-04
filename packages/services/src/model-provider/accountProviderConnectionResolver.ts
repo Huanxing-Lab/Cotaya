@@ -349,6 +349,9 @@ export async function resolveCurrentAccountAccess(input: {
   readonly readSettings: () => Promise<AccountProviderConnectionSettings>;
   readonly loadAccountIdentity: (family: ProviderFamilyDomain) => Promise<string | null>;
 }): Promise<ZCodeAccountAccess | null> {
+  // openai 域（chatgpt-account）没有 z.ai planKind 语义，不进入本解析器；
+  // 其动态材料由注入的 openai refresher 单独解析（见 accountProviderRequestAuthService）。
+  if (input.access.type === "chatgpt-account") return null;
   const settings = await input.readSettings();
   const { accountType, mode } = input.access;
   if (settings.providerFamilyDomain !== accountType) return null;

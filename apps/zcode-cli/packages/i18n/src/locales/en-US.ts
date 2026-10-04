@@ -119,6 +119,14 @@ Slash Commands:
           primary: "BigModel Coding Plan",
           secondary: "Open browser login; authorization is detected automatically.",
         },
+        openaiOauth: {
+          pendingPrimary: "Waiting for OpenAI authorization",
+          pendingSecondary:
+            "Complete authorization in your browser; if switched to device code, enter the code as prompted.",
+          primary: "OpenAI (ChatGPT account)",
+          secondary:
+            "Open browser sign-in with your ChatGPT account; switches to device code when the callback port is busy.",
+        },
         zaiApiKey: {
           inputPrimary: "Enter Z.AI Coding Plan API Key",
           inputSecondary: "Paste the key here. It is hidden while typing.",

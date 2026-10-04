@@ -318,6 +318,9 @@ export class BigModelUsageQuotaProvider {
     accountAccess: UsageEntitlementRequest["accountAccess"],
   ): Promise<ZCodeAccountAccess | undefined> {
     if (!accountAccess) return undefined;
+    // openai 域（chatgpt-account）不在 z.ai 用量统计语义内：BigModel/Start Plan 配额
+    // 只对 z.ai 域 account access 有定义。
+    if (accountAccess.type === "chatgpt-account") return undefined;
     if (!("mode" in accountAccess)) return accountAccess;
     return (await this.accountRequestAuthService.resolveAccessCurrent(accountAccess)) ?? undefined;
   }

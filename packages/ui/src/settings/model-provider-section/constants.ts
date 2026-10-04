@@ -5,6 +5,7 @@ import {
   BUILTIN_MODEL_PROVIDER_IDS,
   createUuid,
   type OAuthProviderId,
+  OPENAI_PROVIDER_ID,
   ZCODE_ENV,
   ZAI_PROVIDER_ID,
   type BuiltinModelProviderId,
@@ -41,6 +42,13 @@ export const PRESET_PROVIDER_SPECS: PresetProviderSpec[] = [
     id: BUILTIN_MODEL_PROVIDER_IDS.bigmodelStartPlan,
     displayName: "BigModel",
     oauthProviderId: BIGMODEL_PROVIDER_ID,
+  },
+  {
+    // OpenAI 是账号登录型入口：无购买 URL、无 z.ai 域套餐/额度卡
+    // （不进 CODING_PLAN_PROVIDER_SPECS），连接事实只有登录 token。
+    id: BUILTIN_MODEL_PROVIDER_IDS.openaiPlan,
+    displayName: "OpenAI",
+    oauthProviderId: OPENAI_PROVIDER_ID,
   },
 ];
 

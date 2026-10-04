@@ -154,7 +154,10 @@ function resolveSelectedProvider(
 ): { ok: true; provider: SelectedProvider } | { ok: false; reason: OfficialMcpAuthFailureReason } {
   const candidates = registry.providers.flatMap((provider) => {
     const parsed = zcodeProviderAccountAccessSchema.safeParse(provider.config.access);
+    // openai 域（chatgpt-account）无 z.ai 套餐 mode；官方 MCP Coding Plan 凭据只认 z.ai 域
+    // 的 individual/team 套餐，这里先收窄再读 mode。
     return parsed.success &&
+      parsed.data.type === "zhipu-account" &&
       (parsed.data.mode === "individual-coding-plan" || parsed.data.mode === "team-coding-plan")
       ? [{ providerId: provider.providerId, access: parsed.data }]
       : [];

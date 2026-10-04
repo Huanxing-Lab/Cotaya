@@ -18,8 +18,11 @@ type ExperimentalIncludeWithResponseBody = {
 
 /** zcode-plan 业务码常只出现在 finish chunk 的 response.body，流式路径需显式开启。 */
 function shouldIncludeStreamResponseBody(resolved: ResolvedAiSdkModel): boolean {
+  // start-plan 是 z.ai 域 zhipu-account 专属 mode；openai 域 chatgpt-account 无套餐分层。
   return (
-    resolved.providerKind === "openai-compatible" && resolved.accountAccess?.mode === "start-plan"
+    resolved.providerKind === "openai-compatible" &&
+    resolved.accountAccess?.type === "zhipu-account" &&
+    resolved.accountAccess.mode === "start-plan"
   );
 }
 

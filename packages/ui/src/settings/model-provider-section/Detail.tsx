@@ -13,6 +13,7 @@ import {
   resolveModelProviderFamilySpecByProviderId,
   type ModelConnectivityResult,
   type OAuthProviderId,
+  isOpenAIPlanModelProviderId,
 } from "@zcode/shared";
 import {
   getProviderFormApiKeyManagementUrl,
@@ -405,7 +406,18 @@ export function ModelProviderSectionDetail({
         return <ModelProviderLoadingCard loadingLabel={loadingLabel} />;
       }
 
-      return <PresetProviderPlaceholderCard displayName={selectedNavItem.displayName} />;
+      return (
+        <PresetProviderPlaceholderCard
+          displayName={selectedNavItem.displayName}
+          // openai 是账号登录型 provider：无 z.ai 域"同步套餐"语义，
+          // 占位文案按"登录账号后可用"引导，不复用 OAuth 同步占位语。
+          messageId={
+            isOpenAIPlanModelProviderId(selectedNavItem.presetId)
+              ? "settings.modelProvider.openai.presetEmpty"
+              : undefined
+          }
+        />
+      );
     }
 
     const presetProvider = selectedNavItem.provider;

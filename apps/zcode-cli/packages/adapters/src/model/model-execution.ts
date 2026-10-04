@@ -352,7 +352,9 @@ function toAiSdkProviderConfig(
   config: RegistryProviderConfig,
 ): AiSdkProviderConfig {
   const common = {
-    ...(config.access.type !== "zhipu-account" && config.access.apiKey
+    // 账号登录型 access（z.ai 域 zhipu-account / openai 域 chatgpt-account）都没有静态
+    // apiKey：鉴权材料由请求期 requestAuth 动态下发，不能把 access 上的可选字段误当静态 key。
+    ...(isStaticApiKeyAccess(config.access) && config.access.apiKey
       ? { apiKey: config.access.apiKey }
       : {}),
     baseURL: config.api.baseUrl,
@@ -369,6 +371,12 @@ function toAiSdkProviderConfig(
       return { kind: "openai-compatible", name: providerId, ...common };
   }
   throw new Error(`Unsupported Provider API type: ${String(config.api.type)}`);
+}
+
+function isStaticApiKeyAccess(
+  access: RegistryProviderConfig["access"],
+): access is Extract<RegistryProviderConfig["access"], { apiKey?: string }> {
+  return access.type === "api-key" || access.type === "zhipu-coding-plan-api-key";
 }
 
 function applyModelRequestAuth(

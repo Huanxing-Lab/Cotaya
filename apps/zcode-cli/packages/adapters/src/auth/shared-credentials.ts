@@ -17,6 +17,12 @@ export const SHARED_ZCODE_CREDENTIAL_KEYS = {
   bigmodelAccessToken: "oauth:bigmodel:access_token",
   bigmodelRefreshToken: "oauth:bigmodel:refresh_token",
   bigmodelUserInfo: "oauth:bigmodel:user_info",
+  // openai 是独立身份域（spec openai-oauth-provider §2.3）：key 与 Desktop OAuthCredentialRepo
+  // 同名同文件，登录/刷新只写本段；expires_at 为毫秒时间戳字符串（token 生命周期归 openai 域自有）。
+  openaiAccessToken: "oauth:openai:access_token",
+  openaiRefreshToken: "oauth:openai:refresh_token",
+  openaiUserInfo: "oauth:openai:user_info",
+  openaiExpiresAt: "oauth:openai:expires_at",
   zaiAccessToken: "oauth:zai:access_token",
   zaiRefreshToken: "oauth:zai:refresh_token",
   zaiUserInfo: "oauth:zai:user_info",

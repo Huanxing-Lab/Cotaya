@@ -9,6 +9,8 @@ interface ImportMetaEnv {
   readonly PROD: boolean;
   readonly VITE_DEV_ORIGIN?: string;
   readonly VITE_CONVERSATION_SHARE_PREVIEW_MOCK?: string;
+  // OpenAI 设备码代理基址覆盖（默认同源 /api/openai-oauth，由 packages/server 透传）。
+  readonly VITE_OPENAI_OAUTH_PROXY_BASE_URL?: string;
   readonly VITE_WEB_REMOTE_ALLOW_DEV_RETURN_TO?: string;
   // OSS 多版本发布时资源 base 带版本目录，页面路由由该变量显式给出。
   readonly VITE_WEB_REMOTE_CONTROL_ROUTE_PATH?: string;

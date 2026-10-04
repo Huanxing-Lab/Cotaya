@@ -27,7 +27,9 @@ import {
 import {
   buildLoginSelection,
   emitLoginAuthorizeMessage,
+  emitLoginDeviceCodeMessage,
   formatLoginResult,
+  formatOpenAILoginResult,
   formatProviderSetupResult,
   loginSetupResponse,
   parseApiKeyLoginArgs,
@@ -143,6 +145,40 @@ export function createCommandCenter(deps: CommandCenterDeps): TuiSubmitPrompt {
             ),
           };
         }
+        if (command.args === "openai") {
+          if (!deps.loginOpenai) {
+            return {
+              mode: deps.getMode?.(),
+              response: "OpenAI login is not available in this client.",
+            };
+          }
+
+          return {
+            loginRequired: false,
+            mode: deps.getMode?.(),
+            response: formatOpenAILoginResult(
+              await deps.loginOpenai({
+                abortSignal: options.abortSignal,
+                onAuthorizeUrl: async (authorizeUrl) => {
+                  await emitLoginAuthorizeMessage(
+                    options,
+                    authorizeUrl,
+                    "OpenAI",
+                    await deps.getApp(),
+                  );
+                },
+                onDeviceCode: async (data) => {
+                  await emitLoginDeviceCodeMessage(
+                    options,
+                    data,
+                    "OpenAI",
+                    await deps.getApp(),
+                  );
+                },
+              }),
+            ),
+          };
+        }
 
         const apiKeyCommand = parseApiKeyLoginArgs(command.args);
         if (apiKeyCommand) {
@@ -174,7 +210,7 @@ export function createCommandCenter(deps: CommandCenterDeps): TuiSubmitPrompt {
         return {
           mode: deps.getMode?.(),
           response:
-            "Usage: /login [zai-coding-plan|bigmodel-coding-plan|zai-coding-plan-api-key <api-key>|bigmodel-coding-plan-api-key <api-key>]",
+            "Usage: /login [openai|zai-coding-plan|bigmodel-coding-plan|zai-coding-plan-api-key <api-key>|bigmodel-coding-plan-api-key <api-key>]",
         };
       }
 

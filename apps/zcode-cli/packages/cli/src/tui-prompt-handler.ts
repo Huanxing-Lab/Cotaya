@@ -22,6 +22,7 @@ import {
   configureApiKeyForTui,
   loginBigmodelForTui,
   loginForTui,
+  loginOpenaiForTui,
   logoutForTui,
 } from "./tui-auth.js";
 import {
@@ -267,6 +268,7 @@ export function createTuiSubmitPrompt(
     configureApiKey: (options) => configureApiKeyForTui(deps, options),
     login: (options) => loginForTui(deps, options),
     loginBigmodel: (options) => loginBigmodelForTui(deps, options),
+    loginOpenai: (options) => loginOpenaiForTui(deps, options),
     loadCustomCommand: (name) => loadCustomCommandForTui(deps, name),
     newApp,
     recordInputHistory: async (input, kind) => {
