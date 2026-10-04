@@ -166,7 +166,7 @@ export function ComputerUseSection({
     );
     pendingGrantSessionIdRef.current = undefined;
   }, [path, workspaceIdentity]);
-  // 重启 Helper 后验证仍持续 stale → 显示"重启 ZCode"兜底按钮。accessibility 变 granted 时自愈清除。
+  // 重启 Helper 后验证仍持续 stale → 显示"重启 Cotaya"兜底按钮。accessibility 变 granted 时自愈清除。
   const [verifyTimedOut, setVerifyTimedOut] = useState(false);
   // 卸载守卫：异步 fetch / 重启 / 切换完成时若组件已卸载，跳过 setState。
   const mountedRef = useRef(true);
@@ -516,7 +516,7 @@ export function ComputerUseSection({
     void (returnRecoveryRef.current.pending ? applyPendingGrant() : onRestart());
   }, [applyPendingGrant, onRestart]);
 
-  // 自愈:accessibility 在后续任一次查询里变成 granted 时,清除"重启 ZCode"兜底(说明问题已解决)。
+  // 自愈:accessibility 在后续任一次查询里变成 granted 时,清除"重启 Cotaya"兜底(说明问题已解决)。
   useEffect(() => {
     if (availableStatus?.accessibility === "granted") setVerifyTimedOut(false);
   }, [availableStatus?.accessibility]);

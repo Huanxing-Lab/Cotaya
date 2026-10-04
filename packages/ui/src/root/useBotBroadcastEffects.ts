@@ -13,16 +13,10 @@ import {
   resolveBotTaskBroadcastRuntimeStatus,
 } from "@/root/botsTaskBroadcast.js";
 import { resolveBotTaskStreamBroadcast } from "@/root/botsTaskStreamBroadcast.js";
-import {
-  insertTaskIntoTaskCaches,
-  syncTaskMetaToTaskCaches,
-} from "@/lib/taskListMetaSync.js";
+import { insertTaskIntoTaskCaches, syncTaskMetaToTaskCaches } from "@/lib/taskListMetaSync.js";
 
 export function syncBotTaskConfigOptionsToStore(params: {
-  zcodeSessionStore: Pick<
-    ReturnType<typeof useZCodeSessionStore.getState>,
-    "setTaskConfigOptions"
-  >;
+  zcodeSessionStore: Pick<ReturnType<typeof useZCodeSessionStore.getState>, "setTaskConfigOptions">;
   workspacePath: string;
   workspaceIdentity?: string;
   taskId: string;
@@ -39,10 +33,7 @@ export function syncBotTaskConfigOptionsToStore(params: {
   );
 }
 
-export function shouldRefreshBotTaskList(
-  event: string,
-  hasTaskMeta: boolean,
-): boolean {
+export function shouldRefreshBotTaskList(event: string, hasTaskMeta: boolean): boolean {
   // Bugfix: Bot 新建任务时会随 created 广播携带 task meta，当前实现因此跳过整表刷新。
   // 但如果对应 workspace 的 task query cache 还没建立，增量写入没有落点，侧栏列表就不会主动拉到这个新任务。
   // created 事件频率低，保留一次版本 bump 作为兜底；其它高频事件仍优先走增量缓存更新，避免列表闪烁回归。
@@ -64,7 +55,7 @@ export function shouldMirrorBotTaskStreamToStore(params: {
     return true;
   }
 
-  // Bugfix: 远端 Bot task 的 stream 来自 bot runtime host，不一定会被当前 ChatView 的 ZCode Agent stream 订阅收到。
+  // Bugfix: 远端 Bot task 的 stream 来自 bot runtime host，不一定会被当前 ChatView 的 Cotaya Agent stream 订阅收到。
   // 之前 active task 直接跳过 bot broadcast，导致消息内容要切换任务重新拉 snapshot 后才显示。
   return Boolean(params.workspaceIdentity?.trim());
 }
@@ -75,10 +66,7 @@ export function useBotBroadcastEffects(
 ) {
   useEffect(() => {
     const disposable = services.broadcastService.onMessage((message) => {
-      const stream = resolveBotTaskStreamBroadcast(
-        message,
-        tabStoreApi.getState().tabs,
-      );
+      const stream = resolveBotTaskStreamBroadcast(message, tabStoreApi.getState().tabs);
       if (stream) {
         const zcodeSessionStore = useZCodeSessionStore.getState();
         const workspaceState = zcodeSessionStore.getWorkspaceState(
@@ -113,7 +101,12 @@ export function useBotBroadcastEffects(
             );
             break;
           case "permission_request":
-            zcodeSessionStore.setTaskPermissionRequest(stream.workspacePath, stream.taskId, event, stream.workspaceIdentity);
+            zcodeSessionStore.setTaskPermissionRequest(
+              stream.workspacePath,
+              stream.taskId,
+              event,
+              stream.workspaceIdentity,
+            );
             zcodeSessionStore.setTaskRuntimeState(
               stream.workspacePath,
               stream.taskId,
@@ -130,8 +123,18 @@ export function useBotBroadcastEffects(
               undefined,
               stream.workspaceIdentity,
             );
-            zcodeSessionStore.setTaskPermissionRequest(stream.workspacePath, stream.taskId, null, stream.workspaceIdentity);
-            zcodeSessionStore.setTaskError(stream.workspacePath, stream.taskId, null, stream.workspaceIdentity);
+            zcodeSessionStore.setTaskPermissionRequest(
+              stream.workspacePath,
+              stream.taskId,
+              null,
+              stream.workspaceIdentity,
+            );
+            zcodeSessionStore.setTaskError(
+              stream.workspacePath,
+              stream.taskId,
+              null,
+              stream.workspaceIdentity,
+            );
             break;
           case "task_error": {
             const normalizedError = normalizeZCodeUiError(
@@ -153,8 +156,18 @@ export function useBotBroadcastEffects(
               normalizedError.message,
               stream.workspaceIdentity,
             );
-            zcodeSessionStore.setTaskPermissionRequest(stream.workspacePath, stream.taskId, null, stream.workspaceIdentity);
-            zcodeSessionStore.setTaskError(stream.workspacePath, stream.taskId, normalizedError, stream.workspaceIdentity);
+            zcodeSessionStore.setTaskPermissionRequest(
+              stream.workspacePath,
+              stream.taskId,
+              null,
+              stream.workspaceIdentity,
+            );
+            zcodeSessionStore.setTaskError(
+              stream.workspacePath,
+              stream.taskId,
+              normalizedError,
+              stream.workspaceIdentity,
+            );
             break;
           }
           case "task_warning":
@@ -232,10 +245,7 @@ export function useBotBroadcastEffects(
         return;
       }
 
-      const refresh = resolveBotTaskBroadcastRefresh(
-        message,
-        tabStoreApi.getState().tabs,
-      );
+      const refresh = resolveBotTaskBroadcastRefresh(message, tabStoreApi.getState().tabs);
       if (!refresh) {
         return;
       }
@@ -249,7 +259,7 @@ export function useBotBroadcastEffects(
       const provider = refresh.task?.provider ?? refresh.provider;
       const shouldSyncVisibleTaskConfig = workspaceState.activeTaskId === refresh.taskId;
       if (provider && shouldSyncVisibleTaskConfig) {
-        // Bugfix: /model、/mode 可以从第三方 Bot 修改当前 task 的真实 ZCode Agent 状态。
+        // Bugfix: /model、/mode 可以从第三方 Bot 修改当前 task 的真实 Cotaya Agent 状态。
         // 这些操作不经过 ChatInputToolbar，本地 store 以前不会同步 provider/configOptions，
         // 导致 Bot 回复已切换但 UI 下拉仍显示旧状态。
         zcodeSessionStore.bindRuntimeProvider(
@@ -315,7 +325,7 @@ export function useBotBroadcastEffects(
         );
       } else if (refresh.event === "elicitation_request" && refresh.elicitationRequest) {
         // Bugfix: Bot channel 消费 AskUserQuestion 后，下一题只会先到 Bot runtime。
-        // 当前 UI 窗口不一定有同一条 ZCode Agent stream 订阅，必须把新的 elicitation_request 显式写回 store。
+        // 当前 UI 窗口不一定有同一条 Cotaya Agent stream 订阅，必须把新的 elicitation_request 显式写回 store。
         zcodeSessionStore.setTaskElicitationRequest(
           refresh.workspacePath,
           refresh.taskId,
@@ -323,7 +333,7 @@ export function useBotBroadcastEffects(
           refresh.workspaceIdentity,
         );
       } else if (refresh.event === "elicitation_resolved" && refresh.requestId) {
-        // Bugfix: Bot 代用户提交 AskUserQuestion 时，当前 UI 窗口不一定能收到 ZCode Agent stream 的
+        // Bugfix: Bot 代用户提交 AskUserQuestion 时，当前 UI 窗口不一定能收到 Cotaya Agent stream 的
         // elicitation_response。通过 bots:task 明确同步 requestId 出队，避免问答弹窗一直挂着。
         zcodeSessionStore.removeTaskElicitationRequest(
           refresh.workspacePath,

@@ -148,7 +148,7 @@ export function updateWorkspaceState(
   const nextWorkspaceState = updater(current);
 
   if (nextWorkspaceState === current) {
-    // 单 ZCode Agent 迁移后旧 provider 选择都会归一为 glm，很多调用实际不会改变状态。
+    // 单 Cotaya Agent 迁移后旧 provider 选择都会归一为 glm，很多调用实际不会改变状态。
     // 如果仍把 merged overlay 快照写回 identity bucket，会打破 selector 的引用缓存并触发无意义重渲染。
     return { workspaces: state.workspaces };
   }

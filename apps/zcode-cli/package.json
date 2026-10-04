@@ -1,5 +1,5 @@
 {
-  "name": "zcode-cli",
+  "name": "cotaya-cli",
   "version": "0.16.9",
   "private": true,
   "description": "A cross-platform TypeScript Node.js CLI with a small TUI and optional SEA packaging.",
