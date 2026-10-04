@@ -50,7 +50,9 @@ export type ProviderProvisioningPersonalConfig = z.infer<
 
 export const providerProvisioningAccountSettingsSchema = z
   .object({
-    providerFamilyDomain: z.enum(["zai", "bigmodel"]).nullable(),
+    // 与 appSettings.providerFamilyDomain 同枚举：openai 登录后同样落域指针，
+    // provisioning 同步账号设置时不得因枚举缺失拒绝 openai 值。
+    providerFamilyDomain: z.enum(["zai", "bigmodel", "openai"]).nullable(),
     providerFamilyConnectionSelections: providerFamilyConnectionSelectionSettingsSchema,
   })
   .strict();

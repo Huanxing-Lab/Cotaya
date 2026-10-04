@@ -11,6 +11,9 @@ export const BUILTIN_MODEL_PROVIDER_IDS = {
   bigmodelIndividualCodingPlan: "account:bigmodel-individual-coding-plan",
   bigmodelTeamCodingPlan: "account:bigmodel-team-coding-plan",
   bigmodelStartPlan: "account:bigmodel-start-plan",
+  // OpenAI（ChatGPT 账号）登录后使用的单一账号 provider：无 z.ai 域的
+  // start/individual/team 套餐分层，token 有效性即连接事实。
+  openaiPlan: "account:openai-plan",
 } as const;
 
 export type BuiltinOAuthProviderId = keyof typeof BUILTIN_MODEL_PROVIDER_IDS;
@@ -24,8 +27,18 @@ export function isBuiltinModelProviderId(id: string): id is BuiltinModelProvider
     id === BUILTIN_MODEL_PROVIDER_IDS.zaiStartPlan ||
     id === BUILTIN_MODEL_PROVIDER_IDS.bigmodelIndividualCodingPlan ||
     id === BUILTIN_MODEL_PROVIDER_IDS.bigmodelTeamCodingPlan ||
-    id === BUILTIN_MODEL_PROVIDER_IDS.bigmodelStartPlan
+    id === BUILTIN_MODEL_PROVIDER_IDS.bigmodelStartPlan ||
+    id === BUILTIN_MODEL_PROVIDER_IDS.openaiPlan
   );
+}
+
+/**
+ * OpenAI（ChatGPT 账号）plan provider 判断。
+ * 注意 isCodingPlanModelProviderId 有意不含 openai：该判断服务于 z.ai 域
+ * 用量统计/套餐投影路径，OpenAI 不走 zcode 后端套餐校验。
+ */
+export function isOpenAIPlanModelProviderId(id: string): boolean {
+  return id === BUILTIN_MODEL_PROVIDER_IDS.openaiPlan;
 }
 
 export function isZaiCodingPlanProviderId(id: string): boolean {

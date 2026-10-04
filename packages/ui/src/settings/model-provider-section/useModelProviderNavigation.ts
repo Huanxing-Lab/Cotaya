@@ -10,6 +10,7 @@ import type {
 import {
   BUILTIN_MODEL_PROVIDER_IDS,
   isStartPlanModelProviderId,
+  isZhipuAccountProviderFamily,
   resolveModelProviderFamilySpecByProviderId,
   resolveProviderFamilyDomainFromOAuthProvider,
   type OAuthProviderId,
@@ -352,7 +353,8 @@ function resolvePresetFamilyStatusProvider({
   modelProviders: ProviderSettingsFormProvider[];
 }): ProviderSettingsFormProvider | null {
   const familySpec = resolveModelProviderFamilySpecByProviderId(presetId);
-  if (!familySpec) {
+  // 预置入口（Start Plan）只来自 z.ai 身份域；连接方式派生不适用于 openai family。
+  if (!familySpec || !isZhipuAccountProviderFamily(familySpec.id)) {
     return provider;
   }
   const connectionItem = pickFamilyModeNavigationItem(
@@ -428,7 +430,8 @@ function resolveSelectedProviderFamilyConnectionItem({
     return selectedItem;
   }
   const familySpec = resolveModelProviderFamilySpecByProviderId(selectedItem.presetId);
-  if (!familySpec) {
+  // 预置入口（Start Plan）只来自 z.ai 身份域；openai family 不按 z.ai 连接方式落点。
+  if (!familySpec || !isZhipuAccountProviderFamily(familySpec.id)) {
     return selectedItem;
   }
   if (familyConnectionSettingsLoading) {

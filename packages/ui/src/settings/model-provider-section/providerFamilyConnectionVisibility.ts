@@ -5,11 +5,13 @@ import type {
   ProviderFamilyConnectionSelectionSettings,
   UsageEntitlementSubscriptionDetail,
   UsageQuotaLimit,
+  ZhipuAccountFamilyId,
 } from "@zcode/shared";
 import {
   getModelProviderFamilySpec,
   isIndividualCodingPlanModelProviderId,
   isStartPlanModelProviderId,
+  isZhipuAccountProviderFamily,
   MODEL_PROVIDER_FAMILY_SPECS,
   resolveModelProviderFamilySpecByProviderId,
 } from "@zcode/shared";
@@ -29,7 +31,7 @@ import {
 type TeamPlanNavItem = Extract<ModelProviderNavGroup["items"][number], { type: "teamPlan" }>;
 
 function createTeamPlanNavigationKey(
-  family: ProviderFamilyDomain,
+  family: ZhipuAccountFamilyId,
   input: { productId: string; organizationId: string; projectId: string },
 ): string {
   return ["team", family, input.productId, input.organizationId, input.projectId]
@@ -335,7 +337,7 @@ function filterStartPlanItemsByEntitlement({
  */
 function resolveCodingPlanItemForFamily(
   items: Array<Extract<ModelProviderNavGroup["items"][number], { type: "codingPlan" }>>,
-  family: ProviderFamilyDomain,
+  family: ZhipuAccountFamilyId,
 ): Extract<ModelProviderNavGroup["items"][number], { type: "codingPlan" }> | undefined {
   const codingPlanProviderId = getModelProviderFamilySpec(family).individualCodingPlanProviderId;
   return items.find((item) => item.presetId === codingPlanProviderId);
@@ -370,29 +372,29 @@ function appendSubscribedTeamPlanItems({
   // entitlement + fallback 两个 builder 原来只对 bigmodelCodingPlanItem 调用，
   // zai 的 entitlement snapshot 和 fallback selectedKey 永远不生成 team item（断裂）。
   // 遍历两个 family，各用对应 codingPlanItem 派生 entitlement team items + fallback。
-  const entitlementTeamItems: TeamPlanNavItem[] = MODEL_PROVIDER_FAMILY_SPECS.flatMap(
-    ({ id: family }) => {
-      const codingPlanItem = resolveCodingPlanItemForFamily(items, family);
-      if (!codingPlanItem) {
-        return [];
-      }
-      return buildEntitlementTeamPlanItems(codingPlanItem, codingPlanEntitlements, family);
-    },
+  // Team Plan 只存在于 z.ai 身份域；openai family 不参与 team item 派生。
+  const zhipuFamilyIds: ZhipuAccountFamilyId[] = MODEL_PROVIDER_FAMILY_SPECS.flatMap(({ id }) =>
+    isZhipuAccountProviderFamily(id) ? [id] : [],
   );
-  const fallbackTeamItems: TeamPlanNavItem[] = MODEL_PROVIDER_FAMILY_SPECS.flatMap(
-    ({ id: family }) => {
-      const selection = teamPlanSelections?.[family];
-      const codingPlanItem = resolveCodingPlanItemForFamily(items, family);
-      return selection && codingPlanItem
-        ? buildSelectedTeamPlanFallbackItems({
-            codingPlanItem,
-            selection,
-            showPurchasedTeamPlanFallback,
-            family,
-          })
-        : [];
-    },
-  );
+  const entitlementTeamItems: TeamPlanNavItem[] = zhipuFamilyIds.flatMap((family) => {
+    const codingPlanItem = resolveCodingPlanItemForFamily(items, family);
+    if (!codingPlanItem) {
+      return [];
+    }
+    return buildEntitlementTeamPlanItems(codingPlanItem, codingPlanEntitlements, family);
+  });
+  const fallbackTeamItems: TeamPlanNavItem[] = zhipuFamilyIds.flatMap((family) => {
+    const selection = teamPlanSelections?.[family];
+    const codingPlanItem = resolveCodingPlanItemForFamily(items, family);
+    return selection && codingPlanItem
+      ? buildSelectedTeamPlanFallbackItems({
+          codingPlanItem,
+          selection,
+          showPurchasedTeamPlanFallback,
+          family,
+        })
+      : [];
+  });
   if (
     entitlementTeamItems.length === 0 &&
     fallbackTeamItems.length === 0 &&
@@ -541,9 +543,13 @@ function appendSubscribedTeamPlanItems({
   // zai-only 视图下 bigmodelCodingPlanItem 不存在会 throw（.key 访问 undefined）。
   // 改为按首个 team item 所属 family 找对应 codingPlanItem 作为插入锚点；
   // 找不到就追加到末尾（与原 fallback 语义一致）。
-  const firstTeamFamily = resolveModelProviderFamilySpecByProviderId(
+  const firstTeamFamilyRaw = resolveModelProviderFamilySpecByProviderId(
     (teamItems[0] as TeamPlanNavItem | undefined)?.presetId ?? "",
   )?.id;
+  // team item 只可能派生自 z.ai 域 family；在此收窄后回查插入锚点。
+  const firstTeamFamily = isZhipuAccountProviderFamily(firstTeamFamilyRaw)
+    ? firstTeamFamilyRaw
+    : null;
   const anchorCodingPlanItem = firstTeamFamily
     ? resolveCodingPlanItemForFamily(items, firstTeamFamily)
     : undefined;
@@ -578,7 +584,7 @@ function hasEntitlementTeamPlan(
 function buildEntitlementTeamPlanItems(
   codingPlanItem: Extract<ModelProviderNavGroup["items"][number], { type: "codingPlan" }>,
   codingPlanEntitlements: Partial<Record<string, CodingPlanEntitlementState>>,
-  family: ProviderFamilyDomain,
+  family: ZhipuAccountFamilyId,
 ): TeamPlanNavItem[] {
   // 原硬编码读 bigmodelCodingPlan bucket + bigmodel team key。
   // zai/bigmodel 对称化后，按 family 读对应 codingPlan bucket、生成对应前缀 team key。
@@ -645,7 +651,7 @@ function buildSelectedTeamPlanFallbackItems({
   codingPlanItem: Extract<ModelProviderNavGroup["items"][number], { type: "codingPlan" }>;
   selection: Extract<ProviderFamilyConnectionSelection, { kind: "team-coding-plan" }>;
   showPurchasedTeamPlanFallback: boolean;
-  family: ProviderFamilyDomain;
+  family: ZhipuAccountFamilyId;
 }): TeamPlanNavItem[] {
   if (!showPurchasedTeamPlanFallback) {
     return [];
@@ -689,7 +695,7 @@ function isTeamPlanQuotaUnavailable({
   projectId,
 }: {
   codingPlanEntitlements: Partial<Record<string, CodingPlanEntitlementState>>;
-  family: ProviderFamilyDomain;
+  family: ZhipuAccountFamilyId;
   organizationId: string;
   projectId: string;
 }): boolean {

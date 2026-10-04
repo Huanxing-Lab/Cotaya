@@ -3,7 +3,7 @@ import type {
   CodingPlanStaticTeamProduct,
   EnterpriseCodingPlanPricingProduct,
   EnterpriseCodingPlanSubscribePeriod,
-  ProviderFamilyDomain,
+  ZhipuAccountFamilyId,
 } from "@zcode/shared";
 import {
   normalizeCodingPlanCardCopyItems,
@@ -33,15 +33,15 @@ export type EnterpriseCodingPlanProductDisplay = CodingPlanProductDisplay & {
    * 原 UI 层把 team plan items 硬编码为 bigmodelCodingPlan 派生，
    * zai family 即使有订阅也无法渲染。加 family 标记后，下游可见性函数可按
    * product.family 找到对应 family 的 codingPlanItem 和 team key 前缀。
-   * 缺省 bigmodel 保持向后兼容。
+   * 缺省 bigmodel 保持向后兼容。企业套餐是 z.ai 身份域专属（openai 无此体系）。
    */
-  family?: ProviderFamilyDomain;
+  family?: ZhipuAccountFamilyId;
 };
 
 /** 旧商品缺少 family 时只在这一规范化边界解释为 BigModel。 */
 export function resolveEnterpriseCodingPlanProductFamily(
   product: Pick<EnterpriseCodingPlanProductDisplay, "family">,
-): ProviderFamilyDomain {
+): ZhipuAccountFamilyId {
   return product.family ?? "bigmodel";
 }
 

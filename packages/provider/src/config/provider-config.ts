@@ -4,6 +4,7 @@ import type { z } from "zod";
 import {
   completeApiKeyAccessDataSchema,
   completeZhipuAccountAccessDataSchema,
+  completeChatGPTAccountAccessDataSchema,
   completeProviderApiDataSchema,
   completeProviderConfigDataSchema,
   type providerApiTypeDataSchema,
@@ -13,6 +14,7 @@ import {
   type providerLogoDataSchema,
   type apiKeyAccessDataSchema,
   type zhipuAccountAccessDataSchema,
+  type chatgptAccountAccessDataSchema,
   type providerAccessDataSchema,
   type providerApiDataSchema,
   type providerConfigDataSchema,
@@ -111,7 +113,51 @@ export class ZhipuAccountAccessConfig extends ConfigOverlay<ZhipuAccountAccessCo
   }
 }
 
-export type ProviderAccessConfig = ApiKeyAccessConfig | ZhipuAccountAccessConfig;
+export type ChatGPTAccountAccessConfigInput = Omit<ChatGPTAccountAccessConfigObject, "type">;
+
+export type ChatGPTAccountAccessConfigObject = Readonly<
+  z.infer<typeof chatgptAccountAccessDataSchema>
+>;
+
+/** OpenAI（ChatGPT 账号）OAuth 登录的账号 access；与 zhipu-account 是不同身份域。 */
+export class ChatGPTAccountAccessConfig extends ConfigOverlay<ChatGPTAccountAccessConfig> {
+  readonly type = "chatgpt-account" as const;
+  readonly accountType?: ChatGPTAccountAccessConfigInput["accountType"];
+  readonly entitled?: ChatGPTAccountAccessConfigInput["entitled"];
+
+  constructor(input: ChatGPTAccountAccessConfigInput = {}) {
+    super();
+    this.accountType = input.accountType;
+    this.entitled = input.entitled;
+    Object.freeze(this);
+  }
+
+  overlay(next: ChatGPTAccountAccessConfig): ChatGPTAccountAccessConfig {
+    return new ChatGPTAccountAccessConfig({
+      accountType: this.overlayValue(this.accountType, next.accountType),
+      entitled: this.overlayValue(this.entitled, next.entitled),
+    });
+  }
+
+  validateComplete(path: readonly string[] = []): readonly ConfigValidationIssue[] {
+    return validateConfigSchema(completeChatGPTAccountAccessDataSchema, this.toJSON(), path);
+  }
+
+  toJSON(): ChatGPTAccountAccessConfigObject {
+    return {
+      type: this.type,
+      ...objectWithoutUndefined({
+        accountType: this.accountType,
+        entitled: this.entitled,
+      }),
+    };
+  }
+}
+
+export type ProviderAccessConfig =
+  | ApiKeyAccessConfig
+  | ZhipuAccountAccessConfig
+  | ChatGPTAccountAccessConfig;
 
 export type ProviderAccessConfigObject = Readonly<z.infer<typeof providerAccessDataSchema>>;
 
@@ -505,6 +551,8 @@ function overlayProviderAccess(
       return current.overlay(next as ApiKeyAccessConfig);
     case "zhipu-account":
       return current.overlay(next as ZhipuAccountAccessConfig);
+    case "chatgpt-account":
+      return current.overlay(next as ChatGPTAccountAccessConfig);
   }
 }
 

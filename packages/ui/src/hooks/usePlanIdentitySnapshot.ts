@@ -2,6 +2,7 @@ import { buildStartPlanEntitlementOptions } from "@/lib/startPlanEntitlementOpti
 import { useCallback } from "react";
 import {
   getModelProviderFamilySpec,
+  isZhipuAccountProviderFamily,
   normalizeProviderFamilyDomain,
   resolvePlanIdentitySnapshot,
   type PlanIdentitySnapshot,
@@ -23,10 +24,13 @@ export function usePlanIdentitySnapshot(
   usageStatsService?: IUsageStatsService,
 ): () => PlanIdentitySnapshot {
   const normalizedDomain = normalizeProviderFamilyDomain(providerFamilyDomain);
+  // Plan Identity（个人/Start 套餐快照）是 z.ai 身份域概念；openai 是独立身份域，
+  // 无 z.ai 套餐权益可查，直接按无 domain 处理，避免构造 zhipu-account 身份。
+  const zhipuDomain = isZhipuAccountProviderFamily(normalizedDomain) ? normalizedDomain : null;
   const providerSettingsRead = useProviderSettingsView();
   const providerSettingsView =
     providerSettingsRead.state.status === "ready" ? providerSettingsRead.state.view : null;
-  const familySpec = normalizedDomain ? getModelProviderFamilySpec(normalizedDomain) : null;
+  const familySpec = zhipuDomain ? getModelProviderFamilySpec(zhipuDomain) : null;
   const codingPlanProviderId = familySpec
     ? connectionSelection?.kind === "team-coding-plan"
       ? familySpec.teamCodingPlanProviderId
@@ -38,13 +42,13 @@ export function usePlanIdentitySnapshot(
     codingPlanProviderId,
   );
   const codingPlanEntitlement = useUsageEntitlementWithService(usageStatsService, {
-    enabled: Boolean(normalizedDomain && codingPlanRefreshFingerprint),
+    enabled: Boolean(zhipuDomain && codingPlanRefreshFingerprint),
     includeSubscription: true,
     preferredProviderId: codingPlanProviderId,
-    accountAccess: normalizedDomain
+    accountAccess: zhipuDomain
       ? {
           type: "zhipu-account",
-          family: normalizedDomain,
+          family: zhipuDomain,
           ...(connectionSelection?.kind === "team-coding-plan"
             ? ({
                 planKind: "team-coding-plan",

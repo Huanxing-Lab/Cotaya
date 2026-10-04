@@ -359,7 +359,8 @@ function resolveProviderOrder(
   const sourceIds = effectiveProviders.keys();
   const familyIds = sourceIds.filter((providerId) => {
     const group = effectiveProviders.get(providerId)?.group;
-    return group === "zai-family" || group === "bigmodel-family";
+    // openai-family 与 z.ai 域家族同级排序：账号登录型 family 统一前置。
+    return group === "zai-family" || group === "bigmodel-family" || group === "openai-family";
   });
   const familySet = new Set(familyIds);
   const builtinIds = input.zcodeBuiltinProviders

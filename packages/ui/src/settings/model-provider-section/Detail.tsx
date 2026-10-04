@@ -9,6 +9,7 @@ import {
   type StartPlanPreviewConfig,
   isStartPlanModelProviderId,
   isIndividualCodingPlanModelProviderId,
+  isZhipuAccountProviderFamily,
   resolveModelProviderFamilySpecByProviderId,
   type ModelConnectivityResult,
   type OAuthProviderId,
@@ -190,7 +191,9 @@ function resolveTeamPlanInspectionAccess(
   item: Extract<ModelProviderNavItem, { type: "teamPlan" }>,
 ) {
   // 不可用套餐仍需查询失效原因；组织/项目身份来自团队导航，不能被执行可用性门禁清空。
-  const family = resolveModelProviderFamilySpecByProviderId(item.presetId)?.id;
+  const familyRaw = resolveModelProviderFamilySpecByProviderId(item.presetId)?.id;
+  // Team Plan 导航项只来自 z.ai 身份域；openai plan 不构造 zhipu-account 团队身份。
+  const family = isZhipuAccountProviderFamily(familyRaw) ? familyRaw : null;
   const productId = item.currentProductId?.trim();
   const organizationId = item.organizationId?.trim();
   const projectId = item.projectId?.trim();

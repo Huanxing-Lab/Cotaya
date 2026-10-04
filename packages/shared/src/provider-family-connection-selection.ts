@@ -19,6 +19,9 @@ export const providerFamilyConnectionSelectionSettingsSchema = z
   .object({
     zai: providerFamilyConnectionSelectionSchema.optional(),
     bigmodel: providerFamilyConnectionSelectionSchema.optional(),
+    // openai 无套餐分层，selection 恒为 individual-coding-plan 形状（同一
+    // account:openai-plan）；键先对齐 family 全集，避免登录 openai 后写入被拒。
+    openai: providerFamilyConnectionSelectionSchema.optional(),
   })
   .partial();
 

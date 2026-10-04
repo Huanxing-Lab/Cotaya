@@ -1,6 +1,7 @@
 import {
   BUILTIN_MODEL_PROVIDER_IDS,
   getModelProviderFamilySpec,
+  isZhipuAccountProviderFamily,
   resolveModelProviderFamilySpecByProviderId,
   type ProviderFamilyConnectionSelectionSettings,
   type ProviderFamilyDomain,
@@ -160,7 +161,8 @@ export function resolveSidebarCurrentCodingPlanUsageSource({
   const family = selectedProviderId
     ? resolveModelProviderFamilySpecByProviderId(selectedProviderId)?.id
     : undefined;
-  if (!family) return null;
+  // 侧栏套餐用量源只描述 z.ai 域套餐连接；openai plan 不在此体系内。
+  if (!family || !isZhipuAccountProviderFamily(family)) return null;
   const selection = selections?.[family];
   if (selection?.kind === "team-coding-plan") {
     const teamSource = teamSources.find(

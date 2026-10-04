@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "revision": 30,
+  "revision": 31,
   "config": {
     "providerConfigRules": {
       "templateRules": [
@@ -856,6 +856,41 @@
             "logo": {
               "type": "builtin",
               "key": "bigmodel"
+            }
+          }
+        },
+        {
+          "providerId": "account:openai-plan",
+          "providerName": "OpenAI Codex",
+          "config": {
+            "group": "openai-family",
+            "builtinModelIds": [
+              "gpt-6-astra",
+              "gpt-5.6-sol",
+              "gpt-5.6-terra",
+              "gpt-5.6-luna",
+              "gpt-5.6",
+              "gpt-5.4",
+              "gpt-5.4-pro",
+              "gpt-5.4-mini",
+              "gpt-5.4-nano",
+              "gpt-5.3-codex"
+            ],
+            "access": {
+              "type": "chatgpt-account",
+              "accountType": "openai"
+            },
+            "api": {
+              "type": "openai-responses",
+              "baseUrl": "https://chatgpt.com/backend-api/codex",
+              "headers": {
+                "originator": "codex_cli_rs",
+                "version": "0.142.5"
+              }
+            },
+            "logo": {
+              "type": "builtin",
+              "key": "openai"
             }
           }
         }
@@ -6202,6 +6237,76 @@
         {
           "providerId": "account:bigmodel-offpeak-idle-plan",
           "modelId": "GLM-5.3",
+          "config": {
+            "enabled": true
+          }
+        },
+        {
+          "providerId": "account:openai-plan",
+          "modelId": "gpt-6-astra",
+          "config": {
+            "enabled": true
+          }
+        },
+        {
+          "providerId": "account:openai-plan",
+          "modelId": "gpt-5.6-sol",
+          "config": {
+            "enabled": true
+          }
+        },
+        {
+          "providerId": "account:openai-plan",
+          "modelId": "gpt-5.6-terra",
+          "config": {
+            "enabled": true
+          }
+        },
+        {
+          "providerId": "account:openai-plan",
+          "modelId": "gpt-5.6-luna",
+          "config": {
+            "enabled": true
+          }
+        },
+        {
+          "providerId": "account:openai-plan",
+          "modelId": "gpt-5.6",
+          "config": {
+            "enabled": true
+          }
+        },
+        {
+          "providerId": "account:openai-plan",
+          "modelId": "gpt-5.4",
+          "config": {
+            "enabled": true
+          }
+        },
+        {
+          "providerId": "account:openai-plan",
+          "modelId": "gpt-5.4-pro",
+          "config": {
+            "enabled": true
+          }
+        },
+        {
+          "providerId": "account:openai-plan",
+          "modelId": "gpt-5.4-mini",
+          "config": {
+            "enabled": true
+          }
+        },
+        {
+          "providerId": "account:openai-plan",
+          "modelId": "gpt-5.4-nano",
+          "config": {
+            "enabled": true
+          }
+        },
+        {
+          "providerId": "account:openai-plan",
+          "modelId": "gpt-5.3-codex",
           "config": {
             "enabled": true
           }
