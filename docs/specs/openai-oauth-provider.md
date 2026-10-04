@@ -265,6 +265,24 @@ env 覆盖见 §2.7 deviation 补记）。
 - **CLI standalone 运行时**暂不接目录同步（无 host 账号解析周期），静态清单
   兜底；接入时复用 `createOpenAIModelCatalogService`（已从 services 导出）。
 
+### 2.9 设置页导航与连接选择（openai 无套餐分层导航）
+
+- openai 在「模型设置」侧栏是**品牌 preset 入口**（`PRESET_PROVIDER_SPECS`），
+  不进 `CODING_PLAN_PROVIDER_SPECS`：没有 Coding/Team 套餐卡，连接事实只有
+  登录态（preset 详情卡展示账号与断开入口）。
+- 登录后为 openai 域保存的连接选择恒为 `{kind: "individual-coding-plan"}`
+  （schema 见 `provider-family-connection-selection.ts`；执行链经
+  `resolveModelProviderFamilyConnectionProviderId` 映射到
+  `account:openai-plan`）。该选择在设置页导航上的落点是**唯一的 openai
+  preset item**，不是 codingPlan item。
+- 因此 `connectionSelectionMatchesNavigationItem`（UI 导航匹配器）必须为
+  openai family 把 `individual-coding-plan` 选择匹配到 preset item；
+  「原连接方式已不可用，请重新选择」告警（`navigationUnavailable`）只对
+  z.ai 域套餐连接有意义，openai 的连接丢失由重登引导
+  （`reauthentication-required`，见 2.5）承接，不得由导航匹配告警。
+- 连接方式下拉（`ProviderFamilyModeHeader`）对 openai 不渲染：openai 仅一种
+  连接方式，options 为空即整组隐藏（现状行为，非本次改动）。
+
 ## 3. 状态所有者与事件顺序
 
 **状态所有者**：
@@ -398,7 +416,10 @@ flow 取消语义）；Web 端无 host OAuthService，由 Web auth 模块等价�
    写同一套 key。
 8. **回归**：zai/bigmodel 登录、切换、登出行为与现状一致（互删语义不变）；
    `pnpm typecheck`、`pnpm lint`、`pnpm architecture:check --changed` 通过。
-9. 真实账号 E2E（真实 ChatGPT 账号完成 1/2/3/4/7 的手动验证）由用户执行，结果
+9. **设置页导航不误报**（2026-10-04 修复回归）：openai 登录后打开「模型设置」
+   选中 OpenAI 品牌入口，不出现「原连接方式已不可用，请重新选择」；preset
+   详情正常展示账号连接态。zai/bigmodel 的套餐连接失效告警行为不变。
+10. 真实账号 E2E（真实 ChatGPT 账号完成 1/2/3/4/7 的手动验证）由用户执行，结果
    记录回本节。
 
 ## 6. 上游同步影响（五问）

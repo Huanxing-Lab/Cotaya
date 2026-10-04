@@ -534,6 +534,13 @@ export function connectionSelectionMatchesNavigationItem(
     return false;
   }
   if (selection.kind === "individual-coding-plan") {
+    // openai 无套餐分层导航（不进 CODING_PLAN_PROVIDER_SPECS），连接选择落在唯一的
+    // 品牌 preset 入口（presetId 即 account:openai-plan）。若按 z.ai 域要求命中
+    // codingPlan item，openai 永远失配，设置页会持续误报
+    // 「原连接方式已不可用，请重新选择」；openai 的连接丢失由重登引导承接。
+    if (family === "openai") {
+      return item.type === "preset" && item.presetId === familySpec.individualCodingPlanProviderId;
+    }
     return (
       item.type === "codingPlan" && item.presetId === familySpec.individualCodingPlanProviderId
     );
