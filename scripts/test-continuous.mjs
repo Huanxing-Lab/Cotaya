@@ -27,6 +27,7 @@ const SUITES = {
     files: [
       "packages/services/test/continuous/contract.test.ts",
       "apps/zcode-cli/packages/bootstrap/test/continuous/scope.test.ts",
+      "packages/ui/test/continuous/continuousFormat.test.ts",
     ],
   },
   integration: {
@@ -41,6 +42,7 @@ const SUITES = {
       "packages/services/test/continuous/cycle.test.ts",
       "packages/services/test/continuous/decision.test.ts",
       "packages/services/test/continuous/scheduler.test.ts",
+      "packages/services/test/continuous/commands.test.ts",
       "apps/zcode-cli/packages/bootstrap/test/continuous/execution.test.ts",
       "apps/zcode-cli/packages/bootstrap/test/continuous/budget-runtime.test.ts",
       "apps/zcode-cli/packages/bootstrap/test/continuous/template.test.ts",

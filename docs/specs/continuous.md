@@ -517,7 +517,17 @@ submitOnce 对非终态的既有行按同身份幂等复用（不铸第二个引
 
 专用执行接口新增 suspendAtSafeBoundary、resumeSuspended、inspectHealth，明确不等同 stop；挂起请求/工具准入与旧执行确认是同一所有者链。单轮计时不使用会直接 abort Run 的固定墙钟 timeout。
 
-结构化错误至少包括：authorization_stale、scope_denied、budget_denied、usage_unknown、lease_lost、execution_not_quiescent、execution_identity_mismatch、template_mismatch、remote_execution_not_supported、validation_unavailable。
+结构化错误至少包括：authorization_stale、scope_denied、budget_denied、usage_unknown、lease_lost、execution_not_quiescent、execution_identity_mismatch、template_mismatch、remote_execution_not_supported、validation_unavailable；CT-08 起 additive 追加 version_conflict（resolve/dismiss/继续确认的旧 version 或异答重放拒绝）、program_not_runnable（paused/failed/completed Program 的启动/恢复类命令拒绝）与 open_cycle_exists（幂等竞态吸收后的明确回执）——三者都是服务层既有语义上送 wire，不改变原有错误。
+
+### 11.1 UI 命令面（CT-08 additive，协议小版本 1）
+
+`continuous/*` 命令集在十个基础命令外新增三个 additive 读/回答命令，wire schema 在 shared continuous-ui-protocol（经 continuous-protocol 再导出，公开路径不变）：
+
+- `continuous/templates`：创建授权表单的可用模板目录（版本化注册表经 Host 注入的模板来源提供）。
+- `continuous/programDetail`：Program 详情页唯一读面——program 视图（授权快照 + 交付位置）、currentCycle、recentCycles、candidates、decisions、pending 继续确认（含 observedUsage/currentLimit/recommendedExtension 原样载荷）、日窗口（Program 时区）与本轮账本摘要、workspace lease（epoch/owner）、platformConcurrency。UI 只消费该快照，不在本地另建接受队列或推导业务状态。
+- `continuous/resolveContinuation`：资源继续确认的回答（§6.1 四选项的结构化形态；version 防重复扩额）。continue 类回答先保存 adjust 的新长期预算/时长（不递增授权 revision、不扩大 Scope）再同 Cycle/Run 恢复；end_cycle 走立即停止链结算 cancelled 并保留已验证提交；stay_paused 只保留 pending 工作。resolve 已落库但 resume 失败时，同回答重放会再次尝试恢复（扩额不会重复——resolve 才写 grant）。
+
+命令实现面（services `ContinuousCommandService`）只做归属校验（命令的 workspaceKey 必须等于 Program 的）、错误映射与视图投影；业务判定一律委托既有服务（supervisor/supervisorControl/decisionService/continuationService），不另写第二条停止/恢复链。服务经 `ServiceChannels.Continuous` 单 channel 注册（命令面 + 查询面一个实现类），renderer 经 accessor 可选字段消费；Host 未装配该 channel 即功能默认关闭（UI tab 隐藏），装配后 UI 仍先查 capability（旧 CLI/远程返回不支持时如实展示，不退回普通 prompt 执行）。
 
 ## 12. UI 与可观测性
 
@@ -527,7 +537,7 @@ Program 详情必须包含：Status、Goal、Scope、Budget、Cadence、Health/�
 
 费用明确标“估算”；unknown 另列。默认并发10、tokens10亿、单轮USD100、每日USD1,000、有效执行1小时；界面同时显示实际运行平台并发能力，不能隐藏较低的机器限制。显示最近探活、最近进展、正常等待原因与有效/墙钟时间。资源暂停显示待确认额度/时间，不混入产品Decision队列。Decision 数量与执行状态分开。历史能从 resolution 追到候选、实施 Cycle、Run、commit 和验证证据。Run timeline/graph 复用现有侧栏，不能用工具调用次数代替改进数。
 
-桌面与手机按服务 snapshot 展示；局部草稿和 optimistic overlay 不是业务事实。手机重连按 replayable 语义补状态，不能重复发已接受命令。
+桌面与手机按服务 snapshot 展示；局部草稿和 optimistic overlay 不是业务事实。手机重连按 replayable 语义补状态，不能重复发已接受命令。UI 消费服务的唯一入口是 `packages/ui/src/hooks/useContinuous.ts`（snapshot/programDetail 轮询读面 + 命令转发；本地只保存最近一份快照与未提交草稿/命令 pending）；稳定测试标识在 shared `test-ids-continuous`。创建授权表单的默认值取产品常量（并发 10、tokens 10 亿、单轮 USD100、每日 USD1,000、有效执行 1 小时；表单不自带第二套默认值），Unlimited 只取消每日额度且必须显式勾选；超出安全整数的额度/grant 输入在表单层即拒绝，不静默截断。
 
 每个 Cycle 有稳定 traceId；各 actor/session/request/tool/span 继承关联。日志使用现有 UI logger/service logger，不记录凭据、真实私密数据、内部服务地址。debug 高频记录；info 生命周期；warn 可恢复问题；error 不可恢复问题。
 

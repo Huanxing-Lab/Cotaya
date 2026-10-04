@@ -72,6 +72,19 @@ export function listQueueableCandidatesReady(
   return rows.map((row) => decodeCandidate(row as unknown as CandidateRow));
 }
 
+/** 全部候选（含 done/rejected/deferred；CT-08 Improvement Queue）。终态在前展示价值更高，
+ *  但排序责任在视图层——SQL 只保证稳定（status, created_at, id）。 */
+export function listCandidatesReady(db: ContinuousDatabaseSync, programId: string): Candidate[] {
+  const rows = db
+    .prepare(
+      `SELECT * FROM continuous_candidate
+       WHERE program_id = ?
+       ORDER BY created_at, id`,
+    )
+    .all(programId);
+  return rows.map((row) => decodeCandidate(row as unknown as CandidateRow));
+}
+
 // CT-06 起 decision 的写入（含报告导入路径）改走 sqliteDecisionStore 的合并语义：
 // 同 fingerprint 重复发现合并来源/证据，终态不重开；versioned resolve/dismiss 的乐观并发
 // 守卫在 applyDecisionResolutionReady（resolution 与入队事件同事务）。旧 DECISION_UPSERT
@@ -87,6 +100,14 @@ export function listPendingDecisionsReady(
 ): Decision[] {
   const rows = db
     .prepare("SELECT * FROM continuous_decision WHERE program_id = ? AND status = 'pending'")
+    .all(programId);
+  return rows.map((row) => decodeDecision(row as unknown as DecisionRow));
+}
+
+/** 全部决策（含 resolved/dismissed；CT-08 Decision Queue 历史与来源）。 */
+export function listDecisionsReady(db: ContinuousDatabaseSync, programId: string): Decision[] {
+  const rows = db
+    .prepare("SELECT * FROM continuous_decision WHERE program_id = ? ORDER BY created_at, id")
     .all(programId);
   return rows.map((row) => decodeDecision(row as unknown as DecisionRow));
 }

@@ -311,13 +311,17 @@ export type {
 export { IClientConfigService } from "./client-config/clientConfig.js";
 
 // Continuous（长期自主改进）受控模块公开入口；实现细节在 src/continuous 内部（CT-00 锁定契约）。
-export type { IContinuousService } from "./continuous/contract.js";
+// IContinuousService 同时是类型与 RPC 描述符（Host register / renderer ProxyChannel 共用）；
+// IContinuousServiceFacade = 命令面 + 查询面（contract-interfaces.ts）的注册形状。
+export { IContinuousService } from "./continuous/contract.js";
+export type { IContinuousQueryService, IContinuousServiceFacade } from "./continuous/contract.js";
 export {
   CONTINUOUS_DEFAULT_BUDGET,
   CONTINUOUS_DEFAULT_CADENCE,
   CONTINUOUS_ERROR_CODES,
   CONTINUOUS_MANAGED_CYCLE_CAPABILITY,
   CONTINUOUS_METHODS,
+  ContinuousCommandService,
   decisionBlocksProgram,
   isAuthorizationStale,
   isOpenCycleStatus,

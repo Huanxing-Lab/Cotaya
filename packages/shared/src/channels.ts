@@ -149,6 +149,8 @@ export const ServiceChannels = {
   OffPeakTask: "off-peak-task",
   /** Onboarding 完成记录服务（本地持久化，后续上传服务器） */
   OnboardingRecord: "onboarding-record",
+  /** Continuous 长期自主改进服务（CT-08；Host 装配后经 ProxyChannel 暴露给 renderer） */
+  Continuous: "continuous",
 } as const;
 
 export type ServiceChannelName = (typeof ServiceChannels)[keyof typeof ServiceChannels];

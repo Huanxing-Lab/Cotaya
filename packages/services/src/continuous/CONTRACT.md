@@ -73,3 +73,21 @@ Invariants that types cannot express (rules: `docs/specs/continuous.md`):
   的注入端口（adapters 由 CLI bootstrap 侧实现）；固定模板（bootstrap
   `continuous-templates`）经 Host 注入的 `ContinuousTemplateSource` 进入，模板 hash 与
   Program 授权绑定不符时 `template_mismatch` 明确失败，不静默换脚本。
+- `ContinuousCommandService`（CT-08）是 `IContinuousService` 命令面（+ 查询面
+  `IContinuousQueryService`，RPC 形状 = `IContinuousServiceFacade`）的唯一实现：只做
+  归属校验（命令的 workspaceKey 必须等于 Program 的）、错误映射（`continuousCommandErrors`
+  是唯一映射——version 冲突 → `version_conflict`、not_found 家族 → `capability_missing`、
+  supervisor 栈 code 原样透传；未知错误不伪装成业务回执）与视图投影（`continuousViews`
+  纯映射）。业务判定一律委托既有服务：runNow/stop → supervisor（`stopCurrentCycle` 经
+  supervisor 委托 supervisorControl，与 `continueSuspendedCycle` 同一条路，不另写停止链）；
+  pause/resume → supervisorControl；决策回答 → decisionService；继续确认 →
+  continuationService。读面只经 repository 快照查询（`listRecentCycles`/`listCandidates`/
+  `listDecisions` 为 CT-08 增量），不在命令层缓存或推导业务状态。
+- 继续确认命令（`resolveContinuation`）：resolve（扩额唯一写入者，version 防重复扩额）
+  → continue 类回答先保存 adjust 的新长期预算/时长（不递增授权 revision、不扩大 Scope）
+  再同 Cycle/Run 恢复；`end_cycle` 走立即停止链结算 cancelled（保留已验证提交）；
+  `stay_paused` 只保留 pending 工作。resolve 已落库但 resume 失败时，同回答重放会再次
+  尝试恢复（扩额不会重复——resolve 才写 grant）。
+- UI 读面语义：`snapshot`/`programDetail` 是 UI 唯一事实来源（§12）；`programDetail` 的
+  日窗口按 Program 持久化时区框定、`platformConcurrency` 缺省回落预算值（只在无更准
+  平台事实时使用，不伪称机器能力）。

@@ -20,7 +20,7 @@
 import { randomUUID } from "node:crypto";
 import type { Cycle, CycleTriggerKind, Program } from "../domain/types.js";
 import { manualTriggerKey } from "../domain/cadencePolicy.js";
-import { continueSuspendedCycle } from "./supervisorControl.js";
+import { continueSuspendedCycle, stopCurrentCycle } from "./supervisorControl.js";
 import { watchCycle } from "./supervisorWatch.js";
 import { acquireCycleLease, type WorkspaceLeaseDeps } from "./workspaceLease.js";
 import { createManagedCycleRecord, ContinuousSupervisorError } from "./supervisorLifecycle.js";
@@ -37,6 +37,11 @@ export interface ContinuousTemplateSource {
     templateId: string;
     templateVersion: string;
   }): { scriptText: string; scriptHash?: string } | null;
+  /**
+   * 可用模板目录（CT-08 创建授权表单的 UI 读面）。可选：Host 注入的注册表提供
+   * templateId@version + 脚本 sha256；缺席时命令门面按「注册表未提供目录」返回空列表。
+   */
+  list?(): Array<{ templateId: string; templateVersion: string; templateHash: string }>;
 }
 
 export { ContinuousSupervisorError } from "./supervisorLifecycle.js";
@@ -195,6 +200,26 @@ export class ContinuousSupervisor {
       },
       cycleId,
       this.ownerIdField,
+    );
+  }
+
+  /**
+   * 立即停止本轮（§6/E-11）：控制面语义在 supervisorControl.ts；命令门面（CT-08）经本方法
+   * 走同一条路，不另写第二条停止链（与 continueSuspendedCycle 同款委托）。
+   * attachSupervision 仅继续路径需要——stop 链路不恢复监督，缺席实现刻意大声失败。
+   */
+  stopCurrentCycle(params: { programId: string; epoch: number }): Promise<Cycle> {
+    return stopCurrentCycle(
+      {
+        repository: this.deps.repository,
+        execution: this.deps.execution,
+        clock: this.deps.clock,
+        ...(this.deps.logger === undefined ? {} : { logger: this.deps.logger }),
+        attachSupervision: () => {
+          throw new Error("stopCurrentCycle 不恢复监督循环（停止链路不调用 attachSupervision）");
+        },
+      },
+      params,
     );
   }
 

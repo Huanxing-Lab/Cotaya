@@ -42,8 +42,15 @@ export interface ContinuousRepositoryPort {
   getCycleByTriggerKey(programId: string, triggerKey: string): Promise<Cycle | null>;
   /** 生成下一个 sequence 用；配合 UNIQUE(program_id,sequence) 在事务内原子去重。 */
   getLatestCycleSequence(programId: string): Promise<number>;
+  /**
+   * 最近的 Cycle 行（sequence 倒序，含终态；CT-08 UI 详情页 Latest Cycles 读面）。
+   * 只读投影：不含 scriptText 之外的重载——行本身就是快照事实，视图裁剪在门面层。
+   */
+  listRecentCycles(programId: string, limit: number): Promise<Cycle[]>;
   saveCandidate(candidate: Candidate): Promise<void>;
   listQueueableCandidates(programId: string): Promise<Candidate[]>;
+  /** 全部候选（含 done/rejected/deferred 终态；CT-08 Improvement Queue 与历史审计）。 */
+  listCandidates(programId: string): Promise<Candidate[]>;
   /**
    * 保存（或合并）一条决策：同 (programId, fingerprint) 重复发现按 CT-06 合并语义并入
    * （来源/证据追加、blockingScope 并集、终态与 version 保持现存值）。观察侧写入不走
@@ -51,6 +58,8 @@ export interface ContinuousRepositoryPort {
    */
   saveDecision(decision: Decision): Promise<void>;
   listPendingDecisions(programId: string): Promise<Decision[]>;
+  /** 全部决策（含 resolved/dismissed；CT-08 Decision Queue 的历史与来源展示）。 */
+  listDecisions(programId: string): Promise<Decision[]>;
   /** 决策读面（resolve/dismiss 的 version 基准与幂等判定）。 */
   getDecision(decisionId: string): Promise<Decision | null>;
   /** 决策→候选关联（resolve/dismiss 的候选处置输入与审计载荷）。 */

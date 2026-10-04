@@ -39,6 +39,7 @@ import { GitBranchSwitcher } from "@/GitBranchSwitcher.js";
 import { ScopedErrorBoundary } from "@/ErrorBoundary.js";
 
 import { AUTOMATIONS_TOAST_ANCHOR_ID, AutomationsSection } from "@/settings/AutomationsSection.js";
+import type { ContinuousOpenRunTarget } from "@/settings/continuous/ContinuousSection.js";
 import type {
   SavedWorkflowLaunchTarget,
   SavedWorkflowsOpenArtifactParams,
@@ -975,6 +976,36 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
       workspaceTabs,
     ],
   );
+  // Continuous（CT-08）：Cycle → 复用 WorkflowRunSidePane 的 Run 展示。
+  // 与中枢实例不同：managed cycle 的 run 不在会话内发起（无 toolCallId，无轮尾卡），
+  // 不切换主会话（用户仍停在 Automations 页），只把 run 详情开在侧栏并附 Cycle 摘要。
+  const handleOpenContinuousRun = useCallback(
+    (target: ContinuousOpenRunTarget) => {
+      const targetWorkspacePath = target.workspacePath || workspaceAbsPath;
+      const targetWorkspaceIdentity =
+        target.workspaceIdentity ?? (workspaceIdentity?.trim() ? workspaceIdentity : undefined);
+      const targetRemoteSessionId = workspaceTabs.find(
+        (tab) =>
+          tab.workspacePath === targetWorkspacePath &&
+          (!targetWorkspaceIdentity || tab.workspaceIdentity === targetWorkspaceIdentity),
+      )?.remoteSessionId;
+      handleOpenWorkflowRun({
+        workspacePath: targetWorkspacePath,
+        ...(targetWorkspaceIdentity ? { workspaceIdentity: targetWorkspaceIdentity } : {}),
+        ...(targetRemoteSessionId ? { remoteSessionId: targetRemoteSessionId } : {}),
+        parentSessionId: target.executionSessionId,
+        toolCallId: "",
+        runId: target.workflowRunId,
+        continuousCycle: {
+          cycleId: target.cycleId,
+          sequence: target.sequence,
+          status: target.cycleStatus,
+          programGoal: target.programGoal,
+        },
+      });
+    },
+    [handleOpenWorkflowRun, workspaceAbsPath, workspaceIdentity, workspaceTabs],
+  );
   // 侧栏运行行：与 composer 徽标
   // 同一跳转——先选中会话，再开 run pane。没有 toolCallId 的 run（不该有）只选中会话。
   const handleOpenSidebarWorkflowRun = useCallback(
@@ -1777,6 +1808,7 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
                                     onNavigateToLaunchedRun={handleNavigateToLaunchedRun}
                                     onOpenWorkflowRun={handleOpenSavedWorkflowRun}
                                     onOpenWorkflowArtifact={handleOpenSavedWorkflowArtifact}
+                                    onOpenContinuousRun={handleOpenContinuousRun}
                                     openAutomationId={openAutomationId}
                                     openAutomationTab={openAutomationTab}
                                     onOpenAutomationConsumed={onOpenAutomationConsumed}

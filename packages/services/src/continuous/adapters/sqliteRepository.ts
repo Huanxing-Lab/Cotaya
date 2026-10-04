@@ -7,7 +7,6 @@
 
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
-import { CONTINUOUS_OPEN_CYCLE_STATUSES } from "@zcode/shared";
 import type {
   Candidate,
   ContinuationGrant,
@@ -42,7 +41,9 @@ import {
 import {
   applyReportImportReady,
   appendEventReady,
+  listCandidatesReady,
   listCycleEventsReady,
+  listDecisionsReady,
   listPendingDecisionsReady,
   listQueueableCandidatesReady,
   saveCandidateReady,
@@ -58,7 +59,11 @@ import {
 import {
   acquireLeaseReady,
   completeCycleReady,
+  getCycleByTriggerKeyReady,
+  getLatestCycleSequenceReady,
   getLeaseReady,
+  getOpenCycleReady,
+  listRecentCyclesReady,
   releaseLeaseReady,
   renewLeaseReady,
 } from "./sqliteLifecycleStore.js";
@@ -196,30 +201,22 @@ export class SqliteContinuousRepository implements ContinuousRepositoryPort {
 
   async getOpenCycle(programId: string): Promise<Cycle | null> {
     await this.ensureReady();
-    const statuses = CONTINUOUS_OPEN_CYCLE_STATUSES as readonly string[];
-    const placeholders = statuses.map(() => "?").join(", ");
-    const row = this.database()
-      .prepare(
-        `SELECT * FROM continuous_cycle WHERE program_id = ? AND status IN (${placeholders})`,
-      )
-      .get(programId, ...statuses);
-    return row ? decodeCycle(row as unknown as CycleRow) : null;
+    return getOpenCycleReady(this.database(), programId);
   }
 
   async getCycleByTriggerKey(programId: string, triggerKey: string): Promise<Cycle | null> {
     await this.ensureReady();
-    const row = this.database()
-      .prepare("SELECT * FROM continuous_cycle WHERE program_id = ? AND trigger_key = ?")
-      .get(programId, triggerKey);
-    return row ? decodeCycle(row as unknown as CycleRow) : null;
+    return getCycleByTriggerKeyReady(this.database(), programId, triggerKey);
   }
 
   async getLatestCycleSequence(programId: string): Promise<number> {
     await this.ensureReady();
-    const row = this.database()
-      .prepare("SELECT MAX(sequence) AS latest FROM continuous_cycle WHERE program_id = ?")
-      .get(programId) as { latest: number | null };
-    return row.latest ?? 0;
+    return getLatestCycleSequenceReady(this.database(), programId);
+  }
+
+  async listRecentCycles(programId: string, limit: number): Promise<Cycle[]> {
+    await this.ensureReady();
+    return listRecentCyclesReady(this.database(), programId, limit);
   }
 
   // ── 队列与报告导入（sqliteQueueStore）──
@@ -234,6 +231,11 @@ export class SqliteContinuousRepository implements ContinuousRepositoryPort {
     return listQueueableCandidatesReady(this.database(), programId);
   }
 
+  async listCandidates(programId: string): Promise<Candidate[]> {
+    await this.ensureReady();
+    return listCandidatesReady(this.database(), programId);
+  }
+
   async saveDecision(decision: Decision): Promise<void> {
     await this.ensureReady();
     // 合并是读-改-写：独立调用时自带事务（导入事务路径内则被外层事务覆盖，不开嵌套）。
@@ -245,6 +247,11 @@ export class SqliteContinuousRepository implements ContinuousRepositoryPort {
   async listPendingDecisions(programId: string): Promise<Decision[]> {
     await this.ensureReady();
     return listPendingDecisionsReady(this.database(), programId);
+  }
+
+  async listDecisions(programId: string): Promise<Decision[]> {
+    await this.ensureReady();
+    return listDecisionsReady(this.database(), programId);
   }
 
   // ── 决策读面与 versioned resolve/dismiss（sqliteDecisionStore；CT-06）──

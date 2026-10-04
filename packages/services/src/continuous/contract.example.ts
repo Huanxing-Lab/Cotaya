@@ -13,5 +13,6 @@ export async function runCycleNowSafely(
     throw new Error("continuous managed cycles not supported by this host");
   }
   await service.runNow(params);
-  return service.snapshot(params.context);
+  // CT-08 起 snapshot 参数形与 wire schema 对齐（{context}）。
+  return service.snapshot({ context: params.context });
 }

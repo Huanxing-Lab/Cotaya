@@ -6,13 +6,57 @@
 
 import { isTerminalCycleStatus } from "../domain/types.js";
 import type { Cycle, ProgramCompletionPatch, WorkspaceLease } from "../domain/types.js";
-import { encodeCycle } from "./sqliteCodecs.js";
-import type { LeaseRow } from "./sqliteRowTypes.js";
+import { CONTINUOUS_OPEN_CYCLE_STATUSES } from "@zcode/shared";
+import { decodeCycle, encodeCycle } from "./sqliteCodecs.js";
+import type { CycleRow, LeaseRow } from "./sqliteRowTypes.js";
 import {
   inContinuousTransaction,
   updateRowByKey,
   type ContinuousDatabaseSync,
 } from "./sqliteConnection.js";
+
+// ── Cycle 读面（自 sqliteRepository.ts 移入：repository 文件行数超架构上限；移动不是
+// 复制，SQL 与解码逐字保持）──
+
+export function getOpenCycleReady(db: ContinuousDatabaseSync, programId: string): Cycle | null {
+  const statuses = CONTINUOUS_OPEN_CYCLE_STATUSES as readonly string[];
+  const placeholders = statuses.map(() => "?").join(", ");
+  const row = db
+    .prepare(`SELECT * FROM continuous_cycle WHERE program_id = ? AND status IN (${placeholders})`)
+    .get(programId, ...statuses);
+  return row ? decodeCycle(row as unknown as CycleRow) : null;
+}
+
+export function getCycleByTriggerKeyReady(
+  db: ContinuousDatabaseSync,
+  programId: string,
+  triggerKey: string,
+): Cycle | null {
+  const row = db
+    .prepare("SELECT * FROM continuous_cycle WHERE program_id = ? AND trigger_key = ?")
+    .get(programId, triggerKey);
+  return row ? decodeCycle(row as unknown as CycleRow) : null;
+}
+
+export function getLatestCycleSequenceReady(db: ContinuousDatabaseSync, programId: string): number {
+  const row = db
+    .prepare("SELECT MAX(sequence) AS latest FROM continuous_cycle WHERE program_id = ?")
+    .get(programId) as { latest: number | null };
+  return row.latest ?? 0;
+}
+
+/** CT-08 UI 详情页读面：sequence 倒序的最近行（含终态）；limit 上限防误查全表。 */
+export function listRecentCyclesReady(
+  db: ContinuousDatabaseSync,
+  programId: string,
+  limit: number,
+): Cycle[] {
+  const boundedLimit = Math.max(1, Math.min(Math.trunc(limit), 100));
+  const rows = db
+    .prepare("SELECT * FROM continuous_cycle WHERE program_id = ? ORDER BY sequence DESC LIMIT ?")
+    .all(programId, boundedLimit);
+  return rows.map((row) => decodeCycle(row as unknown as CycleRow));
+}
 
 // lease 行没有 JSON 字段，纯列映射随租约 SQL 存放（specs §5：释放后 epoch 保留）。
 function decodeLease(row: LeaseRow): WorkspaceLease {

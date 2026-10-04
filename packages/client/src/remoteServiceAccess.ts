@@ -40,6 +40,8 @@ import {
   IFeedbackService,
   IPromptAttachmentTransferService,
   IWindowControllerService,
+  IContinuousService,
+  type IContinuousServiceFacade,
   type IServiceAccessor,
 } from "@zcode/services";
 
@@ -92,6 +94,11 @@ export class RemoteServiceAccess implements IServiceAccessor {
   readonly settingsSyncService: ISettingsSyncService;
   readonly feedbackService: IFeedbackService;
   readonly promptAttachmentTransferService: IPromptAttachmentTransferService;
+  // Continuous（CT-08）：Host 装配后才注册 channel。ProxyChannel 代理是惰性的——
+  // 未注册 channel 上构造代理不抛错，只有真实调用才失败；accessor 字段可选 +
+  // UI 先查 capability，双保险让「功能默认关闭」等价于「tab 隐藏」。
+  readonly continuousService?: IContinuousServiceFacade;
+  private continuousServiceProxy?: IContinuousServiceFacade;
 
   constructor(channelClient: IChannelClient) {
     this.fileService = ProxyChannel.toService<IFileService>(
@@ -219,5 +226,13 @@ export class RemoteServiceAccess implements IServiceAccessor {
     this.promptAttachmentTransferService = ProxyChannel.toService<IPromptAttachmentTransferService>(
       channelClient.getChannel(IPromptAttachmentTransferService.channelName),
     );
+    Object.defineProperty(this, "continuousService", {
+      get: () =>
+        (this.continuousServiceProxy ??= ProxyChannel.toService<IContinuousServiceFacade>(
+          channelClient.getChannel(IContinuousService.channelName),
+        )),
+      enumerable: true,
+      configurable: true,
+    });
   }
 }

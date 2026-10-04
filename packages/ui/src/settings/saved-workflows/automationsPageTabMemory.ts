@@ -17,7 +17,9 @@ function storage(): Storage | null {
 export function readAutomationsPageTab(): AutomationsPageTab {
   try {
     const value = storage()?.getItem(STORAGE_KEY);
-    return value === "workflow" ? "workflow" : "automation";
+    // CT-08：第三个 tab「Continuous」；读取侧只收窄值，未知值回到「自动化」。
+    if (value === "workflow" || value === "continuous") return value;
+    return "automation";
   } catch {
     return "automation";
   }

@@ -39,6 +39,7 @@ import type { IPromptAttachmentTransferService } from "./prompt-attachment-trans
 import type { IWindowControllerService } from "./window-controller/windowController.js";
 import type { IOnboardingRecordService } from "./onboarding/onboardingRecord.js";
 import type { IConversationShareService } from "./conversation-share/conversationShare.js";
+import type { IContinuousServiceFacade } from "./continuous/contract.js";
 
 /** UI 层消费的统一服务接口 */
 export interface IServiceAccessor {
@@ -88,4 +89,11 @@ export interface IServiceAccessor {
   readonly settingsSyncService: ISettingsSyncService;
   readonly feedbackService: IFeedbackService;
   readonly promptAttachmentTransferService: IPromptAttachmentTransferService;
+  /**
+   * Continuous 长期自主改进（CT-08）。可选 = 功能默认关闭：Host 未装配时 accessor 不提供，
+   * UI 的 Continuous tab 整体隐藏（回滚位）；装配后 UI 仍要先查 capability（旧 CLI/远程
+   * workspace 返回不支持，界面如实展示 E-24，不退回普通 prompt 执行）。类型为命令面 +
+   * 查询面的 Facade（一个 channel 一个实现类）。
+   */
+  readonly continuousService?: IContinuousServiceFacade;
 }

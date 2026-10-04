@@ -6,13 +6,15 @@
  */
 
 import type { Candidate, Cycle, Decision, Program } from "./domain/types.js";
+import type { IContinuousQueryService } from "./contract-interfaces.js";
 import type {
   ContinuousArchiveProgramParams,
   ContinuousCapabilityResult,
-  ContinuousCommandContext,
   ContinuousCreateProgramParams,
   ContinuousDismissDecisionParams,
   ContinuousPauseProgramParams,
+  ContinuousResolveContinuationParams,
+  ContinuousResolveContinuationResult,
   ContinuousResolveDecisionParams,
   ContinuousResumeProgramParams,
   ContinuousRunNowParams,
@@ -29,11 +31,17 @@ export type {
   ContinuousError,
   ContinuousErrorCode,
   ContinuousPauseProgramParams,
+  ContinuousProgramDetailParams,
+  ContinuousProgramDetailResult,
+  ContinuousResolveContinuationParams,
+  ContinuousResolveContinuationResult,
   ContinuousResolveDecisionParams,
   ContinuousResumeProgramParams,
   ContinuousRunNowParams,
   ContinuousSnapshotResult,
   ContinuousStopCurrentCycleParams,
+  ContinuousTemplatesParams,
+  ContinuousTemplatesResult,
 } from "@zcode/shared";
 export {
   CONTINUOUS_DEFAULT_BUDGET,
@@ -215,32 +223,17 @@ export { ContinuousRecoveryService } from "./application/recovery.js";
 // 到期唤醒的只读查询面（桌面 scheduler 经 @zcode/services/node 消费；只查询不派发）。
 export type { ContinuousDueProgram } from "./adapters/continuousWakeSource.js";
 export { ContinuousWakeSource } from "./adapters/continuousWakeSource.js";
+// CT-08：IContinuousService 命令面的唯一实现（Host 装配后经 ServiceChannels.Continuous 暴露）。
+// 只做归属校验、错误映射与视图投影；业务判定全部沿用 CT-01…07 的服务栈。
+// continuousViews 是 domain 行 → wire 读面的纯投影（无 IO、无业务规则）；
+// continuousCommandErrors 是命令层结构化错误的单一映射。
+export type { ContinuousCommandServiceDeps } from "./application/continuousCommandService.js";
+export { ContinuousCommandService } from "./application/continuousCommandService.js";
+export { ContinuousCommandError } from "./application/continuousCommandErrors.js";
+export { CONTINUOUS_DETAIL_RECENT_CYCLES } from "./application/continuousViews.js";
 
-/**
- * Continuous 服务接口（Host 持有唯一实例；业务写入唯一路径）。
- * 所有命令先过 capability 检查（supportsManagedCycles），旧 CLI/远程第一版返回
- * 结构化 capability_missing / remote_execution_not_supported，不回退普通 prompt 执行。
- * Pause 与立即停止本轮是两个命令：前者本轮结束后生效，后者撤销写入→取消→等待停止。
- */
-export interface IContinuousService {
-  /** 声明 managed cycle capability；必须先查询，未支持时不得调用其余命令。 */
-  capability(): ContinuousCapabilityResult;
-  /** workspace 维度的事实快照；UI 只消费 snapshot，不在本地另建接受队列。 */
-  snapshot(context: ContinuousCommandContext): Promise<ContinuousSnapshotResult>;
-  /** 初次创建：绑定 Goal/Scope/Budget/Cadence/模板 hash 与首次授权（D4：仅本地 workspace）。 */
-  createProgram(params: ContinuousCreateProgramParams): Promise<Program>;
-  /** 手动触发一轮；requestId 幂等，重复触发不得创建第二个 Cycle。 */
-  runNow(params: ContinuousRunNowParams): Promise<Cycle>;
-  /** 本轮结束后暂停；不取消正在执行的候选。 */
-  pauseProgram(params: ContinuousPauseProgramParams): Promise<Program>;
-  /** 显式恢复（paused/failed）；suspended 资源暂停必须走继续确认，不走本命令。 */
-  resumeProgram(params: ContinuousResumeProgramParams): Promise<Program>;
-  /** 立即停止本轮：先撤销写入/请求许可，再取消并等待停止；必须携带当前 lease epoch。 */
-  stopCurrentCycle(params: ContinuousStopCurrentCycleParams): Promise<Cycle>;
-  /** 回答 Decision；version 防覆盖，resolution 只影响未来 Cycle（§8）。 */
-  resolveDecision(params: ContinuousResolveDecisionParams): Promise<void>;
-  /** 不授权实施；不自动扩大 forbidden 范围。 */
-  dismissDecision(params: ContinuousDismissDecisionParams): Promise<void>;
-  /** 归档前必须没有主动执行；不级联清除审计历史。 */
-  archiveProgram(params: ContinuousArchiveProgramParams): Promise<void>;
-}
+// ── CT-08：接口本体与 RPC 描述符在 contract-interfaces.ts（叶子文件，避免 contract ↔
+// 实现的 import 环；命令面 10+1 方法与查询面 2 方法分接口是 max-public-methods 拆分）。
+// 对外仍只暴露 contract.ts（模块 publicEntrypoints 不变）。
+export { IContinuousService } from "./contract-interfaces.js";
+export type { IContinuousQueryService, IContinuousServiceFacade } from "./contract-interfaces.js";

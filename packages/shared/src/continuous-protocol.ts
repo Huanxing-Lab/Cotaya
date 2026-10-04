@@ -1,12 +1,26 @@
 // Continuous（长期自主改进）wire 协议契约：capability、命令参数、快照与结构化错误。
 // 唯一产品规则来源：docs/specs/continuous.md（§6/§8/§11）；本文件只做传输校验，不含业务实现。
-// service 语义契约在 packages/services/src/continuous/contract.ts；两者共享同一套状态词表，
-// 这里是词表唯一来源，services 侧只做类型推导，避免 schema 与领域模型漂移。
+// service 语义契约在 packages/services/src/continuous/contract.ts；两者共享同一套状态词表
+// （词表 schema 自 CT-08 起在 continuous-ui-protocol.ts，本文件经 export * 再导出），
+// services 侧只做类型推导，避免 schema 与领域模型漂移。
 
 import { z } from "zod";
 // 身份规则复用既有构造器：workspaceKey === workspaceIdentity?.trim() || workspacePath。
 // 不在本文件重新实现 fallback，也不手写格式（AGENTS.md Workspace Identity）。
 import { resolveWorkspaceKey } from "./task-realtime-core.js";
+// 状态词表/配置策略/视图 schema 自 continuous-ui-protocol.ts 移入并复用（max-lines 拆分；
+// 移动不是复制——单一实现仍在，ui-protocol 刻意不反向 import 本文件，避免环）。
+// 默认值常量（CONTINUOUS_DEFAULT_BUDGET/CADENCE）不经本文件 import——它们只被
+// `export *` 再导出，直接 import 会形成未使用告警。
+import {
+  continuousBudgetPolicySchema,
+  continuousCadencePolicySchema,
+  continuousContinuationAnswerSchema,
+  continuousDecisionPolicySchema,
+  continuousProgramStatusSchema,
+  continuousScopePolicySchema,
+  continuousTemplateRefSchema,
+} from "./continuous-ui-protocol.js";
 
 const nonEmptyString = z.string().min(1);
 const idString = z.string().min(1);
@@ -43,129 +57,6 @@ export function supportsManagedCycles(capability: unknown): boolean {
   return parsed.success && parsed.data.supported === true;
 }
 
-// ── 状态词表（规格 §5；services domain 与 SQL CHECK 同集）──
-export const continuousProgramStatusSchema = z.enum([
-  "active",
-  "sleeping",
-  "paused",
-  "failed",
-  "completed",
-]);
-export type ContinuousProgramStatus = z.infer<typeof continuousProgramStatusSchema>;
-
-export const continuousCycleStatusSchema = z.enum([
-  "preparing",
-  "running",
-  "settling",
-  "interrupted",
-  "suspended",
-  "completed",
-  "failed",
-  "cancelled",
-]);
-export type ContinuousCycleStatus = z.infer<typeof continuousCycleStatusSchema>;
-
-/** 未结束 Cycle（含 suspended）；同一 Program 最多一个（continuous_one_open_cycle 索引）。 */
-export const CONTINUOUS_OPEN_CYCLE_STATUSES = [
-  "preparing",
-  "running",
-  "settling",
-  "interrupted",
-  "suspended",
-] as const satisfies readonly ContinuousCycleStatus[];
-
-export const continuousCandidateStatusSchema = z.enum([
-  "candidate",
-  "queued",
-  "implementing",
-  "done",
-  "rejected",
-  "deferred",
-]);
-export type ContinuousCandidateStatus = z.infer<typeof continuousCandidateStatusSchema>;
-
-export const continuousDecisionStatusSchema = z.enum(["pending", "resolved", "dismissed"]);
-export type ContinuousDecisionStatus = z.infer<typeof continuousDecisionStatusSchema>;
-
-export const continuousCycleHealthStateSchema = z.enum([
-  "progressing",
-  "normal_wait",
-  "suspected_hang",
-  "unreachable",
-]);
-export type ContinuousCycleHealthState = z.infer<typeof continuousCycleHealthStateSchema>;
-
-// ── 配置策略（授权时快照；金额一律整数微美元，不用浮点累加）──
-export const continuousScopePolicySchema = z.strictObject({
-  /** 允许修改的路径前缀（授权路径外写入返回 scope_denied）。 */
-  allowedPaths: z.array(nonEmptyString),
-  forbiddenPaths: z.array(nonEmptyString),
-  /** 规格默认禁止的能力面；不能通过“继续”确认绕过（§6.1）。 */
-  forbiddenCapabilities: z.array(
-    z.enum(["backend_rewrite", "db_migration", "billing_auth", "deploy", "push", "merge"]),
-  ),
-});
-export type ContinuousScopePolicy = z.infer<typeof continuousScopePolicySchema>;
-
-export const continuousBudgetPolicySchema = z.strictObject({
-  /** null = Unlimited（只取消每日额度；单轮限制仍生效）。 */
-  dailyCostUsdMicros: z.number().int().positive().nullable(),
-  perCycleCostUsdMicros: z.number().int().positive(),
-  perCycleTokens: z.number().int().positive(),
-  perCycleMaxImprovements: z.number().int().positive(),
-  perCycleMaxFiles: z.number().int().positive(),
-  perCycleMaxChangedLines: z.number().int().positive(),
-  maxConcurrentActors: z.number().int().positive(),
-  activeExecutionLimitMs: z.number().int().positive(),
-  maxModelRequestAttempts: z.number().int().positive(),
-  maxResumeAttempts: z.number().int().positive(),
-});
-export type ContinuousBudgetPolicy = z.infer<typeof continuousBudgetPolicySchema>;
-
-/** 产品默认值（规格 §2 设置表）；金额为微美元整数。 */
-export const CONTINUOUS_DEFAULT_BUDGET: ContinuousBudgetPolicy = {
-  dailyCostUsdMicros: 1_000_000_000, // USD 1,000/日；Unlimited 需显式选择
-  perCycleCostUsdMicros: 100_000_000, // USD 100/单轮，必须为正的有限值
-  perCycleTokens: 1_000_000_000,
-  perCycleMaxImprovements: 3,
-  perCycleMaxFiles: 10,
-  perCycleMaxChangedLines: 400,
-  maxConcurrentActors: 10, // builder 仍最多 1 个，由执行策略保证
-  activeExecutionLimitMs: 3_600_000, // 有效执行 1 小时；正常阻塞不计时
-  maxModelRequestAttempts: 3,
-  maxResumeAttempts: 2,
-};
-
-export const continuousCadencePolicySchema = z.discriminatedUnion("kind", [
-  z.strictObject({ kind: z.literal("interval"), hoursAfterCycleEnd: z.number().positive() }),
-  z.strictObject({
-    kind: z.literal("daily"),
-    /** 本地 HH:mm；按 Program 持久化时区求下一次未来时点。 */
-    localTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
-    timeZone: nonEmptyString,
-  }),
-]);
-export type ContinuousCadencePolicy = z.infer<typeof continuousCadencePolicySchema>;
-
-export const CONTINUOUS_DEFAULT_CADENCE: ContinuousCadencePolicy = {
-  kind: "interval",
-  hoursAfterCycleEnd: 6,
-};
-
-/** 决策策略：未知语义类别默认进入 Decision（§8），第一版不接受关闭该行为。 */
-export const continuousDecisionPolicySchema = z.strictObject({
-  unknownToDecision: z.literal(true),
-});
-export type ContinuousDecisionPolicy = z.infer<typeof continuousDecisionPolicySchema>;
-
-export const continuousTemplateRefSchema = z.strictObject({
-  templateId: idString,
-  templateVersion: nonEmptyString,
-  /** 模板脚本内容 hash（sha256 hex）；授权与 resume 都用它防脚本漂移。 */
-  templateHash: z.string().regex(/^[0-9a-f]{64}$/),
-});
-export type ContinuousTemplateRef = z.infer<typeof continuousTemplateRefSchema>;
-
 // ── 命令身份（规格 §4：workspaceIdentity?.trim() || workspacePath，远程贯穿 remoteSessionId）──
 export const continuousCommandContextSchema = z
   .strictObject({
@@ -198,6 +89,10 @@ export const CONTINUOUS_METHODS = {
   resolveDecision: "continuous/resolveDecision",
   dismissDecision: "continuous/dismissDecision",
   archiveProgram: "continuous/archiveProgram",
+  // CT-08 additive（协议小版本 1）：UI 读/回答面。
+  listTemplates: "continuous/templates",
+  programDetail: "continuous/programDetail",
+  resolveContinuation: "continuous/resolveContinuation",
 } as const;
 export type ContinuousMethod = (typeof CONTINUOUS_METHODS)[keyof typeof CONTINUOUS_METHODS];
 
@@ -309,7 +204,37 @@ export const continuousSnapshotResultSchema = z.strictObject({
 });
 export type ContinuousSnapshotResult = z.infer<typeof continuousSnapshotResultSchema>;
 
+// ── CT-08 additive：UI 读/回答面的 params（结果 schema 在 continuous-ui-protocol.ts）──
+
+export const continuousTemplatesParamsSchema = z.strictObject({
+  context: continuousCommandContextSchema,
+});
+export type ContinuousTemplatesParams = z.infer<typeof continuousTemplatesParamsSchema>;
+
+export const continuousProgramDetailParamsSchema = z.strictObject({
+  context: continuousCommandContextSchema,
+  programId: idString,
+});
+export type ContinuousProgramDetailParams = z.infer<typeof continuousProgramDetailParamsSchema>;
+
+/** 回答继续确认（§6.1）：version 防重复扩额；归属校验（请求属于该 Program/Cycle）在服务端。 */
+export const continuousResolveContinuationParamsSchema = z.strictObject({
+  context: continuousCommandContextSchema,
+  programId: idString,
+  requestId: idString,
+  version: z.number().int().positive(),
+  answer: continuousContinuationAnswerSchema,
+});
+export type ContinuousResolveContinuationParams = z.infer<
+  typeof continuousResolveContinuationParamsSchema
+>;
+
 // ── 结构化错误（规格 §11“至少包括”清单 + capability_missing；结构必须稳定）──
+// CT-08 起 additive 追加三个服务层既有语义（E-06/E-32 回答面与 CT-05/07 状态门需要它们
+// 与授权过期/能力缺失区分，否则 UI 无法如实反馈“旧 version 拒绝”“已暂停需先恢复”）：
+//   version_conflict   —— resolve/dismiss/继续确认的旧 version 或异答重放拒绝；
+//   program_not_runnable —— paused/failed/completed Program 的启动/恢复类命令拒绝；
+//   open_cycle_exists  —— 同 Program 已有未结束 Cycle（幂等竞态吸收后的明确回执）。
 export const CONTINUOUS_ERROR_CODES = [
   "capability_missing",
   "authorization_stale",
@@ -322,6 +247,9 @@ export const CONTINUOUS_ERROR_CODES = [
   "template_mismatch",
   "remote_execution_not_supported",
   "validation_unavailable",
+  "version_conflict",
+  "program_not_runnable",
+  "open_cycle_exists",
 ] as const;
 export type ContinuousErrorCode = (typeof CONTINUOUS_ERROR_CODES)[number];
 
@@ -352,3 +280,9 @@ export * from "./continuous-budget-protocol.js";
 // 版本化 ContinuousReportV1 的载荷 schema 放 continuous-report-protocol.ts（模板产出侧与
 // 导入校验侧共用同一份词汇表；见那边文件头）。同样从这里再导出，公开路径不变。
 export * from "./continuous-report-protocol.js";
+
+// ── UI 读/回答协议（CT-08）──
+// 状态词表与配置策略 schema 自本文件移入 continuous-ui-protocol.ts（max-lines 拆分；
+// 移动不是复制），三个 UI 命令（templates/programDetail/resolveContinuation）的结果与
+// 视图 schema 也在那边。同样从这里再导出，公开路径保持 continuous-protocol 一个。
+export * from "./continuous-ui-protocol.js";
