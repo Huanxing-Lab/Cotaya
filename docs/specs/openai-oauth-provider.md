@@ -1,11 +1,11 @@
 # 规格 openai-oauth-provider：OpenAI OAuth 登录接入
 
-| 项       | 值                                                            |
-| -------- | ------------------------------------------------------------- |
-| 状态     | 已与用户对齐（2026-10-04），规则先于实现（本文即规格）        |
-| 分支     | `feature/openai-oauth-login`                                  |
-| 日期     | 2026-10-04                                                    |
-| 行号基准 | 本规格撰写时的工作区（见各 `path:line` 引用，均为实测行号）   |
+| 项       | 值                                                          |
+| -------- | ----------------------------------------------------------- |
+| 状态     | 已与用户对齐（2026-10-04），规则先于实现（本文即规格）      |
+| 分支     | `feature/openai-oauth-login`                                |
+| 日期     | 2026-10-04                                                  |
+| 行号基准 | 本规格撰写时的工作区（见各 `path:line` 引用，均为实测行号） |
 
 ---
 
@@ -30,13 +30,18 @@ Cotaya（ZCode 的商业 fork，见 `UPSTREAM-SYNC.md`）现有登录身份域�
 
 ### 2.1 三端登录入口
 
-| 端   | 入口                                                                                                                     | 流程            |
-| ---- | ------------------------------------------------------------------------------------------------------------------------ | --------------- |
-| 桌面 | Welcome 登录页新增 OpenAI 按钮（`WelcomeScreen.tsx:488-545` 按钮文案/排序处加分支），provider 列表来自 `OAuthService.getProviders()` | loopback 主流程 |
+| 端   | 入口                                                                                                                                                                      | 流程                                                   |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| 桌面 | Welcome 登录页新增 OpenAI 按钮（`WelcomeScreen.tsx:488-545` 按钮文案/排序处加分支），provider 列表来自 `OAuthService.getProviders()`                                      | loopback 主流程                                        |
 | CLI  | `cotaya login openai`（`apps/zcode-cli/packages/cli/src/login-command.ts:16` 参数枚举扩展）+ command center `/login` 新选项（`command-center/login-flow.ts:12-79` items） | loopback 主流程；`--no-browser` 或无浏览器环境走设备码 |
-| Web  | 分享页登录入口（`packages/web/src/main.tsx:170` onLogin）新增 openai 选项                                               | 设备码（浏览器无法监听 localhost loopback） |
+| Web  | 分享页登录入口（`packages/web/src/main.tsx:170` onLogin）新增 openai 选项                                                                                                 | 设备码（浏览器无法监听 localhost loopback）            |
 
 - 三端登录结果写同一套凭据 key（见 2.4），active provider 单指针语义一致。
+- **deviation（review 修复补记）**：Web 分享页的 openai 登录入口**暂不支持私有分享
+  授权**——服务端分享鉴权只认 zcode JWT，openai 身份（无 zcodejwttoken）登录后
+  `getZCodeJwtToken()` 返回 null，私有分享 preview 仍为未认证。分享页登录卡片已
+  明示该限制（`ConversationShareLandingPage.tsx` loginOpenAILimitationHint，中英
+  双语）；若后续分享服务端支持 openai owner 身份，先在本节补定义再放开文案。
 - 桌面与 CLI 的登录按钮/命令文案、图标（`oauthProviderIcon.tsx:5-11`，OpenAI
   图标先放简洁占位 svg，记入 deviations）、i18n（`packages/ui/src/i18n/locales/zh-CN.ts:789-800`
   一带与 en-US 对应处；CLI `apps/zcode-cli/packages/i18n/src/locales/`）同步补齐。
@@ -77,9 +82,9 @@ Cotaya（ZCode 的商业 fork，见 `UPSTREAM-SYNC.md`）现有登录身份域�
 - 再 `POST oauth/token`（form 同上，`redirect_uri` 参数用
   `https://auth.openai.com/deviceauth/callback`）换 token。
 
-端点常量（authorize/token/设备码/1455 回调/originator 指纹）收敛在 shared 新
-模块；env 覆盖：`OPENAI_OAUTH_CLIENT_ID`、`OPENAI_OAUTH_ORIGIN`、
-`OPENAI_CODEX_BASE_URL`。
+端点常量（authorize/token/设备码/1455 回调）收敛在 shared 新模块；env 覆盖：
+`OPENAI_OAUTH_CLIENT_ID`、`OPENAI_CODEX_BASE_URL`（originator/version 指纹头的
+env 覆盖见 §2.7 deviation 补记）。
 
 ### 2.3 身份域并存：互不删凭据、单一 active provider 指针
 
@@ -102,6 +107,11 @@ Cotaya（ZCode 的商业 fork，见 `UPSTREAM-SYNC.md`）现有登录身份域�
   补 openai key 段（`oauth:openai:*` 白名单 `oauth:openai:*`）。
 - `shouldClearZcodeJwtOnLogout`（`oauthCredentialRepo.ts:450-452`）不含 openai：
   openai 无 `zcodejwttoken`，登出不碰共享 JWT。
+- **CLI `cotaya logout` 按域清理**（review 修复补记）：按 `oauth:active_provider`
+  分域——active=openai 时仅清 `oauth:openai:*` 与指针（对齐 Desktop
+  `clearActiveSession` 语义，条件事务守护）；active=zai/bigmodel 或缺省时维持 z.ai
+  域清理（zai/bigmodel/zcodejwttoken/standalone coding-plan key），**不删
+  `oauth:openai:*`**。JSON 输出的 `provider` 字段反映实际清理的域（`openai`/`zai`）。
 
 ### 2.4 token 存储与刷新轮换
 
@@ -143,6 +153,12 @@ Cotaya（ZCode 的商业 fork，见 `UPSTREAM-SYNC.md`）现有登录身份域�
   openai 分支：active provider 为 openai 且请求命中
   `chatgpt.com/backend-api/codex`（按 `OPENAI_CODEX_BASE_URL` 解析 origin+path）
   且 authorization 为当前 openai access_token 时，401 视为当前凭据失效。
+  - **deviation（review 修复补记）**：codex 模型通道请求由 CLI 子进程自己的 HTTP
+    客户端发出，不经 host services 的 apiClient，因此该 openai 分支在桌面形态暂无
+    触发路径（分支代码保留，供后续经反向 RPC 错误通道接入）。实际失效清理由
+    refresh 失败路径等效承担（`openaiRequestAuthRefresher.onCredentialInvalid`，
+    验收场景 4 即测该路径）；codex 401 不主动清凭据，待真实账号 E2E 后再决定是否
+    打通 CLI → host 的 401 通知链路。
 - **失效动作**（在 OAuthService 会话变更队列内复核后执行，遵循
   `oauthUnauthorizedRequest.ts:20` 既有注释约束）：仅清 `oauth:openai:*` 与
   （若 active）置回未登录态；**z.ai 域凭据与 zcodejwttoken 不动**。派生清理走
@@ -172,8 +188,11 @@ Cotaya（ZCode 的商业 fork，见 `UPSTREAM-SYNC.md`）现有登录身份域�
 - 请求头：`Authorization: Bearer <access_token>`（动态，经请求鉴权下发）、
   `chatgpt-account-id: <chatgpt_account_id>`（动态，同上）、
   `originator: codex_cli_rs` 与 version 指纹头（**静态**，放 provider 规则
-  `api.headers`，即 `zcode-builtin.json` openai 账号登录 providerRule；env
-  `OPENAI_OAUTH_ORIGIN` 覆盖 originator）。
+  `api.headers`，即 `zcode-builtin.json` openai 账号登录 providerRule）。
+  - **deviation（review 修复补记）**：originator/version 仅以 zcode-builtin.json
+    静态值下发；原计划的 `OPENAI_OAUTH_ORIGIN` env 覆盖从未接线（运行时解析链
+    无消费方，已按未使用导出清理）。真实账号校准时如需覆盖能力，随 provider
+    规则校准一并提供。
 - provider 配置：`provider-data-schema.ts:30-62` access 联合新增
   `chatgpt-account{accountType:"openai"}`（不动 `zhipu-account` 语义）；
   `provider-config.ts:36-112` 旁新增对应 access 类；`zcode-builtin.json` 现有
@@ -278,21 +297,21 @@ flow 取消语义）；Web 端无 host OAuthService，由 Web auth 模块等价�
 
 ## 4. 接口清单（改动面）
 
-| 触点                                        | 现状（path:line，实测）                                                                                       | 改动                                                                 |
-| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| services·adapter                            | `packages/services/src/oauth/providers/providerAdapter.ts:19-39` 接口；工厂 `providers/index.ts:8-35`；参考 `zaiProviderAdapter.ts`/`bigmodelProviderAdapter.ts`；配置 `zaiProviderConfig.ts`/`bigmodelProviderConfig.ts`；`runtimeConfig.ts:34-37` | 新增 `openaiProviderAdapter.ts` + `openaiProviderConfig.ts`，工厂注册 |
-| services·流程                               | `oauthService.ts:594` startOAuthWithPolling、`:827` startOAuthInternal、`:866` handleCallback（state 校验）                     | loopback 回调并入 pendingState/handleCallback；设备码新增启动/轮询编排 |
-| services·身份域                             | `oauthService.ts:102-110` resolveInactiveOAuthProvider、`:379-436` persistOAuthSession（`:418` 条件 clearProvider）             | 按身份域返回 inactive；openai → null                                 |
-| services·恢复/登出                          | `oauthService.ts:182-269` restoreCachedSessionState（`:211-226` zcode JWT exp）、`:1049-1086` logout/logoutAll                  | openai 按 expires_at+refresh 恢复；登出仅清当前 active provider      |
-| services·401 识别                           | `oauthUnauthorizedRequest.ts:21-65`（`:34-35` provider 白名单）                                                               | 补 openai 分支（codex baseUrl + openai access_token 匹配）           |
-| services·凭据 repo                          | `repo/oauthCredentialRepo.ts:16` KNOWN_OAUTH_PROVIDER_IDS、`:24-34` key 构造、`:292-340` save/loadTokenSet、`:450-452` shouldClearZcodeJwtOnLogout | 加 openai key 段与 `expires_at` 读写；JWT 清理不含 openai            |
-| services·请求鉴权                           | `accountProviderRequestAuthService.ts:10-13` AccountRequestAuthMaterial、`:68-85` resolveCurrent（`:73-84` planKind 分支）      | openai 新分支返回 {apiKey, headers:{chatgpt-account-id}} + 主动刷新   |
-| services·投影/可用性                        | `accountProviderConnectionResolver.ts:94`（family 硬循环）、`codingPlanProviderAvailability.ts:129-163`、`providerProvisioningSource.ts:22-31` | family 加 openai；openai 以本地 token 有效性为 entitled；白名单加 `oauth:openai:*` |
-| provider·配置                               | `provider-data-schema.ts:30-62`（`:55-58` access 联合）、`provider-config.ts:36-112`、`config/provider/zcode-builtin.json:323-353`（openai api-key 模板，`:334` api.type、`:337-348` 模型清单）、`resolver.ts:360-363` family 排序 | 新增 `chatgpt-account{accountType:"openai"}` access 类与 `account:openai-plan` providerRule；api-key 模板不动 |
-| shared                                      | `oauth.ts:56-59` OAuthProviderId、`:133-138` OAuthTokenSet；`model-provider-family.ts:6-47`；`model-provider-types.ts:2-14`；`validationAppSettings.ts:57`；`provider-family-connection-selection.ts:18-23` | `OPENAI_PROVIDER_ID` + 能力声明（loopback/device/无 zcodejwttoken/支持 refresh）；OpenAI 端点常量新模块；各枚举/键加 openai |
-| 桌面 UI                                     | `WelcomeScreen.tsx:488-545`（按钮/排序）、`hooks/useOAuth.ts:71-127`（`:89-92` polling 白名单）、`root/useRootOAuthEffects.ts:237-320`（轮询）/`:322-409`（deep link）、`lib/oauthProviderIcon.tsx:5-11`、`settings/model-provider-section/constants.ts:31-106`、`i18n/locales/zh-CN.ts:789-800` + en-US 对应处 | OpenAI 登录入口、图标（占位 svg）、spec 条目（账号登录型，无购买卡）、i18n |
-| CLI                                         | `apps/zcode-cli/packages/cli/src/login-command.ts:7-84`（`:16` 枚举）、`packages/bootstrap/src/auth-login.ts:127-247`、`packages/adapters/src/auth/localhost-callback.ts:43-142`（`:119-125` listen(0) 随机端口）、`adapters/src/auth/bigmodel-oauth.ts`（precedent）、`cli/src/command-center/login-flow.ts:12-79`、`adapters/src/auth/shared-credentials.ts:15-24` | `login openai`；localhost-callback 参数化支持固定端口 1455；新增 `openai-oauth.ts` 薄客户端（端点常量从 @zcode/shared 引）；/login 新选项；凭据 key 同名；CLI i18n |
-| Web + server                                | `packages/web/src/auth/webAuthService.ts:86-100`（startLogin）、`zaiWebOAuthProvider.ts`（参考）、`browserOAuthCredentialRepo.ts:22` WebOAuthProviderId、`packages/web/src/main.tsx:170` onLogin；server 路由在 `packages/server/src/http.ts`（Hono 集中注册） | 新增 `openaiWebOAuthProvider.ts`（设备码）；WebOAuthProviderId 加 openai；OpenAI 端点经 server 新增小代理转发避 CORS（部署形态确认见 deviations） |
+| 触点                 | 现状（path:line，实测）                                                                                                                                                                                                                                                                                                                                              | 改动                                                                                                                                                               |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| services·adapter     | `packages/services/src/oauth/providers/providerAdapter.ts:19-39` 接口；工厂 `providers/index.ts:8-35`；参考 `zaiProviderAdapter.ts`/`bigmodelProviderAdapter.ts`；配置 `zaiProviderConfig.ts`/`bigmodelProviderConfig.ts`；`runtimeConfig.ts:34-37`                                                                                                                  | 新增 `openaiProviderAdapter.ts` + `openaiProviderConfig.ts`，工厂注册                                                                                              |
+| services·流程        | `oauthService.ts:594` startOAuthWithPolling、`:827` startOAuthInternal、`:866` handleCallback（state 校验）                                                                                                                                                                                                                                                          | loopback 回调并入 pendingState/handleCallback；设备码新增启动/轮询编排                                                                                             |
+| services·身份域      | `oauthService.ts:102-110` resolveInactiveOAuthProvider、`:379-436` persistOAuthSession（`:418` 条件 clearProvider）                                                                                                                                                                                                                                                  | 按身份域返回 inactive；openai → null                                                                                                                               |
+| services·恢复/登出   | `oauthService.ts:182-269` restoreCachedSessionState（`:211-226` zcode JWT exp）、`:1049-1086` logout/logoutAll                                                                                                                                                                                                                                                       | openai 按 expires_at+refresh 恢复；登出仅清当前 active provider                                                                                                    |
+| services·401 识别    | `oauthUnauthorizedRequest.ts:21-65`（`:34-35` provider 白名单）                                                                                                                                                                                                                                                                                                      | 补 openai 分支（codex baseUrl + openai access_token 匹配）                                                                                                         |
+| services·凭据 repo   | `repo/oauthCredentialRepo.ts:16` KNOWN_OAUTH_PROVIDER_IDS、`:24-34` key 构造、`:292-340` save/loadTokenSet、`:450-452` shouldClearZcodeJwtOnLogout                                                                                                                                                                                                                   | 加 openai key 段与 `expires_at` 读写；JWT 清理不含 openai                                                                                                          |
+| services·请求鉴权    | `accountProviderRequestAuthService.ts:10-13` AccountRequestAuthMaterial、`:68-85` resolveCurrent（`:73-84` planKind 分支）                                                                                                                                                                                                                                           | openai 新分支返回 {apiKey, headers:{chatgpt-account-id}} + 主动刷新                                                                                                |
+| services·投影/可用性 | `accountProviderConnectionResolver.ts:94`（family 硬循环）、`codingPlanProviderAvailability.ts:129-163`、`providerProvisioningSource.ts:22-31`                                                                                                                                                                                                                       | family 加 openai；openai 以本地 token 有效性为 entitled；白名单加 `oauth:openai:*`                                                                                 |
+| provider·配置        | `provider-data-schema.ts:30-62`（`:55-58` access 联合）、`provider-config.ts:36-112`、`config/provider/zcode-builtin.json:323-353`（openai api-key 模板，`:334` api.type、`:337-348` 模型清单）、`resolver.ts:360-363` family 排序                                                                                                                                   | 新增 `chatgpt-account{accountType:"openai"}` access 类与 `account:openai-plan` providerRule；api-key 模板不动                                                      |
+| shared               | `oauth.ts:56-59` OAuthProviderId、`:133-138` OAuthTokenSet；`model-provider-family.ts:6-47`；`model-provider-types.ts:2-14`；`validationAppSettings.ts:57`；`provider-family-connection-selection.ts:18-23`                                                                                                                                                          | `OPENAI_PROVIDER_ID` + 能力声明（loopback/device/无 zcodejwttoken/支持 refresh）；OpenAI 端点常量新模块；各枚举/键加 openai                                        |
+| 桌面 UI              | `WelcomeScreen.tsx:488-545`（按钮/排序）、`hooks/useOAuth.ts:71-127`（`:89-92` polling 白名单）、`root/useRootOAuthEffects.ts:237-320`（轮询）/`:322-409`（deep link）、`lib/oauthProviderIcon.tsx:5-11`、`settings/model-provider-section/constants.ts:31-106`、`i18n/locales/zh-CN.ts:789-800` + en-US 对应处                                                      | OpenAI 登录入口、图标（占位 svg）、spec 条目（账号登录型，无购买卡）、i18n                                                                                         |
+| CLI                  | `apps/zcode-cli/packages/cli/src/login-command.ts:7-84`（`:16` 枚举）、`packages/bootstrap/src/auth-login.ts:127-247`、`packages/adapters/src/auth/localhost-callback.ts:43-142`（`:119-125` listen(0) 随机端口）、`adapters/src/auth/bigmodel-oauth.ts`（precedent）、`cli/src/command-center/login-flow.ts:12-79`、`adapters/src/auth/shared-credentials.ts:15-24` | `login openai`；localhost-callback 参数化支持固定端口 1455；新增 `openai-oauth.ts` 薄客户端（端点常量从 @zcode/shared 引）；/login 新选项；凭据 key 同名；CLI i18n |
+| Web + server         | `packages/web/src/auth/webAuthService.ts:86-100`（startLogin）、`zaiWebOAuthProvider.ts`（参考）、`browserOAuthCredentialRepo.ts:22` WebOAuthProviderId、`packages/web/src/main.tsx:170` onLogin；server 路由在 `packages/server/src/http.ts`（Hono 集中注册）                                                                                                       | 新增 `openaiWebOAuthProvider.ts`（设备码）；WebOAuthProviderId 加 openai；OpenAI 端点经 server 新增小代理转发避 CORS（部署形态确认见 deviations）                  |
 
 ## 5. 验收场景
 

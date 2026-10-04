@@ -122,6 +122,12 @@ export interface LogoutZCodeCliOptions {
 
 export interface LogoutZCodeCliResult {
   credentialsPath: string;
+  /**
+   * 本次登出的身份域：`openai`（独立身份域，仅清 oauth:openai:* 与指针）或
+   * `zai`（z.ai 域整域登出，含 zai/bigmodel 与 standalone coding-plan key）。
+   * 按 active_provider 分域（spec openai-oauth-provider §2.3），供 CLI 输出使用。
+   */
+  provider: "openai" | "zai";
 }
 
 export async function hasConfiguredStandaloneCodingPlan(
@@ -428,6 +434,27 @@ export async function logoutZCodeCli(
 ): Promise<LogoutZCodeCliResult> {
   const credentialStore =
     options.credentialStore ?? createSharedZCodeCredentialStore({ env: options.env });
+  const activeProvider = (
+    await credentialStore.load(SHARED_ZCODE_CREDENTIAL_KEYS.activeProvider)
+  )?.trim();
+  if (activeProvider === OPENAI_PROVIDER_ID) {
+    // 按 active_provider 分域清理（spec openai-oauth-provider §2.3）：active=openai 时
+    // 仅清 oauth:openai:* 与指针，对齐 Desktop clearActiveSession 语义；z.ai 域凭据、
+    // zcodejwttoken 与 standalone coding-plan key 均不动。deleteManyIfValue 条件事务
+    // 保证读取后并发切换 provider 时不会误删新会话。
+    await credentialStore.deleteManyIfValue(
+      SHARED_ZCODE_CREDENTIAL_KEYS.activeProvider,
+      OPENAI_PROVIDER_ID,
+      [
+        SHARED_ZCODE_CREDENTIAL_KEYS.openaiAccessToken,
+        SHARED_ZCODE_CREDENTIAL_KEYS.openaiRefreshToken,
+        SHARED_ZCODE_CREDENTIAL_KEYS.openaiUserInfo,
+        SHARED_ZCODE_CREDENTIAL_KEYS.openaiExpiresAt,
+        SHARED_ZCODE_CREDENTIAL_KEYS.activeProvider,
+      ],
+    );
+    return { credentialsPath: credentialStore.filePath, provider: "openai" };
+  }
   const providerIds = (await readStandaloneCodingPlanProviders(options.env ?? process.env)).map(
     ({ providerId }) => providerId,
   );
@@ -445,7 +472,12 @@ export async function logoutZCodeCli(
       : [];
   });
   const keys = [
-    ...Object.values(SHARED_ZCODE_CREDENTIAL_KEYS),
+    // z.ai 域登出只清本域 key：openai 是独立身份域（spec openai-oauth-provider §2.3），
+    // 其凭据 key 与本域共用 SHARED_ZCODE_CREDENTIAL_KEYS 命名空间，但不得随 z.ai 域
+    // 登出被跨域删除（“反向亦然”）。
+    ...Object.entries(SHARED_ZCODE_CREDENTIAL_KEYS)
+      .filter(([name]) => !name.startsWith("openai"))
+      .map(([, key]) => key),
     ...identityKeys,
     ...dynamicApiKeyKeys,
   ];
@@ -457,6 +489,7 @@ export async function logoutZCodeCli(
   );
   return {
     credentialsPath: credentialStore.filePath,
+    provider: "zai",
   };
 }
 

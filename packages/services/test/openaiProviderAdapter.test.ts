@@ -12,12 +12,20 @@ import {
   OpenAIProviderAdapter,
   parseOpenAIIdTokenProfile,
 } from "../src/oauth/providers/openaiProviderAdapter.js";
-import {
-  isLoopbackPortInUseError,
-  startOpenAILoopbackCallbackServer,
-} from "../src/oauth/providers/openaiLoopbackCallbackServer.js";
+import { startOpenAILoopbackCallbackServer } from "../src/oauth/providers/openaiLoopbackCallbackServer.js";
 import { createOpenAIProviderRuntimeConfig } from "../src/oauth/providers/openaiProviderConfig.js";
 import { createOpenAIRequestAuthRefresher } from "../src/oauth/openaiRequestAuthRefresher.js";
+
+/** 判定 loopback 启动失败是否为端口占用：生产路径对所有 listen 错误统一降级设备码
+ *（见 oauthService.startOpenAIOAuth 注释），该判定只有测试断言需要，留在测试文件内。 */
+function isLoopbackPortInUseError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "EADDRINUSE"
+  );
+}
 
 interface ScriptedRoute {
   pathname: string;
@@ -383,11 +391,35 @@ test("loopback server：只应答回调路径、收 code 即停、端口占用�
 
   const callback = await fetch(`http://127.0.0.1:${server.port}/auth/callback?code=abc&state=st`);
   assert.equal(callback.status, 200);
+  const body = await callback.text();
+  assert.match(body, /OpenAI 登录成功/);
   await new Promise((resolve) => setTimeout(resolve, 50));
   assert.deepEqual(callbacks, [`http://localhost:${server.port}/auth/callback?code=abc&state=st`]);
   // 收到回调后 server 已停止监听。
   await assert.rejects(fetch(`http://127.0.0.1:${server.port}/auth/callback?code=2`));
   server.stop();
+
+  // 用户在授权页点取消：302 回调带 error=access_denied（无 code）时，浏览器侧必须回
+  // 中性“授权未完成”页（不能显示“登录成功”），onCallback 仍原样上报给应用侧校验。
+  {
+    const cancelled: string[] = [];
+    const cancelServer = await startOpenAILoopbackCallbackServer({
+      port: 0,
+      onCallback: (url) => cancelled.push(url),
+    });
+    const cancelledResponse = await fetch(
+      `http://127.0.0.1:${cancelServer.port}/auth/callback?error=access_denied`,
+    );
+    assert.equal(cancelledResponse.status, 200);
+    const cancelledBody = await cancelledResponse.text();
+    assert.match(cancelledBody, /授权未完成/);
+    assert.doesNotMatch(cancelledBody, /登录成功/);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.deepEqual(cancelled, [
+      `http://localhost:${cancelServer.port}/auth/callback?error=access_denied`,
+    ]);
+    cancelServer.stop();
+  }
 
   // 端口占用：同端口起第二个 server 必须 reject EADDRINUSE（触发设备码 fallback）。
   const holder = http.createServer(() => undefined);
@@ -482,4 +514,43 @@ test("requestAuthRefresher：60s 窗口主动刷新、single-flight、失效清�
   store.set("exp", String(nowMs - 1));
   assert.equal(await refresher.resolveRequestAuth(), null);
   assert.equal(invalidCalls.length, 1);
+});
+
+test("requestAuthRefresher：刷新在途期间凭据被清除时跳过写回，不复活已清凭据", async () => {
+  let nowMs = 1_000_000;
+  const store = new Map<string, string>();
+  const saved: string[] = [];
+  let loggedOutDuringRefresh = false;
+  const apiClient: ApiClient = {
+    async request() {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      // 模拟刷新返回前用户登出：磁盘上的 oauth:openai:* 已被清空。
+      loggedOutDuringRefresh = true;
+      return jsonResponse({ access_token: "at-new", refresh_token: "rt-new", expires_in: 3600 });
+    },
+  };
+  const refresher = createOpenAIRequestAuthRefresher({
+    apiClient,
+    env: {},
+    now: () => nowMs,
+    loadTokenSet: async () => {
+      if (loggedOutDuringRefresh) return null;
+      const accessToken = store.get("at");
+      return accessToken
+        ? { accessToken, refreshToken: "rt-1", expiresAt: Number(store.get("exp")) }
+        : null;
+    },
+    saveTokenSet: async (tokenSet) => {
+      saved.push(tokenSet.accessToken);
+      store.set("at", tokenSet.accessToken);
+    },
+    loadChatGPTAccountId: async () => "acct-1",
+  });
+  store.set("at", "at-1");
+  store.set("exp", String(nowMs + 30_000));
+
+  const material = await refresher.resolveRequestAuth();
+  // 刷新出的 access_token 仍可服务本次请求，但已清除的凭据不得写回（不凭空复活）。
+  assert.equal(material?.apiKey, "at-new");
+  assert.deepEqual(saved, []);
 });

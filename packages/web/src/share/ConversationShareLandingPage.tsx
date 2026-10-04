@@ -65,6 +65,11 @@ interface Copy {
   /** 每个 provider 的登录按钮文案与区域徽标，对齐桌面端 login.oauth.* 口径。 */
   loginWith: Record<WebOAuthProviderId, string>;
   loginRegion: Record<WebOAuthProviderId, string>;
+  /**
+   * openai 身份暂不支持私有分享授权（服务端分享鉴权只认 zcode JWT，spec §2.1
+   * deviation）：登录卡片上必须明示，避免用户登录 openai 后仍打不开分享且无解释。
+   */
+  loginOpenAILimitationHint: string;
   expiredTitle: string;
   expiredDescription: string;
   notFoundTitle: string;
@@ -108,6 +113,8 @@ const COPY: Record<ConversationShareLandingLocale, Copy> = {
       openai: "连接 OpenAI 继续使用",
     },
     loginRegion: { zai: "全球", bigmodel: "中国", openai: "ChatGPT 账号" },
+    loginOpenAILimitationHint:
+      "OpenAI 身份暂不支持私有分享授权。私有分享请使用 Z.ai 或 BigModel 账号打开。",
     expiredTitle: "分享已过期",
     expiredDescription: "这个分享链接已经过期，请让分享者重新生成链接。",
     notFoundTitle: "找不到分享内容",
@@ -146,6 +153,8 @@ const COPY: Record<ConversationShareLandingLocale, Copy> = {
       openai: "Connect to OpenAI",
     },
     loginRegion: { zai: "Global", bigmodel: "CN", openai: "ChatGPT" },
+    loginOpenAILimitationHint:
+      "OpenAI sign-in cannot yet authorize private shares. Use a Z.ai or BigModel account to open private shares.",
     expiredTitle: "Share expired",
     expiredDescription: "This share link has expired. Ask the author to create a new one.",
     notFoundTitle: "Share not found",
@@ -666,6 +675,11 @@ export function ConversationShareLandingStatus({
                 </span>
               </button>
             ))}
+            {/* openai 登录入口保留（spec §2.1），但私有分享授权暂不认 openai 身份：
+                卡片上明示限制，而不是让用户登录后再撞上“找不到分享”且无解释。 */}
+            <p className="pt-1 text-ui-sm leading-5 text-foreground-subtle">
+              {copy.loginOpenAILimitationHint}
+            </p>
           </div>
         ) : null}
         {canRetry || isNotFound ? (

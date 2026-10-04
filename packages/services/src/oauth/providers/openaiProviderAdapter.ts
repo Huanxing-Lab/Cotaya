@@ -324,7 +324,16 @@ export class OpenAIProviderAdapter implements OAuthProviderAdapter {
     const authorizationCode = readTrimmed(payload.authorization_code);
     const codeVerifier = readTrimmed(payload.code_verifier);
     if (!authorizationCode || !codeVerifier) {
-      throw new Error("OpenAI 设备码兑换响应无效：缺少 authorization_code 或 code_verifier");
+      // 2xx 但 payload 缺字段属协议终态失败：抛带 4xx status 的 ApiError，
+      // pollOpenAIDeviceCode 的 catch 才会按“流程自身失败”清 pending 并上抛；
+      // 普通 Error 会被归为瞬时失败空转到 challenge 过期（CLI/Web 同场景均立即终止）。
+      // status 422 是客户端侧分类标记，不是线上真实响应码。
+      throw new ApiError({
+        message: "OpenAI 设备码兑换响应无效：缺少 authorization_code 或 code_verifier",
+        url: OPENAI_DEVICE_AUTH_ENDPOINTS.tokenUrl,
+        method: "POST",
+        status: 422,
+      });
     }
     return { status: "ready", authorizationCode, codeVerifier };
   }

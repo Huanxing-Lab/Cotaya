@@ -69,6 +69,8 @@ interface PendingState {
   loopback?: {
     server: { stop(): void };
     callbackUrl: string | null;
+    /** flow 截止时刻；poll 侧据此向 UI 抛出过期错误（与 polling.expiresAt 同语义）。 */
+    expiresAt: number;
   };
   /** OpenAI 设备码 fallback：轮询编排所需的 challenge 信息。 */
   deviceCode?: OAuthDeviceCodeChallenge & { nextPollAt: number };
@@ -680,6 +682,22 @@ export class OAuthService implements IOAuthService {
       return null;
     }
 
+    // openai（usesZcodeJwtToken=false 的身份域）没有远端 userinfo 端点：用户信息内联在
+    // id_token，登录时已随 user_info 落盘。这里若仍走 fetchUserInfo 远端校验，state 为空
+    // 的缓存 miss 只能拿到占位 profile，saveActiveUserProfile 会用它覆盖落盘的
+    // chatgpt_account_id（loadChatGPTAccountId 与 chatgpt-account-id 请求头的来源），
+    // 因此直接返回 repo 缓存 profile，不做远端校验。
+    if (getOAuthProviderCapabilities(activeProvider)?.usesZcodeJwtToken === false) {
+      const cachedProfile = await this.repo.loadUserProfile(activeProvider);
+      if (!cachedProfile) {
+        log("restoreSession failed: missing cached profile, logging out:", activeProvider);
+        await this.logout();
+        return null;
+      }
+      log("restoreSession restored from cached profile:", activeProvider, cachedProfile.id);
+      return toUserInfo(cachedProfile);
+    }
+
     try {
       log("restoreSession validating token with provider userinfo endpoint:", activeProvider);
       const profile = await this.runWithAdapterError(adapter, () =>
@@ -840,6 +858,12 @@ export class OAuthService implements IOAuthService {
     if (pending?.loopback) {
       const callbackUrl = pending.loopback.callbackUrl;
       if (!callbackUrl) {
+        // loopback 超时经 poll 侧过期检查抛出（server 已由超时定时器停止）：与
+        // zai/bigmodel polling 的过期分支一致，不能永远返回 null 让 UI 停在“等待认证”。
+        if (this.now() >= pending.loopback.expiresAt) {
+          this.clearPendingState();
+          throw new Error("OAuth flow 已过期");
+        }
         return null;
       }
       pending.loopback.callbackUrl = null;
@@ -1096,8 +1120,9 @@ export class OAuthService implements IOAuthService {
     });
 
     const state = randomBytes(32).toString("hex");
+    let server: Awaited<ReturnType<typeof deviceCodeAdapter.startLoopbackCallbackServer>>;
     try {
-      const server = await deviceCodeAdapter.startLoopbackCallbackServer((url) => {
+      server = await deviceCodeAdapter.startLoopbackCallbackServer((url) => {
         const pending = this.pendingState;
         // 只记录仍指向同一 pending 的回调；state 校验交给 handleCallback。
         if (
@@ -1108,17 +1133,37 @@ export class OAuthService implements IOAuthService {
           pending.loopback.callbackUrl = url;
         }
       });
-      const timeout = setTimeout(() => {
-        if (this.pendingState?.state === state) {
-          this.clearPendingState();
-        }
+    } catch (loopbackError) {
+      // 端口被占（EADDRINUSE）→ 设备码 fallback；其他启动错误也走 fallback 并记录原因，
+      // 让用户至少还有一个可完成的登录通道。
+      serviceLog.warn("openai loopback server unavailable, falling back to device code", {
+        error: loopbackError instanceof Error ? loopbackError.message : String(loopbackError),
+      });
+      return this.startOpenAIDeviceCodeFlow(adapter, deviceCodeAdapter, state);
+    }
+
+    // server 已监听 1455：后续步骤失败必须先释放 server 与定时器再降级，否则泄漏的
+    // server 会占住 1455 让后续登录永远静默降级设备码，残留定时器还可能清掉新 flow
+    // 的 pending（两条流程共用同一 state 字符串）。
+    let timeout: NodeJS.Timeout | undefined;
+    try {
+      timeout = setTimeout(() => {
+        // 超时只负责释放 1455 端口；pending 保留给 pollPendingOAuth 的过期分支向 UI
+        // 抛出超时错误（与 zai/bigmodel polling 的“OAuth flow 已过期”语义一致），
+        // 不能再静默清掉——那会让 UI 永远停在“等待认证”。pending 由 poll 侧过期
+        // 分支或下一次登录/cancel 清理。
+        server.stop();
       }, OAUTH_TIMEOUT_MS);
       this.pendingState = {
         state,
         provider: OPENAI_PROVIDER_ID,
         timeout,
         phase: "awaiting-attribution-or-code",
-        loopback: { server, callbackUrl: null },
+        loopback: {
+          server,
+          callbackUrl: null,
+          expiresAt: this.now() + OAUTH_TIMEOUT_MS,
+        },
       };
       const authorizeUrl = adapter.buildAuthorizeUrl({
         providerId: adapter.providerId,
@@ -1129,11 +1174,17 @@ export class OAuthService implements IOAuthService {
       serviceLog.info("openai loopback OAuth flow started", { port: server.port });
       return { provider: OPENAI_PROVIDER_ID, authorizeUrl, state };
     } catch (loopbackError) {
-      // 端口被占（EADDRINUSE）→ 设备码 fallback；其他启动错误也走 fallback 并记录原因，
-      // 让用户至少还有一个可完成的登录通道。
-      serviceLog.warn("openai loopback server unavailable, falling back to device code", {
-        error: loopbackError instanceof Error ? loopbackError.message : String(loopbackError),
-      });
+      clearTimeout(timeout);
+      server.stop();
+      if (this.pendingState?.state === state) {
+        this.pendingState = null;
+      }
+      serviceLog.warn(
+        "openai loopback flow failed after server start, falling back to device code",
+        {
+          error: loopbackError instanceof Error ? loopbackError.message : String(loopbackError),
+        },
+      );
       return this.startOpenAIDeviceCodeFlow(adapter, deviceCodeAdapter, state);
     }
   }

@@ -355,6 +355,40 @@ test("设备码 410 过期：清 pending 并抛出可重试错误", async () => 
   assert.equal(await service.pollPendingOAuth(), null);
 });
 
+test("设备码 2xx 但 payload 无效：按终态失败上抛，不空转到 challenge 过期", async () => {
+  const credentialService = new MemoryCredentialService();
+  const apiClient: ApiClient = {
+    async request(input: string | URL) {
+      const url = new URL(input.toString());
+      if (url.pathname === "/api/accounts/deviceauth/usercode") {
+        return jsonResponse({
+          device_auth_id: "da-1",
+          user_code: "WDJB-MJHT",
+          interval: 1,
+          expires_in: 900,
+        });
+      }
+      if (url.pathname === "/api/accounts/deviceauth/token") {
+        // 2xx 但缺 authorization_code/code_verifier：协议终态失败（adapter 抛带
+        // 4xx status 的 ApiError），不能按瞬时错误空转轮询到 challenge 过期。
+        return jsonResponse({});
+      }
+      return jsonResponse({ error: "no route" }, 404);
+    },
+  };
+  let nowMs = 1_000_000;
+  const { service } = createService(credentialService, apiClient, {
+    loopbackMode: "busy",
+    now: () => nowMs,
+  });
+  await service.startOAuthWithPolling(OPENAI_PROVIDER_ID);
+  await assert.rejects(service.pollPendingOAuth(), /authorization_code|code_verifier/);
+  // 终态失败已清 pending，后续轮询为空（而非反复重试同一无效响应）。
+  assert.equal(await service.pollPendingOAuth(), null);
+  nowMs += 2_000;
+  assert.equal(await service.pollPendingOAuth(), null);
+});
+
 test("启动恢复：未过期直接恢复；过期走 refresh；失效仅清 openai 域", async () => {
   // (a) 未过期 → authenticated。
   {
@@ -445,4 +479,43 @@ test("openai 登出：仅清 openai 域与 active 指针", async () => {
   assert.equal(credentialService.store.get("oauth:openai:expires_at"), undefined);
   assert.equal(credentialService.store.get("oauth:zai:access_token"), "zai-at-old");
   assert.equal(credentialService.store.get("zcodejwttoken"), "zcode-jwt-old");
+});
+
+test("loopback 超时经 poll 侧抛出过期错误，不再静默清 pending 卡住 UI", async () => {
+  const credentialService = new MemoryCredentialService();
+  const apiClient = createOpenAITokenApiClient({});
+  let nowMs = 1_000_000;
+  const { service, openAIAdapter } = createService(credentialService, apiClient, {
+    now: () => nowMs,
+  });
+  const start = await service.startOAuthWithPolling(OPENAI_PROVIDER_ID);
+  assert.equal(start.deviceCode, undefined);
+
+  // 未超时且无回调：返回 null 继续等待（既有语义）。
+  assert.equal(await service.pollPendingOAuth(), null);
+
+  // 越过 5 分钟 deadline：与 zai/bigmodel polling 一致抛出过期错误，pending 清空。
+  nowMs += 5 * 60_000 + 1;
+  await assert.rejects(service.pollPendingOAuth(), /过期/);
+  assert.equal(await service.pollPendingOAuth(), null);
+  // 测试内主动释放随机端口 server（真实超时定时器为 5 分钟，不等它触发）。
+  openAIAdapter.lastServers.at(-1)!.stop();
+});
+
+test("restoreSession 对 openai 返回缓存 profile，不用占位 profile 覆盖 user_info", async () => {
+  const credentialService = new MemoryCredentialService();
+  const apiClient = createOpenAITokenApiClient({});
+  const { service, openAIAdapter } = createService(credentialService, apiClient);
+  await loginOpenAI(service, openAIAdapter);
+
+  // openai 无远端 userinfo 端点：restoreSession 必须直接返回落盘的 user_info，
+  // 否则 fetchUserInfo 的 state 空缓存 miss 会用 {id:"unknown"} 占位覆盖
+  // chatgpt_account_id（chatgpt-account-id 请求头的来源）。
+  const restored = await createService(credentialService, apiClient).service.restoreSession();
+  assert.equal(restored?.id, "chatgpt-acct-1");
+  assert.equal(restored?.username, "chatgpt-user@example.com");
+  const userInfo = JSON.parse(credentialService.store.get("oauth:openai:user_info")!) as {
+    id: string;
+  };
+  assert.equal(userInfo.id, "chatgpt-acct-1");
 });

@@ -21,8 +21,9 @@ export function pickProductEndpointEnv(
     "ZAI_OAUTH_APP_ID",
     // OpenAI OAuth 公开覆盖项，与 z.ai 端点共用同一 env pick 入口，
     // 使构建期 define（__ZCODE_ENDPOINT_ENV__）与运行时 process.env 行为一致。
+    // originator/version 指纹头无 env 覆盖（spec §2.7 deviation：仅 zcode-builtin.json
+    // 静态下发），不得在此收集无人消费的 OPENAI_OAUTH_ORIGIN 让用户误以为覆盖生效。
     "OPENAI_OAUTH_CLIENT_ID",
-    "OPENAI_OAUTH_ORIGIN",
     "OPENAI_CODEX_BASE_URL",
   ];
   return Object.fromEntries(

@@ -174,7 +174,9 @@ export async function runLogoutCommand(
       ctx.stdout.write(
         formatJson({
           status: "logged_out",
-          provider: "zai",
+          // 登出按 active_provider 分域：openai 域仅清 oauth:openai:*；zai 表示
+          // z.ai 域整域登出（zai/bigmodel + standalone coding-plan key）。
+          provider: result.provider,
           credentialsPath: result.credentialsPath,
         }),
       );
@@ -182,7 +184,9 @@ export async function runLogoutCommand(
     }
 
     ctx.stdout.write(
-      `Logged out from Coding Plan accounts. Credentials: ${result.credentialsPath}\n`,
+      result.provider === "openai"
+        ? `Logged out from OpenAI account. Credentials: ${result.credentialsPath}\n`
+        : `Logged out from Coding Plan accounts. Credentials: ${result.credentialsPath}\n`,
     );
     return 0;
   } catch (error) {

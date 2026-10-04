@@ -17,6 +17,16 @@ export interface OpenAILoopbackCallbackServerOptions {
 
 const CALLBACK_PATH = "/auth/callback";
 
+/** 浏览器侧结果页：成功/未完成必须与 query 事实一致，见下方回调处理注释。 */
+const SUCCESS_PAGE_HTML =
+  '<!doctype html><html><head><meta charset="utf-8"><title>Cotaya</title></head>' +
+  '<body style="font-family:system-ui;padding:48px;text-align:center">' +
+  "<h2>OpenAI 登录成功</h2><p>请返回 Cotaya 继续使用。</p></body></html>";
+const INCOMPLETE_PAGE_HTML =
+  '<!doctype html><html><head><meta charset="utf-8"><title>Cotaya</title></head>' +
+  '<body style="font-family:system-ui;padding:48px;text-align:center">' +
+  "<h2>授权未完成</h2><p>请返回 Cotaya 重新发起登录。</p></body></html>";
+
 /**
  * 启动只服务本次登录的 loopback HTTP server（RFC 8252 语义）。
  *
@@ -44,29 +54,33 @@ export function startOpenAILoopbackCallbackServer(
 
     const server = createServer((request, response) => {
       const requestUrl = request.url ?? "";
-      let pathname = "";
+      let callbackUrl: URL | null = null;
       try {
-        pathname = new URL(requestUrl, `http://127.0.0.1:${boundPort}`).pathname;
+        callbackUrl = new URL(requestUrl, `http://127.0.0.1:${boundPort}`);
       } catch {
-        pathname = "";
+        callbackUrl = null;
       }
 
-      if (request.method !== "GET" || pathname !== CALLBACK_PATH) {
+      if (request.method !== "GET" || callbackUrl?.pathname !== CALLBACK_PATH) {
         response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
         response.end("Not Found");
         return;
       }
 
+      // 浏览器结果页必须与 query 事实一致（判定口径同 parseCallbackParams）：
+      // 同时带 code 与 state 才是授权完成；用户在授权页点取消时 OpenAI 会 302 回
+      // 本回调并带 error=access_denied（无 code），此时只能回中性“未完成”页，
+      // 不能仍显示“登录成功”——否则同一次操作浏览器与应用两侧给出相反结论。
+      // onCallback 仍原样上报完整 URL，state/code 校验继续留给 handleCallback。
+      const completed =
+        Boolean(callbackUrl.searchParams.get("code")?.trim()) &&
+        Boolean(callbackUrl.searchParams.get("state")?.trim());
       // 先回浏览器再停 server：授权码一次性，收到即结束监听。
       response.writeHead(200, {
         "Content-Type": "text/html; charset=utf-8",
         Connection: "close",
       });
-      response.end(
-        '<!doctype html><html><head><meta charset="utf-8"><title>Cotaya</title></head>' +
-          '<body style="font-family:system-ui;padding:48px;text-align:center">' +
-          "<h2>OpenAI 登录成功</h2><p>请返回 Cotaya 继续使用。</p></body></html>",
-      );
+      response.end(completed ? SUCCESS_PAGE_HTML : INCOMPLETE_PAGE_HTML);
       stop();
       try {
         // 回调 URL 与 OpenAI 注册的 redirect_uri 形态一致（localhost + 实际监听端口）。
@@ -93,14 +107,4 @@ export function startOpenAILoopbackCallbackServer(
       });
     });
   });
-}
-
-/** 判断 loopback 启动失败是否为端口占用（用于触发设备码 fallback）。 */
-export function isLoopbackPortInUseError(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { code?: unknown }).code === "EADDRINUSE"
-  );
 }

@@ -5,11 +5,7 @@
  * OAuth 回调监听在 Root/App 常驻层，不在此 hook 中。
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import type {
-  OAuthDeviceCodeStartInfo,
-  OAuthProviderId,
-  OAuthProviderMeta,
-} from "@zcode/shared";
+import type { OAuthDeviceCodeStartInfo, OAuthProviderId, OAuthProviderMeta } from "@zcode/shared";
 import {
   getOAuthProviderCapabilities,
   isCredentialDecryptError,

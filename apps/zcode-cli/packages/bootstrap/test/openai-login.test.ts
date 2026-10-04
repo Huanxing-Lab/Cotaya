@@ -12,7 +12,7 @@ import {
   OPENAI_OAUTH_TOKEN_URL,
 } from "@zcode/shared";
 import type { SharedZCodeCredentialStore } from "@zcode/adapters/auth";
-import { loginOpenAICli } from "../src/auth-login.js";
+import { loginOpenAICli, logoutZCodeCli } from "../src/auth-login.js";
 import { createStandaloneProviderRuntimeHeadersPort } from "../src/app/standalone-account-provider-runtime.js";
 
 // zcode-builtin.json 提供 account:openai-plan 规则；登录后的默认模型选择依赖它。
@@ -151,6 +151,12 @@ function createFakeCredentialStore(initial: Record<string, string> = {}): {
     async saveMany(entries) {
       Object.assign(storeRecord, entries);
       Object.assign(saved, entries);
+    },
+    async saveManyIfValue(guardKey, expectedGuardValue, entries) {
+      if (storeRecord[guardKey] !== expectedGuardValue) return false;
+      Object.assign(storeRecord, entries);
+      Object.assign(saved, entries);
+      return true;
     },
     async saveReplacing(key, value, replacedKeys) {
       storeRecord[key] = value;
@@ -379,4 +385,91 @@ test("standalone headers port：refresh 失效仅清 openai 域凭据与 active 
   // z.ai 域凭据与共享 JWT 不动。
   assert.equal(fake.store["oauth:bigmodel:access_token"], "bigmodel-token");
   assert.equal(fake.store["zcodejwttoken"], "jwt-1");
+});
+
+test("logoutZCodeCli 按 active_provider 分域清理：active=openai 仅清 openai 域与指针", async () => {
+  const fake = createFakeCredentialStore({
+    "oauth:active_provider": "openai",
+    "oauth:bigmodel:access_token": "bigmodel-token",
+    "oauth:openai:access_token": "access-1",
+    "oauth:openai:expires_at": String(Date.now() + 60_000),
+    "oauth:openai:refresh_token": "refresh-1",
+    "oauth:openai:user_info": JSON.stringify({ id: "acct-123" }),
+    "oauth:zai:access_token": "zai-token",
+    zcodejwttoken: "jwt-1",
+  });
+  const result = await logoutZCodeCli({ credentialStore: fake.credentialStore, env: {} });
+  assert.equal(result.provider, "openai");
+  assert.equal(fake.store["oauth:openai:access_token"], undefined);
+  assert.equal(fake.store["oauth:openai:refresh_token"], undefined);
+  assert.equal(fake.store["oauth:openai:user_info"], undefined);
+  assert.equal(fake.store["oauth:openai:expires_at"], undefined);
+  assert.equal(fake.store["oauth:active_provider"], undefined);
+  // 反向亦然（spec §2.3）：openai 域登出不得删 z.ai 域凭据与共享 JWT。
+  assert.equal(fake.store["oauth:zai:access_token"], "zai-token");
+  assert.equal(fake.store["oauth:bigmodel:access_token"], "bigmodel-token");
+  assert.equal(fake.store["zcodejwttoken"], "jwt-1");
+});
+
+test("logoutZCodeCli active=zai 维持 z.ai 域清理，不跨域删 openai 凭据", async () => {
+  const fake = createFakeCredentialStore({
+    "oauth:active_provider": "zai",
+    "oauth:openai:access_token": "access-1",
+    "oauth:openai:refresh_token": "refresh-1",
+    "oauth:zai:access_token": "zai-token",
+    zcodejwttoken: "jwt-1",
+  });
+  const result = await logoutZCodeCli({
+    credentialStore: fake.credentialStore,
+    env: { [ZCODE_BUILTIN_PROVIDER_CONFIG_FILE_ENV]: BUILTIN_CONFIG_PATH },
+  });
+  assert.equal(result.provider, "zai");
+  assert.equal(fake.store["oauth:zai:access_token"], undefined);
+  assert.equal(fake.store["zcodejwttoken"], undefined);
+  // openai 是独立身份域：z.ai 域登出不删 openai 凭据，可再直接切回。
+  assert.equal(fake.store["oauth:openai:access_token"], "access-1");
+  assert.equal(fake.store["oauth:openai:refresh_token"], "refresh-1");
+});
+
+test("standalone headers port：刷新在途期间登出（凭据被清）时跳过写回，不复活凭据", async () => {
+  const fake = createFakeCredentialStore({
+    "oauth:openai:access_token": "access-1",
+    "oauth:openai:expires_at": String(Date.now() + 30_000), // 60s 主动刷新窗口内
+    "oauth:openai:refresh_token": "refresh-1",
+    "oauth:openai:user_info": JSON.stringify({ id: "acct-123" }),
+  });
+  const client: HttpClientPort = {
+    async request(request: HttpClientRequest): Promise<HttpClientResponse> {
+      // 刷新响应返回前模拟另一进程登出：openai 域 key 已被清空。
+      delete fake.store["oauth:openai:access_token"];
+      delete fake.store["oauth:openai:refresh_token"];
+      delete fake.store["oauth:openai:expires_at"];
+      const payload = { access_token: "access-2", refresh_token: "refresh-2", expires_in: 3600 };
+      const bytes = new TextEncoder().encode(JSON.stringify(payload));
+      return {
+        body: bytes,
+        bytes: bytes.byteLength,
+        durationMs: 0,
+        headers: { "content-type": "application/json" },
+        status: 200,
+        statusText: "",
+        url: request.url,
+      };
+    },
+  };
+  const port = createStandaloneProviderRuntimeHeadersPort(fake.credentialStore, {}, {
+    httpClient: client,
+    now: Date.now,
+  });
+  const result = await port.refreshBeforeModelRequest({
+    accountAccess: { accountType: "openai", entitled: true, type: "chatgpt-account" },
+    attempt: 1,
+    providerId: "account:openai-plan",
+    reason: "model-request",
+  });
+  // 刷新出的 access_token 仍服务本次请求；条件事务守护下已清除的凭据不被写回复活。
+  assert.equal(result.requestAuth?.apiKey, "access-2");
+  assert.equal(fake.store["oauth:openai:access_token"], undefined);
+  assert.equal(fake.store["oauth:openai:refresh_token"], undefined);
+  assert.equal(fake.store["oauth:openai:expires_at"], undefined);
 });

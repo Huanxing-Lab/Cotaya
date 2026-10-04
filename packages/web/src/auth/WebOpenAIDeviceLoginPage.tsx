@@ -170,7 +170,13 @@ export function WebOpenAIDeviceLoginPanel({
               <span className="size-3 animate-spin rounded-full border-2 border-border border-t-primary" />
               {copy.openAIDeviceWaiting}
             </div>
-            <Button type="button" variant="secondary" size="lg" className="mt-3 w-full" onClick={handleCancel}>
+            <Button
+              type="button"
+              variant="secondary"
+              size="lg"
+              className="mt-3 w-full"
+              onClick={handleCancel}
+            >
               {copy.cancelAction}
             </Button>
           </>
@@ -178,7 +184,9 @@ export function WebOpenAIDeviceLoginPanel({
 
         {phase.kind === "success" && (
           <>
-            <h1 className="text-ui-lg font-medium text-foreground">{copy.openAIDeviceSuccessTitle}</h1>
+            <h1 className="text-ui-lg font-medium text-foreground">
+              {copy.openAIDeviceSuccessTitle}
+            </h1>
             <p className="mt-2 text-ui-xs leading-6 text-foreground-subtle">
               {phase.userInfo.displayName || phase.userInfo.username}
             </p>
@@ -193,12 +201,20 @@ export function WebOpenAIDeviceLoginPanel({
             <div className="mb-4 flex size-10 items-center justify-center rounded-lg bg-destructive text-ui-xs font-medium text-destructive-foreground">
               !
             </div>
-            <h1 className="text-ui-lg font-medium text-foreground">{copy.openAIDeviceFailedTitle}</h1>
+            <h1 className="text-ui-lg font-medium text-foreground">
+              {copy.openAIDeviceFailedTitle}
+            </h1>
             <p className="mt-3 rounded-lg border border-border bg-surface px-3 py-2 text-ui-xs leading-5 text-foreground-subtle">
               {phase.message}
             </p>
             <div className="mt-5 flex gap-2">
-              <Button type="button" variant="secondary" size="lg" className="flex-1" onClick={handleCancel}>
+              <Button
+                type="button"
+                variant="secondary"
+                size="lg"
+                className="flex-1"
+                onClick={handleCancel}
+              >
                 {copy.cancelAction}
               </Button>
               <Button type="button" size="lg" className="flex-1" onClick={handleRetry}>

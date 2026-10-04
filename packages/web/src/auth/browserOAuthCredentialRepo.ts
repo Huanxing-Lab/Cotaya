@@ -33,7 +33,9 @@ export type WebOAuthProviderId =
   | typeof OPENAI_PROVIDER_ID;
 
 function isWebOAuthProviderId(value: unknown): value is WebOAuthProviderId {
-  return value === ZAI_PROVIDER_ID || value === BIGMODEL_PROVIDER_ID || value === OPENAI_PROVIDER_ID;
+  return (
+    value === ZAI_PROVIDER_ID || value === BIGMODEL_PROVIDER_ID || value === OPENAI_PROVIDER_ID
+  );
 }
 
 /** openai 设备码流程的 pending 记录：页面刷新后仍可继续轮询直到过期。 */

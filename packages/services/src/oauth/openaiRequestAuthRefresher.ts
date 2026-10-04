@@ -61,6 +61,15 @@ export function createOpenAIRequestAuthRefresher(
             redirectUri: adapter.redirectUri,
             now,
           });
+          // 写回前复核会话事实（对齐 OAuthService.refreshToken 的复核语义）：刷新在途
+          // 期间用户可能已登出或完成新登录，直接写回会凭空复活已清除的凭据、或覆盖
+          // 更新的轮换结果。openai 材料解析不依赖 active_provider（切到 z.ai 域后仍可
+          // 用 openai 模型，轮换结果本就应落盘），因此只复核 access_token 快照一致性。
+          const current = await options.loadTokenSet();
+          if (current?.accessToken !== tokenSet.accessToken) {
+            log.info("openai refresh write-back skipped; credential changed during refresh");
+            return refreshed;
+          }
           await options.saveTokenSet(refreshed);
           return refreshed;
         } catch (error) {

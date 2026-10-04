@@ -213,7 +213,14 @@ export interface StandaloneProviderRuntimeHeadersPortOptions {
 }
 
 export function createStandaloneProviderRuntimeHeadersPort(
-  credentialStore: Pick<SharedZCodeCredentialStore, "load" | "loadMany" | "saveMany" | "delete" | "deleteIfValue">,
+  credentialStore: Pick<
+    SharedZCodeCredentialStore,
+    | "load"
+    | "loadMany"
+    | "deleteIfValue"
+    | "deleteManyIfValue"
+    | "saveManyIfValue"
+  >,
   env: Readonly<Record<string, string | undefined>>,
   options: StandaloneProviderRuntimeHeadersPortOptions = {},
 ): ProviderRuntimeHeadersPort {
@@ -318,28 +325,50 @@ export function createStandaloneProviderRuntimeHeadersPort(
 
 /** openai 域 standalone 刷新：轮换后的 token 对写回凭据文件；失效时仅清 openai 域 key。 */
 async function refreshOpenAIStandaloneTokens(
-  credentialStore: Pick<SharedZCodeCredentialStore, "saveMany" | "delete" | "deleteIfValue">,
+  credentialStore: Pick<
+    SharedZCodeCredentialStore,
+    "saveManyIfValue" | "deleteManyIfValue" | "deleteIfValue"
+  >,
   options: StandaloneProviderRuntimeHeadersPortOptions,
   refreshToken: string,
 ): Promise<{ accessToken: string; expiresAt: number } | null> {
   const httpClient = options.httpClient ?? createDefaultOAuthHttpClient(options.env ?? {});
   try {
-    const refreshed = await refreshOpenAITokenSet({ httpClient, refreshToken });
-    await credentialStore.saveMany({
-      [SHARED_ZCODE_CREDENTIAL_KEYS.openaiAccessToken]: refreshed.accessToken,
-      // refresh_token 一次性轮换：新值必须替换旧值并持久化。
-      [SHARED_ZCODE_CREDENTIAL_KEYS.openaiRefreshToken]: refreshed.refreshToken,
-      [SHARED_ZCODE_CREDENTIAL_KEYS.openaiExpiresAt]: String(refreshed.expiresAt),
+    const refreshed = await refreshOpenAITokenSet({
+      env: options.env,
+      httpClient,
+      refreshToken,
     });
+    // 写回用条件事务守护（对齐 deleteManyIfValue 的 guard 语义）：refresh_token 一次性
+    // 轮换，仅当磁盘上的旧 refresh_token 仍等于本次消费的值时才写回。刷新在途期间
+    // 用户登出（key 已清）或另一进程先完成轮换时跳过写回，不复活已清除的凭据、
+    // 不覆盖更新的轮换结果；本次请求仍可用刚刷新出的 access_token。
+    await credentialStore.saveManyIfValue(
+      SHARED_ZCODE_CREDENTIAL_KEYS.openaiRefreshToken,
+      refreshToken,
+      {
+        [SHARED_ZCODE_CREDENTIAL_KEYS.openaiAccessToken]: refreshed.accessToken,
+        // refresh_token 一次性轮换：新值必须替换旧值并持久化。
+        [SHARED_ZCODE_CREDENTIAL_KEYS.openaiRefreshToken]: refreshed.refreshToken,
+        [SHARED_ZCODE_CREDENTIAL_KEYS.openaiExpiresAt]: String(refreshed.expiresAt),
+      },
+    );
     return { accessToken: refreshed.accessToken, expiresAt: refreshed.expiresAt };
   } catch (error) {
     if (error instanceof OpenAIRefreshTokenInvalidError) {
-      // 失效动作只清 openai 域（spec §2.5）：z.ai 域凭据与 zcodejwttoken 不动；
-      // active_provider 仅在仍指向 openai 时移除。
-      await credentialStore.delete(SHARED_ZCODE_CREDENTIAL_KEYS.openaiAccessToken);
-      await credentialStore.delete(SHARED_ZCODE_CREDENTIAL_KEYS.openaiRefreshToken);
-      await credentialStore.delete(SHARED_ZCODE_CREDENTIAL_KEYS.openaiExpiresAt);
-      await credentialStore.delete(SHARED_ZCODE_CREDENTIAL_KEYS.openaiUserInfo);
+      // 失效动作只清 openai 域（spec §2.5）：z.ai 域凭据与 zcodejwttoken 不动。
+      // 条件事务保证只清理仍指向本次消费的旧 refresh_token 的凭据，避免误删刷新
+      // 在途期间完成的新登录；active_provider 仅在仍指向 openai 时移除。
+      await credentialStore.deleteManyIfValue(
+        SHARED_ZCODE_CREDENTIAL_KEYS.openaiRefreshToken,
+        refreshToken,
+        [
+          SHARED_ZCODE_CREDENTIAL_KEYS.openaiAccessToken,
+          SHARED_ZCODE_CREDENTIAL_KEYS.openaiRefreshToken,
+          SHARED_ZCODE_CREDENTIAL_KEYS.openaiExpiresAt,
+          SHARED_ZCODE_CREDENTIAL_KEYS.openaiUserInfo,
+        ],
+      );
       await credentialStore.deleteIfValue(SHARED_ZCODE_CREDENTIAL_KEYS.activeProvider, "openai");
       return null;
     }

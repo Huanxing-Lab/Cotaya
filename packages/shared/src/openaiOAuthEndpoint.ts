@@ -6,9 +6,9 @@
  * 避免各端各写一份导致行为漂移。env 覆盖沿用 zcodeEndpoint.ts 的
  * readProductEndpointEnv 惯例（构建期 define + 运行时 process.env）。
  *
- * 注意：OPENAI_OAUTH_ORIGIN 覆盖的是模型通道请求头 originator 的值（见 spec
- * openai-oauth-provider §2.7），不是 auth.openai.com 授权端点；授权端点为
- * OpenAI 侧固定部署，不提供 env 覆盖。
+ * 注意：模型通道的 originator/version 指纹头是静态值，随 provider 规则
+ * （zcode-builtin.json 的 api.headers）下发，本模块不提供运行时 env 覆盖；
+ * 授权端点为 OpenAI 侧固定部署，同样不提供 env 覆盖。
  */
 
 import { readProductEndpointEnv } from "./zcodeEndpoint.js";
@@ -58,20 +58,9 @@ export const OPENAI_ACCESS_TOKEN_DEFAULT_TTL_SECONDS = 3600;
 /** 过期前 60 秒主动刷新（触发点在请求鉴权 resolveCurrent，单一刷新路径）。 */
 export const OPENAI_REFRESH_BEFORE_EXPIRY_MS = 60_000;
 
-/** 模型通道静态指纹头 originator 的默认值，env OPENAI_OAUTH_ORIGIN 可覆盖。 */
-export const DEFAULT_OPENAI_CODEX_ORIGINATOR = "codex_cli_rs";
-
-/**
- * 模型通道静态指纹头 version：OpenAI 后端按客户端版本门控模型
- * （catalog minimal_client_version），取官方 Codex CLI 已发布版本号，
- * 真实账号校准后如需调整记入 spec deviations。
- */
-export const DEFAULT_OPENAI_CODEX_ORIGINATOR_VERSION = "0.142.5";
-
 export interface RuntimeOpenAIEndpointEnv {
   [key: string]: string | undefined;
   OPENAI_OAUTH_CLIENT_ID?: string;
-  OPENAI_OAUTH_ORIGIN?: string;
   OPENAI_CODEX_BASE_URL?: string;
 }
 
@@ -93,21 +82,4 @@ export function resolveOpenAICodexBaseUrl(
   env: RuntimeOpenAIEndpointEnv = readProductEndpointEnv(),
 ): string {
   return readRuntimeEnvValue(env, "OPENAI_CODEX_BASE_URL") ?? DEFAULT_OPENAI_CODEX_BASE_URL;
-}
-
-/** 模型通道 originator 指纹头的值；version 头无独立 env，与 originator 一起静态下发。 */
-export function resolveOpenAICodexOriginator(
-  env: RuntimeOpenAIEndpointEnv = readProductEndpointEnv(),
-): string {
-  return readRuntimeEnvValue(env, "OPENAI_OAUTH_ORIGIN") ?? DEFAULT_OPENAI_CODEX_ORIGINATOR;
-}
-
-/** 模型通道静态请求头（provider 规则 api.headers 的运行时等价值，供服务层校准用）。 */
-export function buildOpenAICodexStaticHeaders(
-  env: RuntimeOpenAIEndpointEnv = readProductEndpointEnv(),
-): Readonly<Record<string, string>> {
-  return Object.freeze({
-    originator: resolveOpenAICodexOriginator(env),
-    version: DEFAULT_OPENAI_CODEX_ORIGINATOR_VERSION,
-  });
 }

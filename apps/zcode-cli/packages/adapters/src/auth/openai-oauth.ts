@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- OpenAI 薄客户端集中承载授权码+PKCE/loopback/设备码轮询/refresh 轮换/id_token 解析五段协议差异（与 services 层 OpenAIProviderAdapter 同理由），拆散会让两端口径漂移。 */
 /**
  * OpenAI（ChatGPT 账号）OAuth 薄客户端：CLI 登录与 token 刷新的协议边界。
  *
@@ -278,6 +279,7 @@ async function postTokenEndpoint(
 
 /** 授权码/设备码换 token；refresh_token 与 id_token 缺失按登录失败处理（spec §2.2）。 */
 async function exchangeTokenSet(input: {
+  clientId: string;
   code: string;
   codeVerifier: string;
   httpClient: HttpClientPort;
@@ -292,7 +294,10 @@ async function exchangeTokenSet(input: {
       grant_type: "authorization_code",
       code: input.code,
       redirect_uri: input.redirectUri,
-      client_id: resolveOpenAIOAuthClientId(),
+      // client_id 必须用调用方（authorize URL 同源）解析好的值透传，不能在函数内按
+      // 进程 env 重新解析：注入 env 带 OPENAI_OAUTH_CLIENT_ID 覆盖而进程 env 没有时，
+      // 授权与换 token 用不同 client_id 会导致难以排查的 PKCE/client 不匹配失败。
+      client_id: input.clientId,
       code_verifier: input.codeVerifier,
     },
     input,
@@ -430,6 +435,7 @@ export async function loginWithOpenAIOAuth(
     }
     const callback = await withTimeout(server.waitForCallback(), remainingMs);
     const tokenSet = await exchangeTokenSet({
+      clientId,
       code: callback.code,
       codeVerifier,
       httpClient: options.httpClient,
@@ -510,19 +516,27 @@ async function loginWithDeviceCode(input: {
     await input.sleep(
       Math.min(pollIntervalMs, Math.max(0, Math.min(input.deadline, flowExpiresAt) - now)),
     );
-    const poll = await requestJson<OpenAIDeviceCodeTokenResponse>(
-      input.httpClient,
-      OPENAI_DEVICE_AUTH_TOKEN_URL,
-      {
-        body: new TextEncoder().encode(
-          JSON.stringify({ device_auth_id: deviceAuthId, user_code: userCode }),
-        ),
-        contentType: "application/json",
-        now: input.now,
-        signal: input.signal,
-        trace: input.trace,
-      },
-    );
+    let poll: { status: number; payload: OpenAIDeviceCodeTokenResponse };
+    try {
+      poll = await requestJson<OpenAIDeviceCodeTokenResponse>(
+        input.httpClient,
+        OPENAI_DEVICE_AUTH_TOKEN_URL,
+        {
+          body: new TextEncoder().encode(
+            JSON.stringify({ device_auth_id: deviceAuthId, user_code: userCode }),
+          ),
+          contentType: "application/json",
+          now: input.now,
+          signal: input.signal,
+          trace: input.trace,
+        },
+      );
+    } catch {
+      input.signal?.throwIfAborted();
+      // 网络错误与 5xx/限流同为瞬时失败：保留 flow 按服务端间隔下一轮重试（与 services
+      // 侧 pollOpenAIDeviceCode 的判定口径一致），仅主动 abort 立即终止。
+      continue;
+    }
     if (poll.status === 403 || poll.status === 404) {
       continue;
     }
@@ -530,6 +544,10 @@ async function loginWithDeviceCode(input: {
       throw new OpenAIOAuthError("OpenAI 设备码已过期，请重新执行登录");
     }
     if (poll.status < 200 || poll.status >= 300) {
+      // 429 限流与 5xx 属瞬时失败，continue 等待重试；其余 4xx 是流程自身失败，抛出终止。
+      if (poll.status === 429 || poll.status >= 500) {
+        continue;
+      }
       throw new OpenAIOAuthError(`OpenAI 设备码轮询失败（${poll.status}）`);
     }
     const authorizationCode = readTrimmed(poll.payload.authorization_code);
@@ -543,6 +561,7 @@ async function loginWithDeviceCode(input: {
   }
 
   const tokenSet = await exchangeTokenSet({
+    clientId: input.clientId,
     code: ready.authorizationCode,
     // 设备码流程的 verifier 由服务端返回，redirect_uri 固定为 deviceauth/callback。
     codeVerifier: ready.codeVerifier,
@@ -561,6 +580,7 @@ async function loginWithDeviceCode(input: {
  * refresh_token_expired/reused/invalidated）抛 OpenAIRefreshTokenInvalidError。
  */
 export async function refreshOpenAITokenSet(options: {
+  env?: Record<string, string | undefined>;
   httpClient: HttpClientPort;
   refreshToken: string;
   now?: () => number;
@@ -575,7 +595,8 @@ export async function refreshOpenAITokenSet(options: {
       {
         grant_type: "refresh_token",
         refresh_token: options.refreshToken,
-        client_id: resolveOpenAIOAuthClientId(),
+        // client_id 沿用调用方 env 解析（与 authorize 同源），缺省回落构建期 define/process.env。
+        client_id: resolveOpenAIOAuthClientId(options.env),
         scope: OPENAI_OAUTH_REFRESH_SCOPE,
       },
       { now, trace: options.trace },
