@@ -203,6 +203,11 @@ env 覆盖见 §2.7 deviation 补记）。
     `400 The 'gpt-5.6-terra' model requires a newer version of Codex`；已校准为
     `0.159.0`（同 cc-switch），实测 200。该值须随官方 Codex CLI 版本演进同步
     上调，模型 400 且报 requires a newer version 时优先怀疑此处。
+  - **请求体约束（2026-10-04 实测）**：后端强制请求体显式
+    `store: false`（`400 "Store must be set to false"`），AI SDK 的
+    OpenAIResponsesLanguageModel 不发送该字段；已在
+    `openai-responses-json-compat.ts` 对 baseUrl 为 Codex 后端的请求做定向补丁
+    （store 缺省时补 false，不覆盖显式值；api.openai.com 不受影响）。
 - provider 配置：`provider-data-schema.ts:30-62` access 联合新增
   `chatgpt-account{accountType:"openai"}`（不动 `zhipu-account` 语义）；
   `provider-config.ts:36-112` 旁新增对应 access 类；`zcode-builtin.json` 现有
