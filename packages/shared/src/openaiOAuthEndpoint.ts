@@ -58,10 +58,63 @@ export const OPENAI_ACCESS_TOKEN_DEFAULT_TTL_SECONDS = 3600;
 /** 过期前 60 秒主动刷新（触发点在请求鉴权 resolveCurrent，单一刷新路径）。 */
 export const OPENAI_REFRESH_BEFORE_EXPIRY_MS = 60_000;
 
+/**
+ * Codex 后端按 minimal_client_version 门控模型与部分端点（spec
+ * openai-oauth-provider §2.7 校准记录）。该指纹与 zcode-builtin.json
+ * account:openai-plan 的 api.headers.version 是同一事实的两处表达：目录拉取
+ * 发生在 provider 请求之前，读不到 builtin 数据，故在 shared 常驻一份默认值；
+ * 校准时两处同步修改，或用 OPENAI_CODEX_CLIENT_VERSION env 统一覆盖。
+ */
+export const DEFAULT_OPENAI_CODEX_ORIGINATOR = "codex_cli_rs";
+export const DEFAULT_OPENAI_CODEX_CLIENT_VERSION = "0.159.0";
+
+export function resolveOpenAICodexOriginator(
+  env: RuntimeOpenAIEndpointEnv = readProductEndpointEnv(),
+): string {
+  return readRuntimeEnvValue(env, "OPENAI_CODEX_ORIGINATOR") ?? DEFAULT_OPENAI_CODEX_ORIGINATOR;
+}
+
+export function resolveOpenAICodexClientVersion(
+  env: RuntimeOpenAIEndpointEnv = readProductEndpointEnv(),
+): string {
+  return (
+    readRuntimeEnvValue(env, "OPENAI_CODEX_CLIENT_VERSION") ?? DEFAULT_OPENAI_CODEX_CLIENT_VERSION
+  );
+}
+
+/** 语义化三段版本比较：left 小于 right 返回 -1，相等 0，大于 1；非三段格式按字符串比较兜底。 */
+export function compareOpenAIClientVersion(left: string, right: string): number {
+  const leftParts = left
+    .trim()
+    .split(".")
+    .map((part) => Number.parseInt(part, 10));
+  const rightParts = right
+    .trim()
+    .split(".")
+    .map((part) => Number.parseInt(part, 10));
+  if (
+    leftParts.length !== 3 ||
+    rightParts.length !== 3 ||
+    [...leftParts, ...rightParts].some(Number.isNaN)
+  ) {
+    return left.localeCompare(right);
+  }
+  for (let index = 0; index < 3; index += 1) {
+    const leftValue = leftParts[index] ?? 0;
+    const rightValue = rightParts[index] ?? 0;
+    if (leftValue !== rightValue) {
+      return leftValue < rightValue ? -1 : 1;
+    }
+  }
+  return 0;
+}
+
 export interface RuntimeOpenAIEndpointEnv {
   [key: string]: string | undefined;
   OPENAI_OAUTH_CLIENT_ID?: string;
   OPENAI_CODEX_BASE_URL?: string;
+  OPENAI_CODEX_ORIGINATOR?: string;
+  OPENAI_CODEX_CLIENT_VERSION?: string;
 }
 
 function readRuntimeEnvValue(

@@ -225,6 +225,35 @@ env 覆盖见 §2.7 deviation 补记）。
   `accountProviderConnectionResolver.ts:94`（`["zai","bigmodel"]` 硬循环）加
   openai；family 排序 `packages/provider/src/resolver.ts:360-363` 补 openai。
 
+### 2.8 账号模型目录动态同步（通用规则，openai 首个实现）
+
+- **适用范围**：非 z.ai/bigmodel 渠道的账号 provider（即非 zcode 后端套餐体系的
+  账号域）。z.ai/bigmodel 保持 zcode-builtin.json 静态清单为唯一事实源，不进入
+  本流程。openai 是首个实现；后续新账号 provider 接入时必须实现同等的目录拉取。
+- **数据流**：账号解析周期内 availability 校验携带目录端口
+  （`validateOpenAIAccountProviderAvailability` → `openAIModelCatalog.resolveModelIds()`）
+  → `GET {codex base}/models?client_version={version}`（头与模型请求同源：
+  `Authorization`、`chatgpt-account-id`、`originator`、`version`）→ 过滤
+  `visibility === "list"` 且 `minimal_client_version ≤ version` 的 slug →
+  `availability.models` → connection → 账号层 overlay `builtinModelIds` 覆盖
+  zcode-builtin 静态清单（复用 z.ai Start Plan 余额模型的既有通道，
+  `account-provider-resolution.ts` / `accountProviderConnectionResolver.ts`）。
+- **兜底语义**（三态）：`null`（未登录/未注入端口/拉取失败且无缓存）→ 不投影，
+  静态清单生效；非空数组 → 覆盖静态清单；空数组 → 权威空清单（后端明确无可列
+  模型）。缓存里的空清单不视为新鲜，下轮重新拉取。
+- **缓存**：`{configDir}/model-catalog/openai.json`（schemaVersion 1，按
+  `chatgpt_account_id` 作用域；换账号后旧缓存不得串用）。TTL 24h；拉取失败但存在
+  同账号旧缓存（含过期）时回退旧缓存；并发解析共享单次 in-flight 请求。
+- **能力元数据不动态化**：目录只决定「有哪些模型」。模型能力（contextWindow、
+  图片输入、reasoning 档位）仍来自静态规则——`providerSiteRules`（baseUrl 作用域）
+  覆盖全部打到 codex 后端的模型，新模型自动获得 ctx/图片默认；逐模型 reasoning
+  档位需随校准更新 zcode-builtin.json（未校准的新模型回落全局 `.*` 兜底）。
+- **版本指纹**：目录拉取与模型请求共用 `resolveOpenAICodexClientVersion()`
+  （shared 常量 `0.159.0` + `OPENAI_CODEX_CLIENT_VERSION` env 覆盖）；该值与
+  zcode-builtin.json `api.headers.version` 是同一事实的两处表达，校准时同步。
+- **CLI standalone 运行时**暂不接目录同步（无 host 账号解析周期），静态清单
+  兜底；接入时复用 `createOpenAIModelCatalogService`（已从 services 导出）。
+
 ## 3. 状态所有者与事件顺序
 
 **状态所有者**：

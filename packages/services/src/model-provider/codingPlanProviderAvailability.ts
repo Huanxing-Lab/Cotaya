@@ -57,6 +57,8 @@ interface CodingPlanAvailabilityContext {
   apiClient?: ApiClient;
   credentialService?: CodingPlanAvailabilityCredentialService;
   providerFamilyConnectionSelections?: ProviderFamilyConnectionSelectionSettings;
+  /** 非 z.ai 域账号 provider 的动态模型目录端口（spec openai-oauth-provider §2.8）。 */
+  openAIModelCatalog?: { resolveModelIds(): Promise<readonly string[] | null> };
 }
 
 interface BigModelCustomerInfoEnvelope {
@@ -184,7 +186,15 @@ export async function validateOpenAIAccountProviderAvailability(
       [provider.providerId]: { kind: "unavailable", reason: "coding_plan_not_authenticated" },
     };
   }
-  return { [provider.providerId]: { kind: "available" } };
+  // 目录端口返回 null（未注入/未登录/拉取失败且无缓存）时不带 models，
+  // zcode-builtin.json 静态清单兜底；空数组是后端权威结果，投影为权威空清单。
+  const models = await context.openAIModelCatalog?.resolveModelIds().catch(() => null);
+  return {
+    [provider.providerId]: {
+      kind: "available",
+      ...(models ? { models: Object.freeze([...models]) } : {}),
+    },
+  };
 }
 
 function findAvailabilityProvider(

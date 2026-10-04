@@ -110,12 +110,18 @@ export function resolveAccountProviderConfigs(
         status: "unknown" as const,
       };
       if (connection.status === "available" || connection.status === "pending") {
+        // 动态目录未到达（connection.models undefined）时不投影 builtinModelIds，
+        // zcode-builtin.json 静态清单兜底（spec openai-oauth-provider §2.8）；
+        // 空数组是本轮权威结果，正常投影为空清单。
+        const models =
+          connection.models === undefined ? undefined : normalizeModelIds(connection.models);
         resolved.push([
           providerId,
           new ProviderConfig({
             access: new ChatGPTAccountAccessConfig({
               entitled: connection.status === "available",
             }),
+            ...(models !== undefined ? { builtinModelIds: models } : {}),
           }),
         ]);
         continue;

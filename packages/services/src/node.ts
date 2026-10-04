@@ -143,6 +143,11 @@ export {
   createCodingPlanFamilyAvailabilityResolver,
   resolveCurrentAccountAccess,
 } from "./model-provider/accountProviderConnectionResolver.js";
+export {
+  createOpenAIModelCatalogService,
+  type OpenAIModelCatalogOptions,
+  type OpenAIModelCatalogService,
+} from "./model-provider/openaiModelCatalog.js";
 export { bindAccountProviderInvalidation } from "./model-provider/accountProviderInvalidation.js";
 export type {
   AccountProviderConfigSourceOptions,
@@ -364,6 +369,7 @@ import { resolveAccountTeamPlanRuntimeApiKey } from "./model-provider/accountPro
 import { createAccountProviderCredentialStore } from "./model-provider/accountProviderCredentialStore.js";
 import { createAccountProviderCredentialService } from "./model-provider/accountProviderCredentialService.js";
 import { createAccountProviderRequestAuthService } from "./model-provider/accountProviderRequestAuthService.js";
+import { createOpenAIModelCatalogService } from "./model-provider/openaiModelCatalog.js";
 import {
   createAccountProviderConfigSource,
   createCodingPlanFamilyAvailabilityResolver,
@@ -1599,6 +1605,12 @@ export function createLocalServices(options: {
     resolveFamilyAvailability: createCodingPlanFamilyAvailabilityResolver({
       apiClient,
       credentialService,
+      // 动态模型目录（spec §2.8）：openai 账号解析周期拉 /models，
+      // 失败回 zcode-builtin.json 静态清单兜底。
+      openAIModelCatalog: createOpenAIModelCatalogService({
+        credentialService,
+        configDir: resolveAppConfigDir(),
+      }),
     }),
   });
   const accountProviderRuntimeLog = createServiceLogger("account-provider-runtime");

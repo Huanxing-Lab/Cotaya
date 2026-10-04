@@ -60,6 +60,8 @@ export interface CodingPlanFamilyAvailabilityResolverOptions {
   readonly credentialService?: {
     load(key: string): Promise<string | null>;
   };
+  /** OpenAI 动态模型目录（spec §2.8）；未注入时 availability 不带 models，静态清单兜底。 */
+  readonly openAIModelCatalog?: { resolveModelIds(): Promise<readonly string[] | null> };
 }
 
 export interface AccountProviderConfigSourceOptions extends AccountProviderConnectionResolverOptions {
@@ -183,6 +185,8 @@ export function createAccountProviderConnectionResolver(
           connectionKey: createHash("sha256")
             .update(JSON.stringify([accountIdentity, "openai", { kind: "openai-plan" }]))
             .digest("hex"),
+          // 动态目录经 availability.models 透传；未携带时 resolution 不投影，静态清单兜底。
+          ...("models" in availability ? { models: availability.models } : {}),
         });
         continue;
       }
@@ -326,6 +330,7 @@ export function createCodingPlanFamilyAvailabilityResolver(
       apiClient: options.apiClient,
       credentialService: options.credentialService,
       providerFamilyConnectionSelections: selections,
+      ...(options.openAIModelCatalog ? { openAIModelCatalog: options.openAIModelCatalog } : {}),
     };
     if (family === "zai") {
       return validateZaiAccountProviderAvailability(providers, context);
