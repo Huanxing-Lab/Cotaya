@@ -223,6 +223,13 @@ export function spawnHostProcess(
       error?: string;
       failureKind?: "transient" | "permanent";
     }) => void;
+    /** host → main：Continuous wake 送达回执，转交 scheduler 记录投递事实（CT-07）。 */
+    onContinuousWakeResult?: (result: {
+      programId: string;
+      dueAt: number;
+      ok: boolean;
+      error?: string;
+    }) => void;
     /** host 中 manual run 落库后请求 main 立即唤醒 scheduler。 */
     onCronSchedulerWakeRequested?: (automationId: string) => void;
     /** host 中闲时任务翻 schedulable 后请求 main 立即唤醒 scheduler。 */
@@ -535,6 +542,16 @@ export function spawnHostProcess(
       return;
     }
 
+    if (result.data.type === HostResponseTypes.ContinuousWakeResult) {
+      dependencies.onContinuousWakeResult?.({
+        programId: result.data.programId,
+        dueAt: result.data.dueAt,
+        ok: result.data.ok,
+        error: result.data.error,
+      });
+      return;
+    }
+
     if (result.data.type === HostResponseTypes.CronSchedulerWakeRequest) {
       dependencies.onCronSchedulerWakeRequested?.(result.data.automationId);
       return;
@@ -565,7 +582,6 @@ export function spawnHostProcess(
       });
       return;
     }
-
 
     if (result.data.type === HostResponseTypes.BotRemoteWorkspaceReconnectRequest) {
       const request = result.data;

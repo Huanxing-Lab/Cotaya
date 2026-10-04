@@ -24,6 +24,7 @@ import {
   NetworkTelemetryChannelServer,
 } from "@zcode/rpc";
 import { registerHostNetworkTelemetry, stopHostNetworkTelemetry } from "./hostNetworkTelemetry.js";
+import { dispatchContinuousWake } from "./continuousWakeRouter.js";
 import { registerHostServiceResourceTelemetry } from "./hostServiceResourceTelemetry.js";
 import { resolveResourceTelemetryEnvironmentKey } from "./hostResourceTelemetryEnvironment.js";
 import { reportHostSessionCreate } from "./hostSessionCreateTelemetry.js";
@@ -2423,6 +2424,37 @@ parentPort.on("message", async (e: Electron.MessageEvent) => {
           // 确定性模型/凭证配置错误重试不会自愈；交给 scheduler 转 failed，
           // 未知及生命周期错误仍按 transient 保持原退避语义。
           failureKind: error instanceof OffPeakPermanentDispatchError ? "permanent" : "transient",
+        });
+      }
+    })();
+    return;
+  }
+
+  if (msg.type === HostMessageTypes.ContinuousWake) {
+    // Continuous 到期唤醒（CT-07）：Host 只路由到已装配的处理器（supervisor/恢复服务的
+    // 唤醒入口），不在这里做业务判断；无处理器（功能默认关闭）回执失败，scheduler 在仍
+    // 到期时重发——绝不退回普通 prompt 自主执行。
+    void (async () => {
+      try {
+        await dispatchContinuousWake({
+          programId: msg.programId,
+          workspacePath: msg.workspacePath,
+          ...(msg.workspaceIdentity ? { workspaceIdentity: msg.workspaceIdentity } : {}),
+          dueAt: msg.dueAt,
+        });
+        parentPort.postMessage({
+          type: HostResponseTypes.ContinuousWakeResult,
+          programId: msg.programId,
+          dueAt: msg.dueAt,
+          ok: true,
+        });
+      } catch (error) {
+        parentPort.postMessage({
+          type: HostResponseTypes.ContinuousWakeResult,
+          programId: msg.programId,
+          dueAt: msg.dueAt,
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
         });
       }
     })();

@@ -36,6 +36,16 @@ export type SchedulerToMainMessage =
       message: string;
     }
   | {
+      // Continuous Program 到期唤醒（只查询和唤醒，不派发）：main 按身份转发给窗口 Host，
+      // Host 侧 Supervisor 核对状态/未结束 Cycle 后原子创建 Cycle + 取 lease（CT-07）。
+      // 送达回执 ok=false（无 Host/未装配）时 scheduler 在仍到期时重发；不保存业务状态。
+      type: "continuous-wake-request";
+      programId: string;
+      dueAt: number;
+      workspacePath: string;
+      workspaceIdentity?: string;
+    }
+  | {
       // 闲时任务 running 计数变化 → main 据此 + keepAwakeWhileRunning 设置
       // 决定是否开 powerSaveBlocker。每次 tick 后上报当前值（幂等）。
       type: "offpeak-active-count";
@@ -77,4 +87,13 @@ export type MainToSchedulerMessage =
       // manual run 已提交，立即触发一次 tick；automationId 仅用于日志关联。
       type: "scheduler-wake";
       automationId: string;
+    }
+  | {
+      // Continuous wake 的送达回执（仅投递事实，不携带业务结果）；dueAt 回显用于
+      // scheduler 把「已送达」精确记到到期窗口（同窗口不重发）。
+      type: "continuous-wake-result";
+      programId: string;
+      dueAt: number;
+      ok: boolean;
+      error?: string;
     };

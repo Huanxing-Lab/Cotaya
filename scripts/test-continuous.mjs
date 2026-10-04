@@ -30,7 +30,7 @@ const SUITES = {
     ],
   },
   integration: {
-    description: "存储与工作区集成（I-01…I-10、I-12；真实 SQLite/Git/文件/子进程执行事实）",
+    description: "存储与工作区集成（I-01…I-11、I-12；真实 SQLite/Git/文件/子进程执行事实）",
     kind: "node-test",
     files: [
       "packages/services/test/continuous/repository.test.ts",
@@ -40,6 +40,7 @@ const SUITES = {
       "packages/services/test/continuous/health.test.ts",
       "packages/services/test/continuous/cycle.test.ts",
       "packages/services/test/continuous/decision.test.ts",
+      "packages/services/test/continuous/scheduler.test.ts",
       "apps/zcode-cli/packages/bootstrap/test/continuous/execution.test.ts",
       "apps/zcode-cli/packages/bootstrap/test/continuous/budget-runtime.test.ts",
       "apps/zcode-cli/packages/bootstrap/test/continuous/template.test.ts",
@@ -47,9 +48,9 @@ const SUITES = {
     ],
   },
   recovery: {
-    description: "崩溃与重启恢复（R-01…；CT-07 起加入）",
+    description: "崩溃与重启恢复（R-01…R-10；同库新实例模拟 kill，真实 SQLite）",
     kind: "node-test",
-    files: [],
+    files: ["packages/services/test/continuous/recovery.test.ts"],
   },
   e2e: {
     description: "真实 Electron + 脚本化模型 E2E（CT-09）",

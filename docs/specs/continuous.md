@@ -455,6 +455,8 @@ Host启动/恢复数据库
 
 Cycle 存在但 Run 不存在：核对原执行身份未被接受后 submitOnce。ACK 丢失：查询原身份，不新生成 ID。Run completed 而 Cycle 未结束：继续 settling，不 resume。stopped(interrupted/provider) 只有原快照、原工作区和有限恢复条件成立才 resume；恢复次数达到上限则暂停并询问，不自动结束任务。errored/completed/superseded 不冒充可恢复。
 
+wake 链路（周期唤醒的转发边界）：scheduler 进程只做只读到期查询，按 workspace 身份向 Main 发 wake 请求；Main 按身份把 wake 转发给窗口 Host，无可用 Host 时如实回执失败，不另起执行者；Host 把 wake 交给 Supervisor：先核对未结束 Cycle，再对到期 Program 原子创建 Cycle 并取得 workspace lease。scheduler 不保存业务队列、不认领、wake 之后不释放任何锁——重复 wake 由 trigger key UNIQUE 与「一个 Program 一条未结束 Cycle」约束幂等吸收；错过多轮时下一个 nextCycleAt 直接取下一个未来时点，不排队补跑。
+
 节点外部副作用与 journal 不同事务：恢复前核对实际 diff/检查点。可能重复的修改不得无条件重放。无法证实安全时结束旧 Cycle，后续新轮重新观察，不强行 resume。
 
 定时错过多轮只唤醒一次，不补跑串行旧任务。Daily 根据时区求下一次未来时点。正常退出撤销许可、取消并保存 interrupted；强制退出依赖恢复。关闭所有窗口导致 Host 不可用时暂停调度，不绕过窗口 Host 另起执行者。

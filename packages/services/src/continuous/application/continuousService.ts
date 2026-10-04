@@ -88,6 +88,9 @@ export class ContinuousService {
       templateVersion: input.templateVersion,
       templateHash: input.templateHash,
       status: "active",
+      // §2「初次执行：创建并授权后到期立即执行一次」——nextCycleAt=创建时刻，scheduler 的
+      // 到期查询随即唤醒首轮（Run now 手动路径不受影响）。
+      nextCycleAt: now,
       consecutiveFailures: 0,
       createdAt: now,
       updatedAt: now,

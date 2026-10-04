@@ -416,6 +416,18 @@ export const hostOffPeakRunMessageSchema = z.object({
   serverTicketId: z.string().optional(),
 });
 
+// main → host：Continuous Program 到期唤醒（只转发，不派发）。Host 侧 Supervisor/恢复流程
+// 自行核对状态、授权、未结束 Cycle 并原子创建 Cycle + 取得 workspace lease（CT-07）。
+export const hostContinuousWakeMessageSchema = z.object({
+  type: z.literal("continuous-wake"),
+  programId: nonEmptyStringSchema,
+  workspacePath: nonEmptyStringSchema,
+  workspaceIdentity: z.string().optional(),
+  // 到期时刻（Program 持久化的 nextCycleAt）：回执回显，scheduler 据此把「已送达」记到
+  // 具体到期窗口（同窗口只唤醒一次）；trigger key 由 Host 侧派生。
+  dueAt: z.number().int().nonnegative(),
+});
+
 // main → host：browser-use 命令执行结果（按 requestId 关联到 host 的 pending）。
 export const hostBrowserExecuteResultMessageSchema = z.object({
   type: z.literal("browser-execute-result"),
@@ -497,6 +509,7 @@ export const hostIncomingMessageSchema = z.discriminatedUnion("type", [
   hostFeedbackLogArchiveResultMessageSchema,
   hostCronRunMessageSchema,
   hostOffPeakRunMessageSchema,
+  hostContinuousWakeMessageSchema,
   hostBrowserExecuteResultMessageSchema,
   hostLocalMediaPreviewPathAuthorizeResultMessageSchema,
   hostCuaPipFocusChangedMessageSchema,
@@ -872,6 +885,17 @@ export const hostCronRunResultResponseSchema = z.object({
   failureKind: z.enum(["transient", "permanent"]).optional(),
 });
 
+// host → main：Continuous 到期唤醒的送达回执。ok=false 表示 Host 不可用/未装配（scheduler
+// 在仍到期时重发）；ok=true 只代表唤醒已被 Host 处理（可能命中未结束 Cycle 而不启动新轮）。
+// dueAt 回显自唤醒请求，scheduler 用它把送达记录精确到到期窗口。
+export const hostContinuousWakeResultResponseSchema = z.object({
+  type: z.literal("continuous-wake-result"),
+  programId: nonEmptyStringSchema,
+  dueAt: z.number().int().nonnegative(),
+  ok: z.boolean(),
+  error: z.string().optional(),
+});
+
 // host → main：闲时任务派发结果。ok=session 已确保存在且 prompt 已发出；迟到结果用 offPeakTaskId 兜底结算。
 export const hostOffPeakRunResultResponseSchema = z.object({
   type: z.literal("off-peak-run-result"),
@@ -1030,6 +1054,7 @@ export const hostResponseMessageSchema = z.discriminatedUnion("type", [
   hostProviderProvisioningExecutionResultResponseSchema,
   hostCronRunResultResponseSchema,
   hostOffPeakRunResultResponseSchema,
+  hostContinuousWakeResultResponseSchema,
   hostCronSchedulerWakeRequestResponseSchema,
   hostOffPeakSchedulerWakeRequestResponseSchema,
 ]);

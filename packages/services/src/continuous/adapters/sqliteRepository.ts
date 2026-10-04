@@ -60,6 +60,7 @@ import {
   completeCycleReady,
   getLeaseReady,
   releaseLeaseReady,
+  renewLeaseReady,
 } from "./sqliteLifecycleStore.js";
 import {
   admitUsageReservationReady,
@@ -205,6 +206,14 @@ export class SqliteContinuousRepository implements ContinuousRepositoryPort {
     return row ? decodeCycle(row as unknown as CycleRow) : null;
   }
 
+  async getCycleByTriggerKey(programId: string, triggerKey: string): Promise<Cycle | null> {
+    await this.ensureReady();
+    const row = this.database()
+      .prepare("SELECT * FROM continuous_cycle WHERE program_id = ? AND trigger_key = ?")
+      .get(programId, triggerKey);
+    return row ? decodeCycle(row as unknown as CycleRow) : null;
+  }
+
   async getLatestCycleSequence(programId: string): Promise<number> {
     await this.ensureReady();
     const row = this.database()
@@ -291,6 +300,17 @@ export class SqliteContinuousRepository implements ContinuousRepositoryPort {
   async acquireLease(lease: WorkspaceLease): Promise<void> {
     await this.ensureReady();
     acquireLeaseReady(this.database(), lease);
+  }
+
+  async renewLease(input: {
+    workspaceKey: string;
+    ownerId: string;
+    epoch: number;
+    expiresAt: number;
+    updatedAt: number;
+  }): Promise<void> {
+    await this.ensureReady();
+    renewLeaseReady(this.database(), input);
   }
 
   async releaseLease(workspaceKey: string, updatedAt: number): Promise<void> {

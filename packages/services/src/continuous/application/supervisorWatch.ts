@@ -1,0 +1,221 @@
+// Continuous 监督循环的执行面（CT-07 自 supervisor.ts 拆出；架构 max-file-lines 拆分，
+// 非边界变化）：轮询报告增量导入 → 执行终态 → settling（终局裁决仍在 supervisorLifecycle）
+// → 终态释放 workspace lease。续租节流（30 秒）与失去租约的 interrupted 落库也在这里。
+// 全部经注入依赖执行，无自有状态；supervisor.startSupervision 负责实例内单飞（每 Cycle
+// 至多一条循环），本文件不做去重。
+
+import type { Cycle, Program } from "../domain/types.js";
+import { isTerminalCycleStatus } from "../domain/types.js";
+import { ContinuousReportIngestion } from "./reportIngestion.js";
+import {
+  CONTINUOUS_LEASE_RENEW_INTERVAL_MS,
+  renewCycleLease,
+  releaseCycleLease,
+  type WorkspaceLeaseDeps,
+} from "./workspaceLease.js";
+import {
+  accumulateInto,
+  createAccumulator,
+  settleCycle,
+  type ReportAccumulator,
+  type SupervisedCycleOutcome,
+} from "./supervisorLifecycle.js";
+import type {
+  ContinuousClockPort,
+  ContinuousExecutionPort,
+  ContinuousReportItem,
+  ContinuousRepositoryPort,
+  ExecutionReference,
+  ExecutionState,
+} from "./ports.js";
+
+/** 监督循环需要的依赖子集（supervisor 交进来；测试可独立注入）。 */
+export interface CycleWatchDeps {
+  repository: ContinuousRepositoryPort;
+  execution: ContinuousExecutionPort;
+  clock: ContinuousClockPort;
+  logger?: {
+    warn?: (message: string, meta?: unknown) => void;
+    info?: (message: string, meta?: unknown) => void;
+  };
+  /** 轮询间隔（缺省 500ms）。 */
+  pollIntervalMs?: number;
+}
+
+/** Run 终态判定（pending/running 继续轮询）。 */
+export function isTerminalExecution(status: ExecutionState["status"]): boolean {
+  return status === "completed" || status === "errored" || status === "stopped";
+}
+
+const defaultSchedule = (callback: () => void, delayMs: number): (() => void) => {
+  const timer = setTimeout(callback, delayMs);
+  if (typeof timer === "object" && timer !== null && "unref" in timer) timer.unref();
+  return () => clearTimeout(timer);
+};
+
+function referenceOf(cycle: Cycle): ExecutionReference {
+  return {
+    cycleId: cycle.id,
+    executionSessionId: cycle.executionSessionId,
+    workflowRunId: cycle.workflowRunId,
+    traceId: cycle.traceId,
+  };
+}
+
+/** 监督一轮直到终局（suspended/interrupted/终态结算三者之一）。 */
+export async function watchCycle(
+  deps: CycleWatchDeps,
+  input: { cycle: Cycle; program: Program; ownerId: string },
+): Promise<SupervisedCycleOutcome> {
+  const { cycle, program, ownerId } = input;
+  const leaseDeps: WorkspaceLeaseDeps = {
+    repository: deps.repository,
+    execution: deps.execution,
+    clock: deps.clock,
+  };
+  const ref = referenceOf(cycle);
+  const accumulator = createAccumulator();
+  const pollIntervalMs = deps.pollIntervalMs ?? 500;
+  let lastState: ExecutionState | undefined;
+  let lastRenewAt = deps.clock.now();
+
+  while (true) {
+    const current = (await deps.repository.getCycle(cycle.id)) ?? cycle;
+    // suspended（资源挂起）/interrupted（退出/失去租约）由其他路径落库：监督到此为止；
+    // cancelled 的占用由停止路径释放，这里兜底释放一次（幂等）。
+    if (
+      current.status === "suspended" ||
+      current.status === "interrupted" ||
+      current.status === "cancelled"
+    ) {
+      if (current.status === "cancelled") {
+        await releaseLeaseBestEffort(deps, leaseDeps, program, ownerId, current);
+      }
+      return {
+        cycleId: cycle.id,
+        cycleStatus: current.status,
+        programStatus: program.status,
+        reportRejections: accumulator.rejections,
+      };
+    }
+    // 续租（§10：30 秒节流；失去续租=epoch 被接管/释放）：本实例不再是写入者，保存
+    // interrupted（可恢复），停止监督——绝不做旧 epoch 的副作用。
+    if (deps.clock.now() - lastRenewAt >= CONTINUOUS_LEASE_RENEW_INTERVAL_MS) {
+      lastRenewAt = deps.clock.now();
+      if (!(await renewLeaseOrDetach(deps, leaseDeps, program, ownerId, current))) {
+        return {
+          cycleId: cycle.id,
+          cycleStatus: "interrupted",
+          programStatus: program.status,
+          reportRejections: accumulator.rejections,
+        };
+      }
+    }
+    const batch = await deps.execution.readReports(ref, current.reportCursor);
+    if (batch.items.length > 0) {
+      await ingest(deps, cycle, program, batch.items, batch.nextCursor, accumulator);
+    }
+    lastState = await deps.execution.inspect(ref);
+    if (isTerminalExecution(lastState.status)) break;
+    const schedule = deps.clock.schedule ?? defaultSchedule;
+    await new Promise<void>((resolve) => {
+      schedule(resolve, pollIntervalMs);
+    });
+  }
+  await deps.execution.waitForQuiescence(ref);
+  const outcome = await settleCycle(deps, {
+    cycle,
+    program,
+    ref,
+    finalState: lastState!,
+    accumulator,
+  });
+  // 终态释放占用（epoch 保留）；suspended/interrupted 保留占用等继续确认/恢复接管（§10）。
+  if (isTerminalCycleStatus(outcome.cycleStatus)) {
+    await releaseLeaseBestEffort(deps, leaseDeps, program, ownerId, cycle);
+  }
+  return outcome;
+}
+
+async function renewLeaseOrDetach(
+  deps: CycleWatchDeps,
+  leaseDeps: WorkspaceLeaseDeps,
+  program: Program,
+  ownerId: string,
+  cycle: Cycle,
+): Promise<boolean> {
+  try {
+    await renewCycleLease(leaseDeps, {
+      workspaceKey: program.workspaceKey,
+      ownerId,
+      epoch: cycle.leaseEpoch,
+    });
+    return true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const now = deps.clock.now();
+    await deps.repository.saveCycle({ ...cycle, status: "interrupted", updatedAt: now });
+    await deps.repository
+      .appendEvent({
+        programId: program.id,
+        cycleId: cycle.id,
+        eventKey: `lease-lost:${cycle.id}:${cycle.leaseEpoch}`,
+        type: "cycle.lease_lost",
+        payload: { epoch: cycle.leaseEpoch, ownerId, message },
+        createdAt: now,
+      })
+      .catch(() => {
+        // 审计尽力而为：lease 已丢，不能因审计失败阻塞 interrupted 落库路径。
+      });
+    deps.logger?.warn?.("Continuous workspace lease lost during supervision", {
+      event: "continuous.supervisor.lease_lost",
+      module: "services.continuous",
+      cycleId: cycle.id,
+      message,
+    });
+    return false;
+  }
+}
+
+async function releaseLeaseBestEffort(
+  deps: CycleWatchDeps,
+  leaseDeps: WorkspaceLeaseDeps,
+  program: Program,
+  ownerId: string,
+  cycle: Cycle,
+): Promise<void> {
+  try {
+    await releaseCycleLease(leaseDeps, {
+      workspaceKey: program.workspaceKey,
+      ownerId,
+      epoch: cycle.leaseEpoch,
+    });
+  } catch (error) {
+    deps.logger?.warn?.("Continuous lease release failed", {
+      event: "continuous.supervisor.lease_release_failed",
+      module: "services.continuous",
+      cycleId: cycle.id,
+      errorMessage: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+async function ingest(
+  deps: CycleWatchDeps,
+  cycle: Cycle,
+  program: Program,
+  items: ContinuousReportItem[],
+  nextCursor: number,
+  accumulator: ReportAccumulator,
+): Promise<void> {
+  const outcome = await new ContinuousReportIngestion({
+    repository: deps.repository,
+    clock: deps.clock,
+  }).ingestBatch({
+    programId: program.id,
+    cycleId: cycle.id,
+    items,
+    nextCursor,
+  });
+  accumulateInto(accumulator, outcome);
+}

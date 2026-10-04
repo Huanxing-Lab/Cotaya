@@ -125,6 +125,31 @@ export function acquireLeaseReady(db: ContinuousDatabaseSync, lease: WorkspaceLe
   });
 }
 
+export function renewLeaseReady(
+  db: ContinuousDatabaseSync,
+  input: {
+    workspaceKey: string;
+    ownerId: string;
+    epoch: number;
+    expiresAt: number;
+    updatedAt: number;
+  },
+): void {
+  // 续租只允许当前 owner/epoch：WHERE 同时匹配三者，未命中即失去续租（§10）。
+  const result = db
+    .prepare(
+      `UPDATE continuous_workspace_lease
+       SET expires_at = ?, updated_at = ?
+       WHERE workspace_key = ? AND owner_id = ? AND epoch = ? AND cycle_id IS NOT NULL`,
+    )
+    .run(input.expiresAt, input.updatedAt, input.workspaceKey, input.ownerId, input.epoch);
+  if (Number(result.changes) !== 1)
+    throw Object.assign(
+      new Error(`lease 续租未命中（owner/epoch 不匹配或已释放）: ${input.workspaceKey}`),
+      { kind: "lease_not_found" },
+    );
+}
+
 export function releaseLeaseReady(
   db: ContinuousDatabaseSync,
   workspaceKey: string,

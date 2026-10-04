@@ -49,6 +49,26 @@ Invariants that types cannot express (rules: `docs/specs/continuous.md`):
 - 局部阻塞谓词唯一实现是 `decisionBlocksCandidate`（candidatePolicy 选择期过滤复用）：
   candidateIds/paths 命中才阻塞，capability 不单独阻塞，空 scope 阻塞零候选——
   pending Decision 从不暂停 Program（`decisionBlocksProgram` 恒 false）。
+- workspace lease 的裁决唯一入口是 `application/workspaceLease`（CT-07）：epoch 单调（正常
+  释放保留 epoch、cycle/owner/expiry 同空）；同 Cycle 同 owner 重入只续租不抬 epoch；
+  过期不直接接管——先核对旧 owner/attachment（旧执行者仍可达且 Run 未终态 → 拒绝，不启动
+  第二写入者），撤销旧许可并确认停止后才允许 epoch+1 接管；旧 epoch 的副作用一律
+  `lease_lost` 拒绝（`requireLeaseEpoch` 守卫）。expires_at 是续租期限，不是进程死亡证明；
+  suspended Cycle 保留占用（不释放），防止另一轮覆盖待恢复工作。
+- 周期唤醒链路只转发不派发（CT-07）：scheduler 进程经 `ContinuousWakeSource` 只读到期查询
+  （本模块 adapters 层，不写任何表、不保存派发状态），wake 经 main 按身份转发给窗口
+  Host；`ContinuousRecoveryService.handleWake` 先核对未结束 Cycle 再处理到期——重复 wake
+  由 trigger key UNIQUE（`scheduledTriggerKey` = Program/revision/到期时间）与「一个
+  Program 一条未结束 Cycle」约束幂等吸收；错过多轮只唤醒一次（结算后 nextCycleAt 取下一个
+  未来时点，不排队补跑）。恢复顺序（§10）由 `ContinuousRecoveryService` 唯一编排：先全部
+  未结束 Cycle（活着重连/中断同 Run 有限 resume/completed 只结算/不可恢复保存证据/
+  suspended 保持），最后到期 Program；临时失败按 30s/120s 退避，超限暂停询问
+  （resume_limit 继续确认），用户取消（stopReason=user）不自动恢复。
+- 控制面语义（`application/supervisorControl`，CT-07）：Pause（本轮结束后）与立即停止
+  （撤销→取消→等待停止→cancelled+paused，必须携带当前 lease epoch）是两个命令；
+  正常退出保存 interrupted（挂起而非 stop——stop 的 revoked 语义会封死 resume）；
+  Goal/Scope/模板变更 revision+1 并结算当前轮为 paused（旧授权立即失效），单纯预算/cadence
+  修改不递增授权 revision、cadence 只影响未来轮。
 - 本模块不得导入 AgentRuntime 或 CLI 具体实现；执行经 `application/ports.ts`
   的注入端口（adapters 由 CLI bootstrap 侧实现）；固定模板（bootstrap
   `continuous-templates`）经 Host 注入的 `ContinuousTemplateSource` 进入，模板 hash 与

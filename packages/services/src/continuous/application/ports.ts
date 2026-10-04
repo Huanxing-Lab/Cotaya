@@ -35,6 +35,11 @@ export interface ContinuousRepositoryPort {
   getCycle(cycleId: string): Promise<Cycle | null>;
   /** 同一 Program 最多一个未结束 Cycle（部分唯一索引保证，不靠内存 mutex）。 */
   getOpenCycle(programId: string): Promise<Cycle | null>;
+  /**
+   * 按 trigger key 读 Cycle（UNIQUE(program_id,trigger_key)）：同请求/同到期窗口的幂等
+   * 重放命中同一条行——终态行也返回（不重提交；开放行走监督复用），CT-07。
+   */
+  getCycleByTriggerKey(programId: string, triggerKey: string): Promise<Cycle | null>;
   /** 生成下一个 sequence 用；配合 UNIQUE(program_id,sequence) 在事务内原子去重。 */
   getLatestCycleSequence(programId: string): Promise<number>;
   saveCandidate(candidate: Candidate): Promise<void>;
@@ -77,6 +82,18 @@ export interface ContinuousRepositoryPort {
   getLease(workspaceKey: string): Promise<WorkspaceLease | null>;
   /** epoch 必须大于现存值；首次获取从 1 开始。违反抛 epoch_conflict。 */
   acquireLease(lease: WorkspaceLease): Promise<void>;
+  /**
+   * 续租（§10：期限默认 90 秒、30 秒续租）：当前 owner/epoch 匹配才允许延长 expires_at；
+   * 行不存在或 owner/epoch 不匹配抛 lease_not_found/epoch_conflict——失去续租的执行者据此
+   * 立刻停止新操作（不把 expires_at 当进程死亡证明，epoch 未被接管前 owner 不变）。
+   */
+  renewLease(input: {
+    workspaceKey: string;
+    ownerId: string;
+    epoch: number;
+    expiresAt: number;
+    updatedAt: number;
+  }): Promise<void>;
   /** 正常释放：cycle/owner/expiry 同步置空，epoch 保留不重置。 */
   releaseLease(workspaceKey: string, updatedAt: number): Promise<void>;
   // ── 使用账本（continuous_usage；CT-04 admission 的存储面）──

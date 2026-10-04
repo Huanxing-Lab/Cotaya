@@ -93,10 +93,14 @@ export function listPendingDecisionsReady(
 
 export function appendEventReady(db: ContinuousDatabaseSync, event: ContinuousEvent): void {
   const row = encodeEvent(event);
-  // event_key UNIQUE：审计事件重复写入必须显式失败，导入重放走 INSERT OR IGNORE。
+  // event_key UNIQUE 且按幂等语义写入（ON CONFLICT DO NOTHING）。CT-01 曾让重复写入显式失败，
+  // CT-07 恢复流程会重放 settling 中断的结算（先导入报告、再写 selection 事件、再 completeCycle）：
+  // 结算在 completeCycle 提交前被 kill 时事件可能已单独落库，重放若抛 UNIQUE 会把可恢复崩溃
+  // 变成永久失败（R-05/R-08）；与导入重放（ON CONFLICT DO NOTHING）统一为同一幂等语义。
   db.prepare(
     `INSERT INTO continuous_event (program_id, cycle_id, event_key, type, payload_json, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(event_key) DO NOTHING`,
   ).run(row.program_id, row.cycle_id, row.event_key, row.type, row.payload_json, row.created_at);
 }
 

@@ -646,6 +646,12 @@ function forwardOffPeakRunResult(
 ): void {
   cronScheduler?.handleOffPeakRunResult(result);
 }
+// host → main 的 Continuous wake 送达回执，转交 scheduler 记录投递事实（CT-07）。
+function forwardContinuousWakeResult(
+  result: Parameters<CronSchedulerHandle["handleContinuousWakeResult"]>[0],
+): void {
+  cronScheduler?.handleContinuousWakeResult(result);
+}
 function wakeCronScheduler(automationId: string): void {
   cronScheduler?.wake(automationId);
 }
@@ -1730,6 +1736,7 @@ function createWindowInstance(startupBootstrap: StartupWindowBootstrap = {}) {
           },
           onCronRunResult: forwardCronRunResult,
           onOffPeakRunResult: forwardOffPeakRunResult,
+          onContinuousWakeResult: forwardContinuousWakeResult,
           onCronSchedulerWakeRequested: wakeCronScheduler,
           onOffPeakSchedulerWakeRequested: wakeOffPeakScheduler,
           authorizeLocalMediaPreviewPath: localMediaPreviewPathRegistry.authorize,

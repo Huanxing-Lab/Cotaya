@@ -9,14 +9,18 @@
 // （SupervisedCycleOutcome 类型也因此住在这里，避免环）。
 
 import { createHash, randomUUID } from "node:crypto";
-import type {
-  ContinuousErrorCode,
-  ContinuousReportCandidateResultItem,
-  ContinuousReportCycleResultItem,
-} from "@zcode/shared";
-import type { Cycle, CycleResult, Program } from "../domain/types.js";
+import type { ContinuousErrorCode } from "@zcode/shared";
+import type { Cycle, Program } from "../domain/types.js";
+import { isTerminalCycleStatus } from "../domain/types.js";
 import { selectCandidates } from "../domain/candidatePolicy.js";
+import type { ReportAccumulator, RunNowResult, SupervisedCycleOutcome } from "./supervisorTypes.js";
+export type { ReportAccumulator, RunNowResult, SupervisedCycleOutcome } from "./supervisorTypes.js";
 import { nextCycleAtFor } from "../domain/cadencePolicy.js";
+import {
+  budgetSuspensionReason,
+  buildCycleResult,
+  suspendCycleForBudget,
+} from "./supervisorSettlement.js";
 import { ContinuousReportIngestion, type ReportIngestionOutcome } from "./reportIngestion.js";
 import type {
   ContinuousClockPort,
@@ -26,14 +30,21 @@ import type {
   ExecutionState,
 } from "./ports.js";
 
-/** 监督一轮的终局结论（supervisor 的 completion 以它 resolve）。 */
-export interface SupervisedCycleOutcome {
-  cycleId: string;
-  cycleStatus: Cycle["status"];
-  programStatus: Program["status"];
-  result?: CycleResult;
-  /** 导入侧拒绝的报告条数（malformed/未过 done 门；细节在拒绝事件里）。 */
-  reportRejections: number;
+/**
+ * supervisor 链路的结构化错误（词表含 open_cycle_exists/program_not_runnable 两个编排层
+ * 语义；CT-07 起控制面复用同一错误类）。放本文件避免 supervisor↔supervisorControl 循环引用。
+ */
+export class ContinuousSupervisorError extends Error {
+  constructor(
+    readonly code:
+      | import("@zcode/shared").ContinuousErrorCode
+      | "open_cycle_exists"
+      | "program_not_runnable",
+    message: string,
+  ) {
+    super(message);
+    this.name = "ContinuousSupervisorError";
+  }
 }
 
 /** 生命周期操作需要的依赖子集（supervisor 交进来；测试可独立注入）。 */
@@ -64,13 +75,18 @@ export async function createManagedCycleRecord(
   input: {
     program: Program;
     triggerKey: string;
+    /** manual=请求 ID；interval/daily=稳定到期 key（cadencePolicy 派生，§10）。 */
+    triggerKind: Cycle["trigger"]["kind"];
     requestId: string;
     baseCommit: string;
     template: { scriptText: string; scriptHash?: string } | null;
     now: number;
   },
-): Promise<{ ok: true; cycle: Cycle } | { ok: false; code: ContinuousErrorCode; message: string }> {
-  const { program, triggerKey, requestId, baseCommit, template, now } = input;
+): Promise<
+  | { ok: true; cycle: Cycle }
+  | { ok: false; code: ContinuousErrorCode | "open_cycle_exists"; message: string }
+> {
+  const { program, triggerKey, triggerKind, requestId, baseCommit, template, now } = input;
   if (!template) {
     return {
       ok: false,
@@ -100,7 +116,7 @@ export async function createManagedCycleRecord(
     programId: program.id,
     sequence: (await repository.getLatestCycleSequence(program.id)) + 1,
     triggerKey,
-    trigger: { kind: "manual" },
+    trigger: { kind: triggerKind },
     status: "preparing",
     configurationSnapshot: {
       goal: program.goal,
@@ -113,7 +129,7 @@ export async function createManagedCycleRecord(
         version: program.templateVersion,
         hash: program.templateHash,
       },
-      trigger: { kind: "manual", requestId },
+      trigger: { kind: triggerKind, requestId },
     },
     scriptText: template.scriptText,
     scriptHash,
@@ -131,19 +147,23 @@ export async function createManagedCycleRecord(
     updatedAt: now,
   };
   // 并发窗口的第二个写入者由 UNIQUE(trigger_key)/开放 Cycle 部分唯一索引在数据库层拒绝。
-  await repository.insertCycle(cycle);
+  try {
+    await repository.insertCycle(cycle);
+  } catch (error) {
+    // CT-07：到期启动与上一轮结算并发时（恢复流程读到尚未推进 nextCycleAt 的 Program，
+    // 而旧 Cycle 恰在检查后落终态），INSERT 撞 UNIQUE(program_id,trigger_key)——该到期窗口
+    // 已启动过，按「错过多轮只唤醒一次」语义跳过（open_cycle_exists 由调用方安静吸收），
+    // 不能把幂等竞态当成故障抛出。修复依据：docs/specs/continuous.md §10 重复 wake/错过多轮。
+    if ((error as { errcode?: number }).errcode === 2067) {
+      return {
+        ok: false,
+        code: "open_cycle_exists",
+        message: `trigger 窗口已启动过（UNIQUE 命中）: ${triggerKey}`,
+      };
+    }
+    throw error;
+  }
   return { ok: true, cycle };
-}
-
-/** 跨批次累计导入结论（监督循环与 settling 共用）。 */
-export interface ReportAccumulator {
-  candidateResults: Map<
-    string,
-    { item: ContinuousReportCandidateResultItem; doneAccepted: boolean }
-  >;
-  cycleResult?: ContinuousReportCycleResultItem;
-  itemKeyOfCandidateId: Map<string, string>;
-  rejections: number;
 }
 
 export function createAccumulator(): ReportAccumulator {
@@ -264,6 +284,18 @@ export async function settleCycle(
   const settledAt = deps.clock.now();
   // 结算行以库内最新为准（settling 期间 cursor/健康字段可能又被推进）。
   const liveCycle = (await deps.repository.getCycle(cycle.id)) ?? cycle;
+  if (isTerminalCycleStatus(liveCycle.status)) {
+    // CT-07 修复：结算非原子窗口内另一写入者（立即停止/恢复流程/同库另一实例）已落终态时，
+    // 本分支不得再用自己的结论覆盖（用户取消被翻成 completed、paused 被翻成 sleeping 都是
+    // 真实竞态）。以先落库的终态为准，本结算只上报导入事实。
+    return {
+      cycleId: cycle.id,
+      cycleStatus: liveCycle.status,
+      programStatus: liveProgram.status,
+      ...(liveCycle.result === undefined ? {} : { result: liveCycle.result }),
+      reportRejections: accumulator.rejections,
+    };
+  }
   const consecutiveFailures = failed ? liveProgram.consecutiveFailures + 1 : 0;
   const programFailed = failed && consecutiveFailures >= 3;
   const terminalCycle: Cycle = {
@@ -274,7 +306,11 @@ export async function settleCycle(
     ...(result === undefined ? {} : { result }),
   };
   await deps.repository.completeCycle(terminalCycle, {
-    status: programFailed ? "failed" : "sleeping",
+    // CT-07 修复：结算期间用户已 Pause 的 Program 保持 paused（§6「当前轮可结束」），不能被
+    // 这里无条件翻成 sleeping——否则 Pause 语义退化为「只取消未开始的部分」。恢复依据：
+    // settle 以库内 liveProgram 为准（paused 状态是用户事实，nextCycleAt 照常保存，paused
+    // Program 不会被到期查询唤醒，直到显式恢复）。
+    status: programFailed ? "failed" : liveProgram.status === "paused" ? "paused" : "sleeping",
     ...(programFailed ? { statusReason: "连续失败达到上限，需显式恢复" } : {}),
     nextCycleAt: nextCycleAtFor(liveProgram, settledAt),
     lastCycleAt: settledAt,
@@ -285,113 +321,12 @@ export async function settleCycle(
   return {
     cycleId: cycle.id,
     cycleStatus: terminalCycle.status,
-    programStatus: programFailed ? "failed" : "sleeping",
+    programStatus: programFailed
+      ? "failed"
+      : liveProgram.status === "paused"
+        ? "paused"
+        : "sleeping",
     ...(result === undefined ? {} : { result }),
     reportRejections: accumulator.rejections,
   };
-}
-
-/** 资源上限挂起：cycle suspended + program paused + 同轮唯一 pending 继续确认（§6.1/§5）。 */
-async function suspendCycleForBudget(
-  deps: CycleSettlementDeps,
-  input: {
-    cycle: Cycle;
-    program: Program;
-    finalState: ExecutionState;
-    accumulator: ReportAccumulator;
-  },
-): Promise<SupervisedCycleOutcome> {
-  const { cycle, program, finalState, accumulator } = input;
-  const reason = budgetSuspensionReason(finalState)!;
-  const now = deps.clock.now();
-  const existing = await deps.repository.getPendingContinuationRequest(cycle.id);
-  let requestId = existing?.id;
-  if (requestId === undefined) {
-    requestId = randomUUID();
-    await deps.repository.insertContinuationRequest({
-      id: requestId,
-      programId: program.id,
-      cycleId: cycle.id,
-      reason,
-      limitKind: reason === "retry_limit" ? "retry" : "cost",
-      reasons: [reason],
-      observedUsage: {
-        failureCode: finalState.failureCode ?? null,
-        stopReason: finalState.stopReason ?? null,
-      },
-      currentLimit: { perCycleCostUsdMicros: program.budget.perCycleCostUsdMicros },
-      recommendedExtension: { costMicros: program.budget.perCycleCostUsdMicros },
-      version: 1,
-      status: "pending",
-      createdAt: now,
-    });
-  }
-  const suspended: Cycle = {
-    ...cycle,
-    status: "suspended",
-    pendingContinuationRequestId: requestId,
-    updatedAt: now,
-  };
-  await deps.repository.saveCycle(suspended);
-  await deps.repository.saveProgram({
-    ...program,
-    status: "paused",
-    statusReason: `资源上限（${reason}）待继续确认`,
-    updatedAt: now,
-  });
-  return {
-    cycleId: cycle.id,
-    cycleStatus: "suspended",
-    programStatus: "paused",
-    reportRejections: accumulator.rejections,
-  };
-}
-
-/** 终局 CycleResult：changedFiles/commits 只采信过门的 done 结果；cycle_result 只提供叙事。 */
-function buildCycleResult(
-  accumulator: ReportAccumulator,
-  doneResults: Array<{ item: { changedFiles: string[]; commits: string[] } }>,
-  attempted: number,
-  finalState: ExecutionState,
-): CycleResult | undefined {
-  if (doneResults.length === 0 && accumulator.cycleResult === undefined && attempted === 0) {
-    return finalState.status === "completed"
-      ? {
-          outcome: "no_changes",
-          changedFiles: [],
-          commits: [],
-          evidence: [],
-          summary: "本轮未发现可自主实施的改进",
-        }
-      : undefined;
-  }
-  const changedFiles = [...new Set(doneResults.flatMap((entry) => entry.item.changedFiles))];
-  const commits = [...new Set(doneResults.flatMap((entry) => entry.item.commits))];
-  const reported = accumulator.cycleResult;
-  let outcome: CycleResult["outcome"];
-  if (doneResults.length === 0) {
-    outcome = attempted > 0 || reported?.outcome === "changes_verified" ? "partial" : "no_changes";
-  } else if (reported?.outcome === "changes_verified" && attempted === doneResults.length) {
-    outcome = "changes_verified";
-  } else {
-    outcome = "partial";
-  }
-  return {
-    outcome,
-    changedFiles,
-    commits,
-    evidence: reported?.evidence ?? [],
-    summary:
-      reported?.summary ??
-      `${doneResults.length}/${attempted} 项完成验证提交${commits.length > 0 ? `（${commits.length} 个本地提交）` : ""}`,
-  };
-}
-
-/** 预算/重试类失败 → 挂起原因；其余失败按任务失败处理（尽力映射，真实 provider 链路归 CT-09）。 */
-export function budgetSuspensionReason(state: ExecutionState): "cost_limit" | "retry_limit" | null {
-  const text = `${state.failureCode ?? ""} ${state.stopReason ?? ""}`;
-  const budgetCodes = ["budget_denied", "admission_closed", "ledger_unreachable"];
-  if (budgetCodes.some((code) => text.includes(code))) return "cost_limit";
-  if (text.includes("retry_limit")) return "retry_limit";
-  return null;
 }

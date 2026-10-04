@@ -257,6 +257,8 @@ export {
 export { AutomationService, InvalidCronExprError } from "./session/automationService.js";
 // 闲时任务与 automation 同库不同表；类型/常量全独立。
 export { OffPeakTaskRepo, OFF_PEAK_CLAIM_STALE_MS } from "./session/offPeakTaskRepo.js";
+// Continuous 到期唤醒的只读查询面（scheduler 只查询和唤醒，不派发；CT-07）。
+export { ContinuousWakeSource, type ContinuousDueProgram } from "./continuous/contract.js";
 // host 域终态回填 files_changed 复用现有 task diff 汇总。
 export { buildTaskChangeSummary } from "./session/taskChangeSummary.js";
 export { OffPeakTaskService } from "./session/offPeakTaskService.js";

@@ -176,6 +176,45 @@ export {
   ContinuousDecisionService,
   DecisionVersionConflictError,
 } from "./application/decisionService.js";
+// CT-07：周期、执行权与恢复。cadencePolicy 是 trigger key/到期判定/退避曲线的单一实现；
+// workspaceLease 是 lease 裁决唯一入口（epoch 单调、过期先核对旧 owner、旧 epoch 副作用拒绝）；
+// recovery 是重启核对与到期启动的编排（先未结束 Cycle 后到期、同 Run 有限恢复、退避超限询问）；
+// supervisorControl 是控制面（暂停/立即停止/继续/退出保存 interrupted/配置变更授权处理）。
+export {
+  CONTINUOUS_RECOVERY_BACKOFF_MS,
+  isProgramDue,
+  manualTriggerKey,
+  recoveryBackoffMs,
+  scheduledTriggerKey,
+} from "./domain/cadencePolicy.js";
+export {
+  CONTINUOUS_LEASE_RENEW_INTERVAL_MS,
+  CONTINUOUS_LEASE_TERM_MS,
+  ContinuousLeaseLostError,
+  acquireCycleLease,
+  releaseCycleLease,
+  renewCycleLease,
+  requireLeaseEpoch,
+} from "./application/workspaceLease.js";
+export type { LeaseAcquireResult, WorkspaceLeaseDeps } from "./application/workspaceLease.js";
+export type { CycleControlDeps, ProgramConfigPatch } from "./application/supervisorControl.js";
+export {
+  changeProgramConfig,
+  continueSuspendedCycle,
+  interruptCyclesForShutdown,
+  pauseProgram,
+  resumeProgram,
+  stopCurrentCycle,
+} from "./application/supervisorControl.js";
+export type {
+  ContinuousRecoveryDeps,
+  RecoveryAction,
+  RecoveryReport,
+} from "./application/recovery.js";
+export { ContinuousRecoveryService } from "./application/recovery.js";
+// 到期唤醒的只读查询面（桌面 scheduler 经 @zcode/services/node 消费；只查询不派发）。
+export type { ContinuousDueProgram } from "./adapters/continuousWakeSource.js";
+export { ContinuousWakeSource } from "./adapters/continuousWakeSource.js";
 
 /**
  * Continuous 服务接口（Host 持有唯一实例；业务写入唯一路径）。
