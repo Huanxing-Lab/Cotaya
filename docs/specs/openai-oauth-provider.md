@@ -229,6 +229,13 @@ env 覆盖见 §2.7 deviation 补记）。
     merge-patch，已实测展开正确）。用户不选时不下发，由后端
     `default_reasoning_level` 兜底。`max_context_window=872000` 与
     `verbosity` 暂未消费（无对应运行时选项），留待需要时接。
+    - **修订（revision 34，2026-10-04 复盘）**：revision 33 把 `gpt-5.6-luna`
+      误配到 `ultra`（套用了 sol/terra 的档位表）。`/models` 复测该模型只支持到
+      `max`，已修正。影响面：仓库「主动选模型默认取最高档」
+      （`values.at(-1)`，completeNewModelSelection / GUI picker / workflow
+      目录三处同规则）会把默认档落在错误配置的 `ultra` 上。已存有
+      `gpt-5.6-luna$ultra` 的选择经 `normalizeModelSelection` 降级为仅模型身份、
+      等待重选档位，不会硬失败。
 - 可用性：`codingPlanProviderAvailability.ts:129-163` 的 openai 版本**以本地
   token 有效性为 entitled**（无 zcode 后端套餐校验）；family 投影
   `accountProviderConnectionResolver.ts:94`（`["zai","bigmodel"]` 硬循环）加

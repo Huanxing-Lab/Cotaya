@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "revision": 33,
+  "revision": 34,
   "config": {
     "providerConfigRules": {
       "templateRules": [
@@ -6340,7 +6340,7 @@
             "enabled": true,
             "optionSpecs": {
               "reasoningLevel": {
-                "values": ["low", "medium", "high", "xhigh", "max", "ultra"],
+                "values": ["low", "medium", "high", "xhigh", "max"],
                 "map": "{\"reasoning\": {\"effort\": reasoningLevel}}"
               }
             }
