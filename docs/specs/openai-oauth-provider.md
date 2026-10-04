@@ -193,12 +193,25 @@ env 覆盖见 §2.7 deviation 补记）。
     静态值下发；原计划的 `OPENAI_OAUTH_ORIGIN` env 覆盖从未接线（运行时解析链
     无消费方，已按未使用导出清理）。真实账号校准时如需覆盖能力，随 provider
     规则校准一并提供。
+  - **校准记录（2026-10-04，真实 Plus 账号实测）**：version 静态值
+    `0.142.5` 会被后端 `minimal_client_version` 门控拒绝——`gpt-5.6-*` 要求
+    `0.144.0`、`gpt-6-sol/luna` 要求 `0.155.0`，实测返回
+    `400 The 'gpt-5.6-terra' model requires a newer version of Codex`；已校准为
+    `0.159.0`（同 cc-switch），实测 200。该值须随官方 Codex CLI 版本演进同步
+    上调，模型 400 且报 requires a newer version 时优先怀疑此处。
 - provider 配置：`provider-data-schema.ts:30-62` access 联合新增
   `chatgpt-account{accountType:"openai"}`（不动 `zhipu-account` 语义）；
   `provider-config.ts:36-112` 旁新增对应 access 类；`zcode-builtin.json` 现有
   openai **api-key** 模板在 `:323-353`（保持不动），新增
-  `account:openai-plan` providerRule + 模型规则（模型 id 先沿用 openai 模板
-  现有清单 `:337-348`，真实账号校准列入 deviations 待办）。
+  `account:openai-plan` providerRule + 模型规则。
+  - **模型清单校准（2026-10-04，`GET /models?client_version=0.159.0` 实测）**：
+    取后端 `visibility=list` 的 8 个：`gpt-6.1-sol`、`gpt-6-astra`、`gpt-6-sol`、
+    `gpt-6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-5.5`
+    （`gpt-reserve`、`codex-auto-review` 为 `visibility=hide`，不列）；原沿用
+    api-key 模板的 `gpt-5.6`/`gpt-5.4*`/`gpt-5.3-codex` 后端不存在，已移除。
+    同源实测：`context_window=272000`、支持图片输入，经
+    `providerSiteRules`（`baseUrlMatch: https://chatgpt\.com/backend-api/codex/?`）
+    单条规则下发，不动全局 `.*` 兜底（revision 32）。
 - 可用性：`codingPlanProviderAvailability.ts:129-163` 的 openai 版本**以本地
   token 有效性为 entitled**（无 zcode 后端套餐校验）；family 投影
   `accountProviderConnectionResolver.ts:94`（`["zai","bigmodel"]` 硬循环）加
