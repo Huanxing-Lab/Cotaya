@@ -1609,6 +1609,8 @@ export function createLocalServices(options: {
       // 失败回 zcode-builtin.json 静态清单兜底。
       openAIModelCatalog: createOpenAIModelCatalogService({
         credentialService,
+        // 账号 id 走既有权威解析，不在目录模块里手写第二份 user_info 形状知识。
+        loadAccountId: () => loadAccountIdentity("openai"),
         configDir: resolveAppConfigDir(),
       }),
     }),

@@ -188,7 +188,12 @@ export async function validateOpenAIAccountProviderAvailability(
   }
   // 目录端口返回 null（未注入/未登录/拉取失败且无缓存）时不带 models，
   // zcode-builtin.json 静态清单兜底；空数组是后端权威结果，投影为权威空清单。
-  const models = await context.openAIModelCatalog?.resolveModelIds().catch(() => null);
+  const models = await context.openAIModelCatalog?.resolveModelIds().catch((error: unknown) => {
+    // 目录内部的网络/缓存失败已自行 warn；这里兜住凭据/注入侧的意外抛错，
+    // 按「目录不可得」降级而不是让 availability 整体失败。
+    log.warn(`OpenAI 模型目录解析异常，回静态清单兜底：${String(error)}`);
+    return null;
+  });
   return {
     [provider.providerId]: {
       kind: "available",

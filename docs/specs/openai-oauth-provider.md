@@ -189,10 +189,14 @@ env 覆盖见 §2.7 deviation 补记）。
   `chatgpt-account-id: <chatgpt_account_id>`（动态，同上）、
   `originator: codex_cli_rs` 与 version 指纹头（**静态**，放 provider 规则
   `api.headers`，即 `zcode-builtin.json` openai 账号登录 providerRule）。
-  - **deviation（review 修复补记）**：originator/version 仅以 zcode-builtin.json
-    静态值下发；原计划的 `OPENAI_OAUTH_ORIGIN` env 覆盖从未接线（运行时解析链
-    无消费方，已按未使用导出清理）。真实账号校准时如需覆盖能力，随 provider
-    规则校准一并提供。
+  - **deviation（review 修复补记，§2.8 落地后部分更新）**：模型请求链路的
+    originator/version 仅以 zcode-builtin.json 静态值下发；原计划的
+    `OPENAI_OAUTH_ORIGIN` env 覆盖从未接线（运行时解析链无消费方，已按未使用
+    导出清理）。§2.8 目录拉取链路引入了
+    `OPENAI_CODEX_ORIGINATOR`/`OPENAI_CODEX_CLIENT_VERSION` env 覆盖
+    （shared `resolveOpenAICodex*`），但**只作用于目录拉取**，模型请求头的
+    originator/version 仍以 builtin headers 为准——如需全链路 env 覆盖，
+    随 provider 规则校准一并提供。
   - **校准记录（2026-10-04，真实 Plus 账号实测）**：version 静态值
     `0.142.5` 会被后端 `minimal_client_version` 门控拒绝——`gpt-5.6-*` 要求
     `0.144.0`、`gpt-6-sol/luna` 要求 `0.155.0`，实测返回
@@ -248,9 +252,11 @@ env 覆盖见 §2.7 deviation 补记）。
   图片输入、reasoning 档位）仍来自静态规则——`providerSiteRules`（baseUrl 作用域）
   覆盖全部打到 codex 后端的模型，新模型自动获得 ctx/图片默认；逐模型 reasoning
   档位需随校准更新 zcode-builtin.json（未校准的新模型回落全局 `.*` 兜底）。
-- **版本指纹**：目录拉取与模型请求共用 `resolveOpenAICodexClientVersion()`
-  （shared 常量 `0.159.0` + `OPENAI_CODEX_CLIENT_VERSION` env 覆盖）；该值与
-  zcode-builtin.json `api.headers.version` 是同一事实的两处表达，校准时同步。
+- **版本指纹**：目录拉取使用 `resolveOpenAICodexClientVersion()` /
+  `resolveOpenAICodexOriginator()`（shared 常量 `0.159.0` / `codex_cli_rs`，
+  env `OPENAI_CODEX_CLIENT_VERSION` / `OPENAI_CODEX_ORIGINATOR` 覆盖）；
+  version 与 zcode-builtin.json `api.headers.version` 是同一事实的两处表达，
+  校准时同步（originator 覆盖仅作用目录拉取，见 §2.7 deviation）。
 - **CLI standalone 运行时**暂不接目录同步（无 host 账号解析周期），静态清单
   兜底；接入时复用 `createOpenAIModelCatalogService`（已从 services 导出）。
 

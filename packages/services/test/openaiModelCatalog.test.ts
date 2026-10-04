@@ -25,14 +25,11 @@ function createCatalogHarness(options: CatalogHarnessOptions = {}) {
   const token = options.token === undefined ? "token-1" : options.token;
   if (token !== null) {
     credentials.set("oauth:openai:access_token", token);
-    credentials.set(
-      "oauth:openai:user_info",
-      JSON.stringify({ id: options.accountId ?? "account-1" }),
-    );
   }
   let fetchCount = 0;
   const service = createOpenAIModelCatalogService({
     credentialService: { load: async (key) => credentials.get(key) ?? null },
+    loadAccountId: async () => options.accountId ?? "account-1",
     configDir,
     ttlMs: options.ttlMs,
     ...(options.now ? { now: options.now } : {}),
@@ -106,13 +103,11 @@ test("同账号失败回退旧缓存，换账号不得串用", async (t) => {
   const configDir = mkdtempSync(join(tmpdir(), "openai-catalog-"));
   t.after(() => rmSync(configDir, { recursive: true, force: true }));
   const credentials = new Map<string, string>([["oauth:openai:access_token", "token-1"]]);
-  const writeCredentials = () =>
-    credentials.set("oauth:openai:user_info", JSON.stringify({ id: accountId }));
-  writeCredentials();
   let clock = 1_000_000;
   let fetchCount = 0;
   const service = createOpenAIModelCatalogService({
     credentialService: { load: async (key) => credentials.get(key) ?? null },
+    loadAccountId: async () => accountId,
     configDir,
     ttlMs: 1, // 恒过期（配合注入时钟每轮推进），验证失败回退路径
     now: () => clock,
@@ -132,13 +127,42 @@ test("同账号失败回退旧缓存，换账号不得串用", async (t) => {
   );
   clock += 1_000;
   accountId = "account-2";
-  writeCredentials();
   assert.equal(
     await service.resolveModelIds(),
     null,
     "换账号后的旧缓存不是当前账号事实，回静态兜底",
   );
   assert.ok(fetchCount >= 3);
+});
+
+test("空清单旧缓存不作为失败回退，拉取失败时回静态兜底", async (t) => {
+  const configDir = mkdtempSync(join(tmpdir(), "openai-catalog-"));
+  t.after(() => rmSync(configDir, { recursive: true, force: true }));
+  let fail = false;
+  let clock = 1_000_000;
+  const service = createOpenAIModelCatalogService({
+    credentialService: {
+      load: async () => "token-1",
+    },
+    loadAccountId: async () => "account-1",
+    configDir,
+    ttlMs: 1,
+    now: () => clock,
+    fetchImpl: async () => {
+      if (fail) throw new Error("network down");
+      // 第一轮全部为隐藏模型：权威空清单被持久化。
+      return Response.json({ models: [{ slug: "hidden-one", visibility: "hide" }] });
+    },
+  });
+  assert.deepEqual(await service.resolveModelIds(), []);
+  clock += 1_000;
+  fail = true;
+  // 空数组只表示「后端明确无可列模型」；拉取失败回退它会把静态兜底也压掉。
+  assert.equal(
+    await service.resolveModelIds(),
+    null,
+    "空清单旧缓存不得作为失败回退，应返回 null 走静态兜底",
+  );
 });
 
 test("availability 集成：models 三态投影", async (t) => {

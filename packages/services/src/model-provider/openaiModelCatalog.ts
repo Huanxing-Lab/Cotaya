@@ -31,6 +31,8 @@ export interface OpenAIModelCatalogService {
 
 export interface OpenAIModelCatalogOptions {
   readonly credentialService: OpenAIModelCatalogCredentialService;
+  /** 账号 id 的权威解析（host 侧即 loadAccountIdentity("openai")）；注入避免本模块手写第二份 user_info 形状知识。 */
+  readonly loadAccountId: () => Promise<string | null>;
   /** 凭据文件所在配置目录（~/.cotaya/v2）；缓存写到 model-catalog/openai.json。 */
   readonly configDir: string;
   readonly env?: Record<string, string | undefined>;
@@ -73,14 +75,11 @@ export function createOpenAIModelCatalogService(
     if (!accessToken) return null;
     let accountId = "";
     try {
-      const rawUserInfo = await options.credentialService.load(
-        `oauth:${OPENAI_PROVIDER_ID}:user_info`,
-      );
-      const parsed = rawUserInfo ? (JSON.parse(rawUserInfo) as { id?: unknown }) : null;
-      const id = typeof parsed?.id === "string" ? parsed.id.trim() : "";
-      if (id) accountId = id;
+      const resolved = await options.loadAccountId();
+      const normalized = resolved?.trim() ?? "";
+      if (normalized) accountId = normalized;
     } catch {
-      // user_info 损坏不应阻断目录同步；退化为无账号隔离的缓存（下次登录刷新）。
+      // 账号 id 解析失败不应阻断目录同步；退化为无账号隔离的缓存（下次登录刷新）。
     }
     return { accessToken, accountId };
   }
@@ -204,8 +203,12 @@ export function createOpenAIModelCatalogService(
           return modelIds;
         } catch (error) {
           logger.warn(`OpenAI 模型目录拉取失败：${String(error)}`);
-          // 换账号后的旧缓存不是当前账号的事实，宁可回静态兜底也不能串用。
-          return cache && cache.accountId === material.accountId ? cache.modelIds : null;
+          // 换账号后的旧缓存不是当前账号的事实，宁可回静态兜底也不能串用；
+          // 空清单旧缓存也不得回退——空数组只表示「后端明确无可列模型」的权威
+          // 结果（spec §2.8），失败时返回它会压掉静态兜底。
+          return cache && cache.accountId === material.accountId && cache.modelIds.length > 0
+            ? cache.modelIds
+            : null;
         } finally {
           inflightRefresh = null;
         }
