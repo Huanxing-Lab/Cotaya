@@ -144,16 +144,16 @@ export function resolveExternalWorkspaceOpenDialogCopy(
   if (locale === "zh-CN") {
     return {
       buttons: ["打开文件夹", "取消"],
-      title: "打开外部 ZCode 链接？",
-      message: "是否在 ZCode 中打开此文件夹？",
+      title: "打开外部 Cotaya 链接？",
+      message: "是否在 Cotaya 中打开此文件夹？",
       detail: (path) => `${path}\n\n只打开你信任来源的文件夹。项目设置可能影响 agent runtime。`,
     };
   }
 
   return {
     buttons: ["Open folder", "Cancel"],
-    title: "Open external ZCode link?",
-    message: "Open this folder in ZCode?",
+    title: "Open external Cotaya link?",
+    message: "Open this folder in Cotaya?",
     detail: (path) =>
       `${path}\n\nOnly open folders from sources you trust. Project settings may affect the agent runtime.`,
   };
@@ -278,8 +278,8 @@ export function handleDeepLink(
     const targetWindow = options.resolveApplicationWindow
       ? options.resolveApplicationWindow()
       : (BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null);
-    // zcode://workspace/open 来自浏览器/IM 等外部应用，不能等同于用户在
-    // ZCode 内部选择目录；确认必须发生在 statSync 之前，避免项目配置被静默信任。
+    // cotaya://workspace/open 来自浏览器/IM 等外部应用，不能等同于用户在
+    // Cotaya 内部选择目录；确认必须发生在 statSync 之前，避免项目配置被静默信任。
     if (
       !confirmExternalWorkspaceOpen(workspacePath, logger, targetWindow, options.confirmationCopy)
     ) {
@@ -402,32 +402,38 @@ export function registerDeepLinkProtocol(
   },
   options: { iconPath?: string } = {},
 ) {
-  const scheme = "zcode";
+  // cotaya 是主 scheme；zcode 仅为 OAuth 回调保留（服务端注册依赖，
+  // 见 docs/specs/cotaya-brand-dataspace.md 2.4）。
+  const schemes = ["cotaya", "zcode"];
 
   if (process.defaultApp && process.argv.length >= 2) {
     const entry = resolve(process.argv[1]!);
-    const ok = app.setAsDefaultProtocolClient(scheme, process.execPath, [entry]);
-    if (!ok) {
-      logger.warn("[deep-link] 注册协议失败（defaultApp）", {
-        scheme,
-        execPath: process.execPath,
-        entry: process.argv[1],
-      });
-    } else {
-      logger.info("[deep-link] 注册协议成功（defaultApp）", {
-        scheme,
-        execPath: process.execPath,
-        entry: process.argv[1],
-      });
+    for (const scheme of schemes) {
+      const ok = app.setAsDefaultProtocolClient(scheme, process.execPath, [entry]);
+      if (!ok) {
+        logger.warn("[deep-link] 注册协议失败（defaultApp）", {
+          scheme,
+          execPath: process.execPath,
+          entry: process.argv[1],
+        });
+      } else {
+        logger.info("[deep-link] 注册协议成功（defaultApp）", {
+          scheme,
+          execPath: process.execPath,
+          entry: process.argv[1],
+        });
+      }
     }
     return;
   }
 
-  const ok = app.setAsDefaultProtocolClient(scheme);
-  if (!ok) {
-    logger.warn("[deep-link] 注册协议失败", { scheme });
-  } else {
-    logger.info("[deep-link] 注册协议成功", { scheme });
+  for (const scheme of schemes) {
+    const ok = app.setAsDefaultProtocolClient(scheme);
+    if (!ok) {
+      logger.warn("[deep-link] 注册协议失败", { scheme });
+    } else {
+      logger.info("[deep-link] 注册协议成功", { scheme });
+    }
   }
 
   if (process.platform === "linux" && app.isPackaged) {

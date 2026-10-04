@@ -1,5 +1,8 @@
-const DEEP_LINK_SCHEME = "zcode";
-const DEEP_LINK_RE = /\bzcode:(?:\/\/|\/)?[^\s"'<>]+/i;
+// cotaya 是主 scheme；zcode 暂时并列接受——OAuth 回调 zcode://oauth/callback 依赖
+// z.ai/bigmodel 服务端已注册的 redirect URI，切换完成前不能只认 cotaya。
+// （见 docs/specs/cotaya-brand-dataspace.md 2.4 开放项）
+const DEEP_LINK_SCHEMES = new Set(["cotaya", "zcode"]);
+const DEEP_LINK_RE = /\b(?:cotaya|zcode):(?:\/\/|\/)?[^\s"'<>]+/i;
 const OAUTH_CALLBACK_HOSTS = new Set(["oauth"]);
 const PAYMENT_CALLBACK_HOST = "payment";
 const WORKSPACE_OPEN_HOST = "workspace";
@@ -15,7 +18,7 @@ function normalizeOAuthCallbackPath(pathname: string): string {
 }
 
 export function isOAuthCallbackUrl(parsedUrl: URL): boolean {
-  if (parsedUrl.protocol !== `${DEEP_LINK_SCHEME}:`) {
+  if (!DEEP_LINK_SCHEMES.has(parsedUrl.protocol.slice(0, -1))) {
     return false;
   }
 
@@ -35,7 +38,7 @@ export function isOAuthCallbackUrl(parsedUrl: URL): boolean {
 }
 
 export function isPaymentCallbackUrl(parsedUrl: URL): boolean {
-  if (parsedUrl.protocol !== `${DEEP_LINK_SCHEME}:`) {
+  if (!DEEP_LINK_SCHEMES.has(parsedUrl.protocol.slice(0, -1))) {
     return false;
   }
 
@@ -53,7 +56,7 @@ export function isPaymentCallbackUrl(parsedUrl: URL): boolean {
 }
 
 export function isWorkspaceOpenUrl(parsedUrl: URL): boolean {
-  if (parsedUrl.protocol !== `${DEEP_LINK_SCHEME}:`) {
+  if (!DEEP_LINK_SCHEMES.has(parsedUrl.protocol.slice(0, -1))) {
     return false;
   }
 
@@ -81,7 +84,7 @@ export function extractWorkspaceOpenPath(parsedUrl: URL): string | null {
 
 export function isShareImportUrl(parsedUrl: URL): boolean {
   return (
-    parsedUrl.protocol === `${DEEP_LINK_SCHEME}:` &&
+    DEEP_LINK_SCHEMES.has(parsedUrl.protocol.slice(0, -1)) &&
     parsedUrl.hostname === SHARE_IMPORT_HOST &&
     normalizeOAuthCallbackPath(parsedUrl.pathname) === "/import"
   );

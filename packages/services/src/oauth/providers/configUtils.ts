@@ -4,6 +4,8 @@ import {
   buildRuntimeZCodeEndpointUrls,
 } from "@zcode/shared";
 
+// zcode:// 回调 URI 在 z.ai/bigmodel 服务端随 client_id 注册，Cotaya 切换自有
+// client 注册前不能改（见 docs/specs/cotaya-brand-dataspace.md 2.4 开放项）。
 const DESKTOP_OAUTH_CALLBACK_URI = "zcode://oauth/callback";
 
 export function readEnv(env: NodeJS.ProcessEnv, key: string): string | undefined {

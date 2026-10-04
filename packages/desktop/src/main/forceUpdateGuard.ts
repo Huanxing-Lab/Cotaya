@@ -205,7 +205,7 @@ function formatForceUpdateDialogText(
   }
 
   return {
-    title: "Update ZCode",
+    title: "Update Cotaya",
     message: "The current version can no longer be used",
     detail: `Current version: v${requirement.currentVersion}\nMinimum supported version: v${requirement.minimalVersion}`,
     autoUpdateButton: "Auto update",

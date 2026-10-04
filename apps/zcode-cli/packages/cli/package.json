@@ -2,9 +2,9 @@
   "name": "@zcode/cli",
   "version": "0.1.0",
   "private": true,
-  "description": "Main CLI application for zcode",
+  "description": "Main CLI application for cotaya",
   "bin": {
-    "zcode": "./dist/zcode.cjs"
+    "cotaya": "./dist/zcode.cjs"
   },
   "files": [
     "dist"
