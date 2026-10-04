@@ -100,6 +100,11 @@ import {
   type DynamicWorkflowRunEntryContext,
 } from "./dynamic-workflow-run-submit.js";
 import {
+  submitManagedDynamicWorkflowRun,
+  type ManagedRunSubmitRequest,
+  type ManagedRunSubmitResult,
+} from "./dynamic-workflow-run-managed-submit.js";
+import {
   listWorkspaceNodesFrom,
   readWorkspaceNodeResultFrom,
 } from "./dynamic-workflow-run-workspace.js";
@@ -272,6 +277,7 @@ export {
   isDynamicWorkflowTaskLinkStore,
   resolveDynamicWorkflowJournalStore,
   supportsRunIntrospection,
+  supportsSequencedReportReads,
   type DynamicWorkflowTaskLinkStore,
 } from "./dynamic-workflow-run-journal.js";
 
@@ -295,6 +301,23 @@ interface DynamicWorkflowRunService extends DynamicWorkflowRunPort {
    * 幂等——第二次调用返回同一个 promise，不再 abort 任何东西。
    */
   close(): Promise<void>;
+  /**
+   * 受控 submitOnce（CT-03，规格 §10/§11）：调用方（Continuous 执行适配器）指定稳定 runId 与
+   * 执行会话身份的提交入口。同 ID 同内容复用、不同 hash/args/owner 结构化拒绝；普通
+   * {@link DynamicWorkflowRunPort.submit} 的随机 ID 语义不变。实现体在
+   * dynamic-workflow-run-managed-submit.ts。
+   */
+  submitOnce(request: ManagedRunSubmitRequest): Promise<ManagedRunSubmitResult>;
+  /**
+   * 等待一个 run 的执行停止与统计收尾（结算 + 被中止 turn 的收尾写完，I-06）。实现体在
+   * dynamic-workflow-run-lifecycle.ts。
+   */
+  waitForQuiescence(runId: string): Promise<void>;
+  /**
+   * 注册表活条目探测（CT-03 managed cycle 的健康快照用）：journal 的 running 行不含
+   * 「引擎在本进程活着」这一事实（死进程的遗物也停在 running），注册表是唯一真相。
+   */
+  isLiveRun(runId: string): boolean;
 }
 
 /**
@@ -348,6 +371,7 @@ export function createDynamicWorkflowRunService(
     subscribeRunSettled,
     trackSettlement,
     close,
+    waitForRunQuiescence,
     assertOpen,
     noteForeignTerminalRow,
   } = createRunServiceLifecycle({
@@ -374,6 +398,14 @@ export function createDynamicWorkflowRunService(
     countLiveRuns,
     subscribeRunSettled,
     close,
+    // 等待执行停止与统计收尾：managed cycle 的 settling 收尾（I-06）经它等「结算 + 收尾」，
+    // 普通调用方不受影响（它只读注册表与结算 promise，无副作用、幂等）。
+    waitForQuiescence: waitForRunQuiescence,
+    // 注册表活条目探测（接口注释见上）：只读，无副作用。
+    isLiveRun: (runId: string): boolean => {
+      const entry = runs.get(runId);
+      return entry !== undefined && entry.terminal === undefined;
+    },
 
     // 三条入口的关闭门。`async` 只为把这个接线错误变成 rejection 而不是同步抛；门与随后的
     // 委托之间没有 await，所以不变式 6 的「登记与 launch 同一同步片」不受影响。
@@ -382,6 +414,16 @@ export function createDynamicWorkflowRunService(
     ): Promise<DynamicWorkflowRunSubmitResult> {
       assertOpen();
       return submitDynamicWorkflowRun(entryContext, request);
+    },
+
+    /**
+     * 受控 submitOnce（接口注释见上）。与三条入口同一个关闭门：service 关闭后受控提交同样是
+     * 接线错误（managed cycle 的宿主在 App 关闭链路里先走 close）。`async` 只为把拒绝变成
+     * rejection；裁决与启动全程同步，`assertOpen` 与 startNewRun 之间没有 await。
+     */
+    async submitOnce(request: ManagedRunSubmitRequest): Promise<ManagedRunSubmitResult> {
+      assertOpen();
+      return submitManagedDynamicWorkflowRun(entryContext, request);
     },
 
     async amend(request: DynamicWorkflowRunAmendRequest): Promise<DynamicWorkflowRunAmendResult> {

@@ -16,6 +16,7 @@ import {
   WORKFLOW_RUN_RESUME_REJECTED_FAULT_PREFIX,
   WORKFLOW_RUN_SETTINGS_REJECTED_FAULT_PREFIX,
 } from "@zcode/shared/zcode-protocol-v4";
+import { CONTINUOUS_MANAGED_CYCLE_REJECTED_FAULT_PREFIX } from "@zcode/shared/continuous-protocol";
 import { requireRecord } from "../record-access.js";
 import type { V4CommandCoreHost } from "../types.js";
 
@@ -307,6 +308,43 @@ async function amendWorkflowRunSettings(
   };
 }
 
+/**
+ * continuousManagedCycle（CT-03）：Continuous managed cycle 的受控执行面。
+ * - 能力缺席（app 未暴露 continuousManagedCycleExecution——未装配 / 功能关闭 / stub 宿主）
+ *   → V4CapabilityUnsupportedError，与 resumeWorkflowRun 家族同一条语义：旧 CLI / 未开启的
+ *   Host 必须显式「不支持」，绝不退回普通 prompt 自主执行（ticket 总体规则 5）。
+ * - 业务拒绝（身份/租约/挂起状态/终态门）以
+ *   `fault.command.continuousManagedCycleRejected.<reason>` 回 ACK；reason 词表在
+ *   @zcode/shared continuous-protocol，与 bootstrap 适配器共用同一份。
+ * - 成功以 `{ type: "continuousManagedCycle", … }` 的按 op 结果回 ACK.result。
+ */
+class V4ContinuousManagedCycleRejectedError extends Error {
+  readonly reasonCode: string;
+  constructor(reason: string, message?: string) {
+    // message 进 ack.message（网关约定：error.message 收口到 ACK），缺席时给可读兜底。
+    super(message ?? `continuous managed cycle command rejected: ${reason}`);
+    this.name = "V4ContinuousManagedCycleRejectedError";
+    this.reasonCode = `${CONTINUOUS_MANAGED_CYCLE_REJECTED_FAULT_PREFIX}${reason}`;
+  }
+}
+
+async function continuousManagedCycle(
+  host: V4CommandCoreHost,
+  envelope: CommandEnvelope,
+): Promise<CommandResult | undefined> {
+  const payload = envelope.payload as CommandPayloadMap["continuousManagedCycle"];
+  const record = requireRecord(host, envelope.sessionId);
+  if (!record.app.continuousManagedCycleExecution) {
+    throw new V4CapabilityUnsupportedError("continuousManagedCycleExecution", record.app.sessionId);
+  }
+  // 方法必须经 app 调用（不可解构；与 cancelBackgroundWork 同一条接线纪律）。
+  const outcome = await record.app.continuousManagedCycleExecution(payload);
+  if (!outcome.ok) {
+    throw new V4ContinuousManagedCycleRejectedError(outcome.reason, outcome.message);
+  }
+  return outcome.result;
+}
+
 export const interactionBackgroundHandlers = {
   resolveInteraction,
   respondWorkspaceHookReview,
@@ -318,4 +356,5 @@ export const interactionBackgroundHandlers = {
   resumeWorkflowRun,
   startSavedWorkflow,
   amendWorkflowRunSettings,
+  continuousManagedCycle,
 };

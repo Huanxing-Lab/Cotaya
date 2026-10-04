@@ -181,6 +181,12 @@ export interface ZCodeAppOptions {
   onWorkflowEvent?: (event: WorkflowEvent) => void | Promise<void>;
   automationPort?: AutomationPort;
   offPeakPort?: OffPeakPort;
+  /**
+   * Continuous managed cycle 执行面的装配开关（CT-03）：默认关闭（规格 §13「功能默认关闭」），
+   * Host/桌面接线（CT-05+）显式打开。关闭时 app 不暴露 continuousManagedCycleExecution，
+   * v4 命令面回答能力不支持——这是「关闭 managed capability」的回滚位，不触碰普通 Workflow。
+   */
+  continuousManagedCycles?: { enabled: boolean };
   /** 首次真实用户执行或 cold-resume fallback 时解析一次，之后由 app 生命周期缓存。 */
   resolveInitialBashShellSelection?: () => Promise<ExecutionShellSelection | undefined>;
   /** Trusted embedder policy; workspace/project files cannot populate this field. */
@@ -447,6 +453,26 @@ export interface ZCodeApp {
   amendWorkflowRunSettings?(
     input: Omit<AmendWorkflowRunSettingsInput, "traceContext">,
   ): Promise<AmendWorkflowRunSettingsResult>;
+  /**
+   * Continuous managed cycle 的受控执行命令面（CT-03；v4 命令 continuousManagedCycle 的收件人）。
+   * 可选能力：`continuousManagedCycles.enabled` 未开、dwf journal/run service 缺席、或 journal
+   * 不带按序报告读面时不注册——网关回结构化的能力不支持错误，绝不退回普通 prompt 自主执行。
+   * 业务拒绝以结构化 reason 返回（不是 throw）；分派器在 continuous-execution-command.ts。
+   */
+  continuousManagedCycleExecution?(command: {
+    op: import("@zcode/shared/continuous-protocol").ContinuousManagedCycleOp;
+    cycleId: string;
+    executionSessionId: string;
+    workflowRunId: string;
+    traceId: string;
+    epoch?: number;
+    reason?: string;
+    afterSequence?: number;
+    input?: import("@zcode/shared/continuous-protocol").ContinuousManagedCycleInput;
+  }): Promise<
+    | { ok: true; result: import("@zcode/shared/continuous-protocol").ContinuousManagedCycleResult }
+    | { ok: false; reason: string; message: string }
+  >;
   /**
    * workflow run 的枚举面（重启后的发现查询）。可选能力，缺席条件同
    * {@link listDynamicWorkflowRunEvents}；journal 无枚举窄查询时回空列表（诚实答案——

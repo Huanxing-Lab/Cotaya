@@ -61,8 +61,22 @@ import {
   type DwfRunIntrospectionQueries,
   type DwfRunLifeSpan,
 } from "./dwf-journal-introspection.js";
+// 按序报告读面自成一个模块（Continuous managed cycle 的报告导入取数源）：与 artifacts 同一种
+// 分法——只要一个 db 句柄，自带「取数源/游标」的论证，不与 run/actor/node/event 的写入共享状态。
+import {
+  listSequencedReportItems,
+  type DwfSequencedReportItem,
+  type DwfSequencedReportQueries,
+  type DwfSequencedReportQuery,
+} from "./dwf-journal-reports.js";
 
 export type { DwfArtifactItem, DwfArtifactItemsQuery } from "./dwf-journal-artifacts.js";
+// 按序报告读面（Continuous managed cycle）的类型仍从本文件导出，既有 importer 不必改路径。
+export type {
+  DwfSequencedReportItem,
+  DwfSequencedReportQueries,
+  DwfSequencedReportQuery,
+} from "./dwf-journal-reports.js";
 // run 内省读面（DwfRunIntrospectionQueries 及其 SQL）住在 dwf-journal-introspection.ts
 //（max-lines 拆分）；类型仍从本文件导出，既有 importer 不必改路径。
 export type {
@@ -72,7 +86,9 @@ export type {
   DwfRunLifeSpan,
 } from "./dwf-journal-introspection.js";
 
-class SqliteDwfJournalStore implements JournalStorePort, DwfRunIntrospectionQueries {
+class SqliteDwfJournalStore
+  implements JournalStorePort, DwfRunIntrospectionQueries, DwfSequencedReportQueries
+{
   constructor(private readonly db: DatabaseSync) {}
 
   createRun(record: RunRecord): void {
@@ -252,6 +268,15 @@ class SqliteDwfJournalStore implements JournalStorePort, DwfRunIntrospectionQuer
 
   listRunsByParentSession(parentSessionId: string, limit: number): DwfRunSessionListItem[] {
     return listRunsByParentSession(this.db, parentSessionId, limit);
+  }
+
+  // ---- 宿主侧按序报告读面（Continuous managed cycle；SQL 与论证住在 dwf-journal-reports.ts）。
+
+  listSequencedReportItems(
+    runId: string,
+    query: DwfSequencedReportQuery,
+  ): DwfSequencedReportItem[] {
+    return listSequencedReportItems(this.db, runId, query);
   }
 
   putActor(record: ActorRecord): void {

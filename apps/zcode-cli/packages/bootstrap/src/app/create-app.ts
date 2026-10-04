@@ -80,7 +80,10 @@ import {
   createDynamicWorkflowRunService,
   isDynamicWorkflowTaskLinkStore,
   resolveDynamicWorkflowJournalStore,
+  supportsSequencedReportReads,
 } from "./dynamic-workflow-run-service.js";
+import { createContinuousExecutionAdapter } from "./continuous-execution-adapter.js";
+import { dispatchContinuousManagedCycleCommand } from "./continuous-execution-command.js";
 import { getWorkflowConcurrencyGovernor } from "./workflow-concurrency-governor.js";
 import { createDynamicWorkflowSnippetService } from "./dynamic-workflow-snippet-service.js";
 import { createModelCatalogPort } from "./model-catalog-port.js";
@@ -746,6 +749,24 @@ export async function createZCodeApp(options: ZCodeAppOptions): Promise<ZCodeApp
               ? { taskLinkStore: sessionStore }
               : {}),
           });
+    // Continuous managed cycle 的执行适配器（CT-03 专用组装）：只在三件事同时成立时构造——
+    //   1. 开关（continuousManagedCycles.enabled，默认关闭，规格 §13；Host 接线属 CT-05+）；
+    //   2. dwf run service 在场（journal 窄化失败即不构造，与普通 Workflow 同一条降级）；
+    //   3. journal 带按序报告读面（报告导入的取数源；缺席即不装配，绝不退回有界化读面）。
+    // 适配器持有的是 run service 与 journal 的窄视图，不建第二个业务状态源；未构造时
+    // app 不暴露 continuousManagedCycleExecution，v4 命令面回答能力不支持（回滚位）。
+    const continuousManagedCyclePort =
+      options.continuousManagedCycles?.enabled === true &&
+      dynamicWorkflowRunPort !== undefined &&
+      dynamicWorkflowJournal !== undefined &&
+      supportsSequencedReportReads(dynamicWorkflowJournal)
+        ? createContinuousExecutionAdapter({
+            runService: dynamicWorkflowRunPort,
+            journal: dynamicWorkflowJournal,
+            reportReader: dynamicWorkflowJournal,
+            logger,
+          })
+        : undefined;
     // dwf snippet service：EvalWorkflowSnippet 的执行面。刻意**不**依赖 dwf journal——
     // snippet 完全瞬态（内存 journal），不该被 run service 的 durability 前提连坐；
     // 所以即使 run 端口因 journal 缺席而不构造，实验通道仍然可用。
@@ -1300,6 +1321,15 @@ export async function createZCodeApp(options: ZCodeAppOptions): Promise<ZCodeApp
               await prepareUserExecutionBoundary({ traceContext });
               return await getRuntime().amendWorkflowRunSettings({ ...input, traceContext });
             },
+          }),
+      // Continuous managed cycle 执行面（CT-03）：分派器把 wire 命令折叠到适配器端口；
+      // 适配器缺席（开关关闭/装配条件不满足）时整个能力不注册，v4 命令面回能力不支持。
+      ...(continuousManagedCyclePort === undefined
+        ? {}
+        : {
+            continuousManagedCycleExecution: (
+              command: Parameters<NonNullable<ZCodeApp["continuousManagedCycleExecution"]>>[0],
+            ) => dispatchContinuousManagedCycleCommand(continuousManagedCyclePort, command),
           }),
       ...createPluginFacadeForApp({ configResult, options, workingDirectory }),
       getPluginReferenceCatalog: () => pluginReferenceCatalog,

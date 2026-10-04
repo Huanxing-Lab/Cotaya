@@ -30,11 +30,12 @@ const SUITES = {
     ],
   },
   integration: {
-    description: "存储与工作区集成（I-01…I-04；真实 SQLite/Git/文件事实）",
+    description: "存储与工作区集成（I-01…I-06；真实 SQLite/Git/文件/子进程执行事实）",
     kind: "node-test",
     files: [
       "packages/services/test/continuous/repository.test.ts",
       "packages/services/test/continuous/workspace.test.ts",
+      "apps/zcode-cli/packages/bootstrap/test/continuous/execution.test.ts",
     ],
   },
   recovery: {

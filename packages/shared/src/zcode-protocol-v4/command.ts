@@ -14,6 +14,13 @@ import {
   amendWorkflowRunSettingsPayloadSchema,
   amendWorkflowRunSettingsResultSchema,
 } from "./workflow-run-settings-command.js";
+// Continuous managed cycle 执行面（CT-03）：命令载荷 / 结果 / 拒绝前缀的 wire schema 唯一
+// 来源在 continuous-execution-protocol.ts（经 continuous-protocol.ts 再导出，公开路径不变，
+// bootstrap 适配器共用同一份）。
+import {
+  continuousManagedCycleCommandSchema,
+  continuousManagedCycleResultSchema,
+} from "../continuous-protocol.js";
 import {
   workspaceHookReviewCommandTargetSchema,
   workspaceHookReviewDecisionSchema,
@@ -241,6 +248,12 @@ export const commandPayloadSchemas = {
   // amendWorkflowRunSettings：run 卡 / 详情页的「配置」直接请 agent 以新设置修订 run，不经模型轮。载荷、结果与拒绝
   // 词表见 workflow-run-settings-command.ts；能力缺席 → V4CapabilityUnsupportedError。
   amendWorkflowRunSettings: amendWorkflowRunSettingsPayloadSchema,
+  // continuousManagedCycle（CT-03）：Continuous managed cycle 的受控执行面——同 ID 同内容
+  // 复用的 submitOnce、按序报告读取、先撤销再中止的用户停止、不等同 stop 的安全边界挂起。
+  // 与 cancel/resume/startSavedWorkflow 同类：不携 baseRevision（幂等以执行身份四元组为准，
+  // 假 CAS 失败只会误伤）。能力缺席（未装配/功能关闭）→ V4CapabilityUnsupportedError；业务
+  // 拒绝以 fault.command.continuousManagedCycleRejected.<reason> 回 ACK。词表见 continuous-protocol.ts。
+  continuousManagedCycle: continuousManagedCycleCommandSchema,
   renameSession: z.object({ title: z.string() }),
   deleteSession: z.object({}),
   discardSharedContext: z.object({ contextId: z.string().trim().min(1) }).strict(),
@@ -409,6 +422,9 @@ export const commandResultSchema = z.discriminatedUnion("type", [
     toolCallId: z.string().min(1),
   }),
   amendWorkflowRunSettingsResultSchema,
+  // continuousManagedCycle 的按 op 判别结果（submitOnce 引用 / inspect 状态 / readReports
+  // 批次 / inspectHealth 快照；void 操作只回 op）。
+  continuousManagedCycleResultSchema,
   z.object({
     // messageId 只在 TurnStarted 后作为旁路归因补齐；Core admission ACK 不等待
     // projection commit，不能把 messageId 作为输入 accepted 的必要条件。

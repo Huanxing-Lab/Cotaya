@@ -495,7 +495,11 @@ interface ContinuousExecutionPort {
 
 最小扩展：Run service 的受控 submitOnce、停止检查、按序报告读取、create-app 装配、协议 handler。工具、模型和 escalation 使用专用注入适配器；需要普通 driver 增加接缝时，只做无默认行为变化的可选接口。
 
-报告使用现有 report/artifact，新增版本化 `ContinuousReportV1`：candidate、decision、validation、candidate_result、cycle_result。每项 itemKey 加来源 journal sequence 去重，schema 校验后事务导入。Run 失败也导入已保存报告；不能只依赖模型最后一段总结。
+受控执行面在 CLI 侧经 v4 命令 `continuousManagedCycle` 暴露（九个操作共用一张 strict 载荷：引用四元组必带，op 专属字段按 op 校验在场；词表与拒绝 fault 前缀在 shared continuous-protocol）。能力缺席（未装配/功能关闭/旧 CLI）必须回答不支持，绝不退回普通 prompt 自主执行。
+
+submitOnce 对非终态的既有行按同身份幂等复用（不铸第二个引擎）：执行是否真的活着由 inspectHealth 的可达性回答，死进程行的核对与接管归恢复流程；终态行 completed/errored/superseded/stopped 全部拒绝重提交（恢复走 resume，且 superseded/errored 不可恢复）。
+
+报告使用现有 report/artifact，新增版本化 `ContinuousReportV1`：candidate、decision、validation、candidate_result、cycle_result。每项 itemKey 加来源 journal sequence 去重，schema 校验后事务导入。Run 失败也导入已保存报告；不能只依赖模型最后一段总结。读侧（CLI 执行适配器的 readReports）不丢行也不编造类别：载荷投影不出 V1 形状的条目以 kind "unknown" 原样上送，schema 校验与拒绝事件归导入侧。
 
 当前 report 有数量/大小限制。图片和长输出为 artifact/受控引用；MVP 不添加无限日志到报告。malformed report 记录拒绝事件，不能据此 done 或提交。
 

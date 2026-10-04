@@ -336,3 +336,9 @@ export type ContinuousError = z.infer<typeof continuousErrorSchema>;
 export function isContinuousError(value: unknown): value is ContinuousError {
   return continuousErrorSchema.safeParse(value).success;
 }
+
+// ── managed cycle 执行面（CT-03）──
+// wire 契约搬到 continuous-execution-protocol.ts（本文件到 max-lines 上限；拆分是行数约束的
+// 结果，不是边界变化——见那边文件头）。这里原样再导出，公开路径保持 continuous-protocol 一个，
+// 既有 importer（services contract、zcode-protocol index）不必改。
+export * from "./continuous-execution-protocol.js";
