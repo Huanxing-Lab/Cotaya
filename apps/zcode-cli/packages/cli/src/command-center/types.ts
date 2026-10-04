@@ -169,6 +169,30 @@ export type CommandCenterBigmodelLoginResult = {
   providerId: "bigmodel";
 };
 
+/** OpenAI 登录：授权 URL回调 + 设备码 fallback 提示（userCode + 输码页）。 */
+export type CommandCenterOpenAILoginOptions = {
+  abortSignal?: AbortSignal;
+  onAuthorizeUrl?: (authorizeUrl: string) => Promise<void> | void;
+  onDeviceCode?: (data: { userCode: string; inputPageUrl: string }) => Promise<void> | void;
+};
+
+export type CommandCenterOpenAILoginResult = {
+  browser?: {
+    opened: boolean;
+    reason?: string;
+  };
+  configPath: string;
+  credentialsPath: string;
+  method: "loopback" | "device-code";
+  model: string;
+  providerId: "openai";
+  user: {
+    email?: string;
+    name?: string;
+    user_id: string;
+  };
+};
+
 export type CommandCenterApiKeyOptions = {
   apiKey: string;
   providerId: "bigmodel" | "zai";
@@ -308,6 +332,9 @@ export type CommandCenterDeps = {
   loginBigmodel?: (
     options?: CommandCenterBigmodelLoginOptions,
   ) => Promise<CommandCenterBigmodelLoginResult>;
+  loginOpenai?: (
+    options?: CommandCenterOpenAILoginOptions,
+  ) => Promise<CommandCenterOpenAILoginResult>;
   configureApiKey?: (options: CommandCenterApiKeyOptions) => Promise<CommandCenterApiKeyResult>;
   loadCustomCommand?: (name: string) => Promise<CommandCenterCustomCommandContent>;
   newApp?: () => Promise<CommandCenterApp>;

@@ -3,7 +3,7 @@ import {
   getModelProviderFamilySpec,
   type CodingPlanStaticTeamProduct,
   type EnterpriseCodingPlanPricingResponse,
-  type ProviderFamilyDomain,
+  type ZhipuAccountFamilyId,
 } from "@zcode/shared";
 import { useOptionalServices } from "@/hooks/useServices.js";
 import { isRemoteWorkspaceDisconnectedError } from "@/lib/remoteWorkspaceServiceError.js";
@@ -44,7 +44,7 @@ function resolveEnterprisePricingFailureSnapshot({
   currentSnapshot: EnterpriseCodingPlanProductsSnapshot | null;
   authenticated: boolean;
   staticProducts: CodingPlanStaticTeamProduct[] | undefined;
-  family?: ProviderFamilyDomain;
+  family?: ZhipuAccountFamilyId;
 }): EnterpriseCodingPlanProductsSnapshot | null {
   if (shouldRetainEnterprisePricingSnapshotForRefresh(currentSnapshot, authenticated)) {
     return currentSnapshot;
@@ -71,7 +71,7 @@ function resolveEnterprisePricingFailureSnapshot({
  */
 function tagEnterpriseProductsFamily(
   products: EnterpriseCodingPlanProductDisplay[],
-  family: ProviderFamilyDomain,
+  family: ZhipuAccountFamilyId,
 ): EnterpriseCodingPlanProductDisplay[] {
   return products.map((product) => ({ ...product, family }));
 }
@@ -83,6 +83,7 @@ function tagEnterpriseProductsFamily(
  *   - 按 family 读 static bucket（zaiCodingPlan / bigmodelCodingPlan）
  *   - 传 family 给 service.getEnterprisePricing，service 据此路由到对应 provider
  * 缺省 family 时保持 bigmodel，向后兼容既有调用点。
+ * 企业套餐是 z.ai 身份域专属；openai 无此页面入口。
  */
 export function useEnterpriseCodingPlanProducts({
   enabled,
@@ -94,7 +95,7 @@ export function useEnterpriseCodingPlanProducts({
   /** 未登录购买横幅只读取公开静态目录，不请求实时 pricing。 */
   staticOnly?: boolean;
   authenticated: boolean;
-  family?: ProviderFamilyDomain;
+  family?: ZhipuAccountFamilyId;
 }) {
   const services = useOptionalServices();
   const service = services?.codingPlanSubscriptionService;

@@ -11,6 +11,12 @@ export const BIGMODEL_PROVIDER_ID = "bigmodel" as const;
 /** 内置 ZAI provider id */
 export const ZAI_PROVIDER_ID = "zai" as const;
 
+/**
+ * 内置 OpenAI（ChatGPT 账号）provider id。
+ * OpenAI 与 z.ai 是不同身份域：互不删除对方凭据，仅切换 oauth:active_provider 指针。
+ */
+export const OPENAI_PROVIDER_ID = "openai" as const;
+
 /** 凭据解密失败错误前缀 */
 export const CREDENTIAL_DECRYPT_ERROR_PREFIX = "凭据解密失败：" as const;
 
@@ -56,7 +62,56 @@ function readCredentialErrorMessage(error: unknown): string {
 export type OAuthProviderId =
   | typeof BIGMODEL_PROVIDER_ID
   | typeof ZAI_PROVIDER_ID
+  | typeof OPENAI_PROVIDER_ID
   | (string & { readonly __oauthProviderBrand?: never });
+
+/**
+ * Provider 协议能力声明：登录编排（OAuthService/CLI/Web）按能力分支，
+ * 不在各 provider 流程里手写 provider id 判断。
+ */
+export interface OAuthProviderCapabilities {
+  /** 授权码回调通道：z.ai 域走应用 deep link；OpenAI 走固定端口 loopback HTTP server。 */
+  callbackChannel: "deep-link" | "loopback";
+  /** 是否支持设备码 fallback（loopback 端口被占、无浏览器环境、Web 端时降级）。 */
+  deviceCodeFallback: boolean;
+  /** 登录成功是否写共享 zcodejwttoken（z.ai 域写；OpenAI 不写，恢复按 token 过期+refresh）。 */
+  usesZcodeJwtToken: boolean;
+  /** 是否支持 refresh token 轮换刷新（OpenAI 专属：refresh_token 一次性、新值必须落盘）。 */
+  supportsRefresh: boolean;
+}
+
+const ZAI_DOMAIN_OAUTH_PROVIDER_CAPABILITIES: OAuthProviderCapabilities = {
+  callbackChannel: "deep-link",
+  deviceCodeFallback: false,
+  usesZcodeJwtToken: true,
+  supportsRefresh: false,
+} as const;
+
+/** 内置 provider 的能力表；未知 provider 返回 null，由调用方决定默认行为。 */
+export const OAUTH_PROVIDER_CAPABILITIES = {
+  [ZAI_PROVIDER_ID]: ZAI_DOMAIN_OAUTH_PROVIDER_CAPABILITIES,
+  [BIGMODEL_PROVIDER_ID]: ZAI_DOMAIN_OAUTH_PROVIDER_CAPABILITIES,
+  [OPENAI_PROVIDER_ID]: {
+    callbackChannel: "loopback",
+    deviceCodeFallback: true,
+    usesZcodeJwtToken: false,
+    supportsRefresh: true,
+  },
+} as const satisfies Record<
+  typeof ZAI_PROVIDER_ID | typeof BIGMODEL_PROVIDER_ID | typeof OPENAI_PROVIDER_ID,
+  OAuthProviderCapabilities
+>;
+
+export function getOAuthProviderCapabilities(
+  provider: OAuthProviderId | string | null | undefined,
+): OAuthProviderCapabilities | null {
+  if (!provider) {
+    return null;
+  }
+  return provider in OAUTH_PROVIDER_CAPABILITIES
+    ? OAUTH_PROVIDER_CAPABILITIES[provider as keyof typeof OAUTH_PROVIDER_CAPABILITIES]
+    : null;
+}
 
 /** Provider 展示元信息 */
 export interface OAuthProviderMeta {
@@ -71,12 +126,44 @@ export interface OAuthStartRequest {
   provider: OAuthProviderId;
 }
 
+/** 设备码 fallback 启动后客户端需要展示的信息（userCode + 输码页地址）。 */
+export interface OAuthDeviceCodeStartInfo {
+  /** 用户在输码页输入的一次性码（原样展示，不打开浏览器也能完成登录）。 */
+  userCode: string;
+  /** 用户输入 userCode 的页面地址。 */
+  inputPageUrl: string;
+  /** 客户端轮询登录状态的间隔（毫秒）。 */
+  pollIntervalMs: number;
+  /** 设备码流程过期时刻（毫秒时间戳）。 */
+  expiresAt: number;
+}
+
 /** 发起 OAuth 返回 */
 export interface OAuthStartResponse {
   provider: OAuthProviderId;
   authorizeUrl: string;
   state: string;
+  /**
+   * 存在时表示已降级为设备码流程（loopback 端口被占 / 无浏览器环境）。
+   * authorizeUrl 此时是输码页地址；客户端必须展示 userCode 并继续轮询登录状态。
+   */
+  deviceCode?: OAuthDeviceCodeStartInfo;
 }
+
+/** 设备码流程发起结果（host 内部轮询编排使用；deviceAuthId 不下发给 renderer）。 */
+export interface OAuthDeviceCodeChallenge {
+  deviceAuthId: string;
+  userCode: string;
+  inputPageUrl: string;
+  pollIntervalMs: number;
+  expiresAt: number;
+}
+
+/** 设备码轮询结果：403/404 继续等待、410 过期、2xx 拿到授权码与服务端下发的 code_verifier。 */
+export type OAuthDeviceCodePollResult =
+  | { status: "pending" }
+  | { status: "expired" }
+  | { status: "ready"; authorizationCode: string; codeVerifier: string };
 
 /** 应用登录回调结果 */
 export interface OAuthSessionCallbackResult {

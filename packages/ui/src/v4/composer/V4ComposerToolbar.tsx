@@ -19,6 +19,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BUILTIN_MODEL_PROVIDER_IDS,
   getModelProviderFamilySpec,
+  isZhipuAccountProviderFamily,
   resolveModelProviderFamilySpecByProviderId,
   TID_V4_MODEL_CONFIG,
   TID_V4_COMPOSER_INPUT,
@@ -28,6 +29,7 @@ import {
   type ProviderFamilyDomain,
   type UsageEntitlementSnapshot,
   type ZCodeAccountAccess,
+  type ZhipuAccountFamilyId,
   type ZCodeProviderAccountAccess,
   type ZCodeConfigOption,
   type ZCodeProvider,
@@ -117,14 +119,15 @@ export interface ModelSelectionSource {
 type V4ContextPlanConnection =
   | { kind: "none" }
   | {
-      family: ProviderFamilyDomain;
+      // 套餐连接上下文只描述 z.ai 身份域套餐；openai plan 不经此类型表达。
+      family: ZhipuAccountFamilyId;
       kind: "personalCoding";
       providerId:
         | typeof BUILTIN_MODEL_PROVIDER_IDS.zaiIndividualCodingPlan
         | typeof BUILTIN_MODEL_PROVIDER_IDS.bigmodelIndividualCodingPlan;
     }
   | {
-      family: ProviderFamilyDomain;
+      family: ZhipuAccountFamilyId;
       kind: "teamCoding";
       providerId:
         | typeof BUILTIN_MODEL_PROVIDER_IDS.zaiTeamCodingPlan
@@ -132,7 +135,7 @@ type V4ContextPlanConnection =
       selection: Extract<ProviderFamilyConnectionSelection, { kind: "team-coding-plan" }>;
     }
   | {
-      family: ProviderFamilyDomain;
+      family: ZhipuAccountFamilyId;
       kind: "start";
       providerId:
         | typeof BUILTIN_MODEL_PROVIDER_IDS.zaiStartPlan
@@ -140,7 +143,7 @@ type V4ContextPlanConnection =
     };
 
 function resolveFamilyForPlanProviderId(providerId: string | null | undefined): {
-  family: ProviderFamilyDomain;
+  family: ZhipuAccountFamilyId;
   kind: "personalCoding" | "teamCoding" | "start";
 } | null {
   switch (providerId?.trim()) {
@@ -235,7 +238,12 @@ function resolveContextTeamUsageSourceFromEntitlementSnapshot({
   // zai team snapshot 也生成 bigmodel 前缀 sourceId（与设置页/usage sources 不一致）。
   // 从 snapshot.provider.id 反查 family，生成对应前缀。
   const familySpec = resolveModelProviderFamilySpecByProviderId(snapshot.provider?.id ?? "");
-  const family: ProviderFamilyDomain = familySpec?.id ?? "bigmodel";
+  // Team 用量快照只来自 z.ai 身份域套餐；openai plan 无 team 语义，不生成团队用量源。
+  const familyRaw = familySpec?.id ?? "bigmodel";
+  if (!isZhipuAccountProviderFamily(familyRaw)) {
+    return null;
+  }
+  const family: ProviderFamilyDomain = familyRaw;
   if (!accountAccess) {
     return null;
   }

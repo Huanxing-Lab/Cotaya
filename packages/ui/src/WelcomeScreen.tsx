@@ -9,6 +9,7 @@ import { Loader2Icon, LoaderIcon, TriangleAlertIcon } from "lucide-react";
 import {
   type OAuthProviderMeta,
   BIGMODEL_PROVIDER_ID,
+  OPENAI_PROVIDER_ID,
   TID_LOGIN_USE_API_KEY_BUTTON,
   TID_OAUTH_CANCEL,
   TID_OAUTH_ERROR,
@@ -22,6 +23,7 @@ import { ZCodeAboutLogo } from "@/components/ui/ZCodeAboutLogo.js";
 import { useOAuth } from "./hooks/useOAuth.js";
 import { useZCodeIntl } from "./i18n/IntlProvider.js";
 import { LoginApiKeyForm } from "./login/LoginApiKeyForm.js";
+import { OAuthDeviceCodePanel } from "./login/OAuthDeviceCodePanel.js";
 import { renderOAuthProviderIcon } from "./lib/oauthProviderIcon.js";
 import { ThemeHeroVisual } from "./openWorkspacePageThemeHero.js";
 import { useZCodeStore } from "./store/StoreProvider.js";
@@ -79,6 +81,7 @@ function LoginPanel({ active, onComplete }: LoginPanelProps) {
     providers,
     loadingProviders,
     pendingProvider,
+    deviceCode,
     refreshProviders,
   } = useOAuth();
   const user = useZCodeStore((s) => s.user);
@@ -377,6 +380,9 @@ function LoginPanel({ active, onComplete }: LoginPanelProps) {
                 { provider: pendingProviderName ?? "OAuth" },
               )}
             </div>
+            {/* openai 1455 被占时服务层降级设备码：等待态里追加输码面板，
+                让用户拿到一次性 user_code 与输码页入口；完成仍由轮询收敛。 */}
+            {deviceCode ? <OAuthDeviceCodePanel deviceCode={deviceCode} /> : null}
             <Button
               variant="outline"
               className="h-10 w-full text-ui-base"
@@ -491,6 +497,9 @@ function getLoginOAuthButtonMessageId(providerId: string): string {
       return "login.oauth.button.zai";
     case BIGMODEL_PROVIDER_ID:
       return "login.oauth.button.bigmodel";
+    case OPENAI_PROVIDER_ID:
+      // openai 是账号登录型入口（ChatGPT 账号），文案与 z.ai 域并列，不带 {provider} 占位。
+      return "login.oauth.button.openai";
     default:
       return "login.oauth.button";
   }
@@ -502,6 +511,9 @@ function getLoginOAuthRegionTagMessageId(providerId: string): string | null {
       return "login.oauth.regionTag.zai";
     case BIGMODEL_PROVIDER_ID:
       return "login.oauth.regionTag.bigmodel";
+    case OPENAI_PROVIDER_ID:
+      // 标注账号类型而非地区：openai 登录的是 ChatGPT 账号，与 z.ai 域入口区分。
+      return "login.oauth.regionTag.openai";
     default:
       return null;
   }

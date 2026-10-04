@@ -15,6 +15,8 @@ import {
   type ProviderFamilyConnectionSelectionSettings,
   type ProviderFamilyDomain,
   type OAuthProviderId,
+  isOpenAIPlanModelProviderId,
+  OPENAI_PROVIDER_ID,
   resolveModelProviderFamilyIdByProviderId,
   resolveModelProviderFamilySpecByProviderId,
   resolveProviderFamilyDomainFromOAuthProvider,
@@ -162,6 +164,11 @@ function resolveBuiltinPresetOAuthProvider(
     presetId === BUILTIN_MODEL_PROVIDER_IDS.bigmodelStartPlan
   ) {
     return BIGMODEL_PROVIDER_ID;
+  }
+  // openai 是独立身份域：必须返回自己的 oauth provider，登录切换域名后
+  // openai 预置入口才能像 z.ai 域一样按域隐藏/展示（单指针切换式并存）。
+  if (isOpenAIPlanModelProviderId(presetId)) {
+    return OPENAI_PROVIDER_ID;
   }
   return null;
 }

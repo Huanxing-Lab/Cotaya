@@ -1,4 +1,5 @@
 import {
+  ChatGPTAccountAccessConfig,
   ProviderConfig,
   ProviderConfigMap,
   ProviderTemplateMap,
@@ -36,18 +37,31 @@ export function createFailClosedAccountProviderConfigSnapshot(
   config: ProviderConfigSnapshot,
 ): AccountProviderConfigSnapshot {
   const unentitledProviders = new ProviderConfigMap(
-    config.zcodeBuiltinProviders.entries().flatMap(([providerId, provider]) =>
-      provider.access?.type === "zhipu-account"
-        ? ([
-            [
-              providerId,
-              new ProviderConfig({
-                access: new ZhipuAccountAccessConfig({ entitled: false }),
-              }),
-            ],
-          ] as const)
-        : [],
-    ),
+    config.zcodeBuiltinProviders.entries().flatMap(([providerId, provider]) => {
+      // openai 域（chatgpt-account）与 z.ai 域一样按账号受限处理：
+      // 账号事实未到达前 fail-closed，避免 sparse access 绕过 entitled 门禁。
+      if (provider.access?.type === "zhipu-account") {
+        return [
+          [
+            providerId,
+            new ProviderConfig({
+              access: new ZhipuAccountAccessConfig({ entitled: false }),
+            }),
+          ],
+        ] as const;
+      }
+      if (provider.access?.type === "chatgpt-account") {
+        return [
+          [
+            providerId,
+            new ProviderConfig({
+              access: new ChatGPTAccountAccessConfig({ entitled: false }),
+            }),
+          ],
+        ] as const;
+      }
+      return [];
+    }),
   );
   return createAccountProviderConfigSnapshot(config.zcodeBuiltinRevision, unentitledProviders);
 }

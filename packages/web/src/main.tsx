@@ -12,6 +12,7 @@ import {
 import "@zcode/ui/styles.css";
 import { connectViaWebSocket } from "@zcode/client";
 import { WebCallbackPage } from "./auth/WebCallbackPage.js";
+import { WebOpenAIDeviceLoginGate } from "./auth/WebOpenAIDeviceLoginPage.js";
 import { createWebAuthService } from "./auth/webAuthService.js";
 import { WEB_ZAI_OAUTH_CONFIG, resolveWebAuthDevReturnTo } from "./auth/webZaiOAuthConfig.js";
 import { parseOAuthState, resolveSafeAppReturnTo } from "./auth/oauthStateCodec.js";
@@ -29,6 +30,7 @@ import {
   resolveConversationShareCodeFromPath,
 } from "./share/conversationShareRoute.js";
 import type { IPlatformService, RemoteTarget, ServerRemoteInfo } from "@zcode/shared";
+import { OPENAI_PROVIDER_ID } from "@zcode/shared";
 import { WEB_DEFAULT_THEME, resolveWebInitialTheme } from "./webThemeSeed.js";
 
 function resolveWebThemePreference(defaultTheme: Theme = WEB_DEFAULT_THEME): Theme {
@@ -163,27 +165,42 @@ async function renderConversationSharePage(): Promise<void> {
     void webAuthService.logout();
   };
   root.render(
-    <ConversationShareLandingLoader
-      shareCode={shareCode}
-      client={client}
-      getAccessToken={() => getMockToken() ?? webAuthService.getZCodeJwtToken()}
-      onLogin={(provider) => {
-        if (mockMode) {
-          window.sessionStorage.setItem("zcode:share:mock-auth", "owner");
-          window.location.reload();
-          return;
-        }
-        webAuthService.startLogin({
-          provider,
-          appReturnTo: window.location.href,
-          redirectUri: WEB_ZAI_OAUTH_CONFIG.shareRedirectUri,
-          devReturnTo: resolveWebAuthDevReturnTo(WEB_ZAI_OAUTH_CONFIG),
-        });
+    <WebOpenAIDeviceLoginGate
+      authService={webAuthService}
+      // 设备码登录完成后凭据已切换：整页重载，让分享内容按新登录态重新加载。
+      onFinished={() => {
+        window.location.reload();
       }}
-      onLogout={onLogout}
-      locale={routeLocale}
-      theme={resolveWebThemePreference("zai-light")}
-    />,
+    >
+      {(startOpenAIDeviceLogin) => (
+        <ConversationShareLandingLoader
+          shareCode={shareCode}
+          client={client}
+          getAccessToken={() => getMockToken() ?? webAuthService.getZCodeJwtToken()}
+          onLogin={(provider) => {
+            if (mockMode) {
+              window.sessionStorage.setItem("zcode:share:mock-auth", "owner");
+              window.location.reload();
+              return;
+            }
+            // openai 在 Web 端无法监听 loopback 回调，改为页内设备码面板（spec §2.1）。
+            if (provider === OPENAI_PROVIDER_ID) {
+              startOpenAIDeviceLogin();
+              return;
+            }
+            webAuthService.startLogin({
+              provider,
+              appReturnTo: window.location.href,
+              redirectUri: WEB_ZAI_OAUTH_CONFIG.shareRedirectUri,
+              devReturnTo: resolveWebAuthDevReturnTo(WEB_ZAI_OAUTH_CONFIG),
+            });
+          }}
+          onLogout={onLogout}
+          locale={routeLocale}
+          theme={resolveWebThemePreference("zai-light")}
+        />
+      )}
+    </WebOpenAIDeviceLoginGate>,
   );
 }
 

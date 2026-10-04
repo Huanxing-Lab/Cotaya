@@ -1,6 +1,7 @@
 import {
   BUILTIN_MODEL_PROVIDER_IDS,
   getModelProviderFamilySpec,
+  isZhipuAccountProviderFamily,
   resolveModelProviderFamilySpecByProviderId,
   type ProviderFamilyConnectionSelectionSettings,
   type ProviderFamilyDomain,
@@ -115,7 +116,8 @@ function buildTeamCodingPlanUsageSources(
       // 按 product.family 用 family-aware key + 对应 codingPlan providerId。
       const productFamily = resolveEnterpriseCodingPlanProductFamily(product);
       const baseAccess = accountAccesses[productFamily];
-      if (baseAccess?.mode !== "team-coding-plan") {
+      // 团队套餐源只来自 zhipu-account 访问；chatgpt-account（openai 域）无 planKind，跳过。
+      if (baseAccess?.type !== "zhipu-account" || baseAccess.mode !== "team-coding-plan") {
         return [];
       }
       const codingPlanProviderId =
@@ -160,7 +162,8 @@ export function resolveSidebarCurrentCodingPlanUsageSource({
   const family = selectedProviderId
     ? resolveModelProviderFamilySpecByProviderId(selectedProviderId)?.id
     : undefined;
-  if (!family) return null;
+  // 侧栏套餐用量源只描述 z.ai 域套餐连接；openai plan 不在此体系内。
+  if (!family || !isZhipuAccountProviderFamily(family)) return null;
   const selection = selections?.[family];
   if (selection?.kind === "team-coding-plan") {
     const teamSource = teamSources.find(
@@ -183,7 +186,13 @@ export function resolveSidebarCurrentCodingPlanUsageSource({
   }
   if (selection?.kind !== "individual-coding-plan") return null;
   const accountAccess = accountAccesses[family];
-  if (!accountAccess || accountAccess.mode !== "individual-coding-plan") return null;
+  // 个人套餐源同样只来自 zhipu-account；chatgpt-account（openai 域）在此返回 null。
+  if (
+    !accountAccess ||
+    accountAccess.type !== "zhipu-account" ||
+    accountAccess.mode !== "individual-coding-plan"
+  )
+    return null;
   const providerId = getModelProviderFamilySpec(family).individualCodingPlanProviderId;
   return { audience: "individual", providerId, sourceId: providerId, accountAccess };
 }

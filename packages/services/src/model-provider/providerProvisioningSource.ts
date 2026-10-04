@@ -27,6 +27,11 @@ export const PROVIDER_PROVISIONING_OAUTH_CREDENTIAL_KEYS = [
   "oauth:bigmodel:access_token",
   "oauth:bigmodel:refresh_token",
   "oauth:bigmodel:user_info",
+  // openai 是独立身份域凭据命名空间（含 token 过期时刻），随 OAuth 会话一起同步。
+  "oauth:openai:access_token",
+  "oauth:openai:refresh_token",
+  "oauth:openai:user_info",
+  "oauth:openai:expires_at",
   "zcodejwttoken",
 ] as const;
 

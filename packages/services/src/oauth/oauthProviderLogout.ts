@@ -1,6 +1,7 @@
 import {
   BIGMODEL_PROVIDER_ID,
   BUILTIN_MODEL_PROVIDER_IDS,
+  OPENAI_PROVIDER_ID,
   ZAI_PROVIDER_ID,
   type OAuthProviderId,
 } from "@zcode/shared";
@@ -19,7 +20,7 @@ export function createOAuthProviderLogoutHandler(
     const providerIds = resolveProviderIds(provider);
     if (!providerIds) return;
 
-    if (accountIdentity?.trim()) {
+    if (providerIds.codingPlan && accountIdentity?.trim()) {
       await dependencies.accountProviderCredentialStore.deleteApiKey(
         accountProviderCredentialKey({
           providerId: providerIds.codingPlan,
@@ -28,12 +29,14 @@ export function createOAuthProviderLogoutHandler(
         }),
       );
     }
+    // openai 域无 z.ai Coding Plan 派生 key，但登出后 account:openai-plan 的
+    // entitled/current 投影必须刷新，否则连接态残留到下一次账号事件。
     await dependencies.refreshAccountProviders?.(`oauth-logout:${provider}`);
   };
 }
 
 function resolveProviderIds(provider: OAuthProviderId): {
-  readonly codingPlan: string;
+  readonly codingPlan: string | null;
 } | null {
   if (provider === ZAI_PROVIDER_ID) {
     return {
@@ -44,6 +47,10 @@ function resolveProviderIds(provider: OAuthProviderId): {
     return {
       codingPlan: BUILTIN_MODEL_PROVIDER_IDS.bigmodelIndividualCodingPlan,
     };
+  }
+  if (provider === OPENAI_PROVIDER_ID) {
+    // openai 是独立身份域：无个人 Coding Plan 派生 key，仅触发账号投影刷新。
+    return { codingPlan: null };
   }
   return null;
 }

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "revision": 30,
+  "revision": 34,
   "config": {
     "providerConfigRules": {
       "templateRules": [
@@ -856,6 +856,39 @@
             "logo": {
               "type": "builtin",
               "key": "bigmodel"
+            }
+          }
+        },
+        {
+          "providerId": "account:openai-plan",
+          "providerName": "OpenAI Codex",
+          "config": {
+            "group": "openai-family",
+            "builtinModelIds": [
+              "gpt-6.1-sol",
+              "gpt-6-astra",
+              "gpt-6-sol",
+              "gpt-6-luna",
+              "gpt-5.6-sol",
+              "gpt-5.6-terra",
+              "gpt-5.6-luna",
+              "gpt-5.5"
+            ],
+            "access": {
+              "type": "chatgpt-account",
+              "accountType": "openai"
+            },
+            "api": {
+              "type": "openai-responses",
+              "baseUrl": "https://chatgpt.com/backend-api/codex",
+              "headers": {
+                "originator": "codex_cli_rs",
+                "version": "0.159.0"
+              }
+            },
+            "logo": {
+              "type": "builtin",
+              "key": "openai"
             }
           }
         }
@@ -3285,6 +3318,22 @@
         }
       ],
       "providerSiteRules": [
+        {
+          "modelMatch": ".*",
+          "baseUrlMatch": "https://chatgpt\\.com/backend-api/codex/?",
+          "config": {
+            "properties": {
+              "contextWindow": 272000,
+              "inputFormat": {
+                "supportsText": true,
+                "supportsImage": true,
+                "supportsVideo": false,
+                "supportsPdf": false,
+                "supportsAudio": false
+              }
+            }
+          }
+        },
         {
           "modelMatch": "glm-5\\.3-flash",
           "apiTypeMatch": "openai-chat-completions",
@@ -6204,6 +6253,110 @@
           "modelId": "GLM-5.3",
           "config": {
             "enabled": true
+          }
+        },
+        {
+          "providerId": "account:openai-plan",
+          "modelId": "gpt-6.1-sol",
+          "config": {
+            "enabled": true,
+            "optionSpecs": {
+              "reasoningLevel": {
+                "values": ["low", "medium", "high", "xhigh", "max", "ultra"],
+                "map": "{\"reasoning\": {\"effort\": reasoningLevel}}"
+              }
+            }
+          }
+        },
+        {
+          "providerId": "account:openai-plan",
+          "modelId": "gpt-6-astra",
+          "config": {
+            "enabled": true,
+            "optionSpecs": {
+              "reasoningLevel": {
+                "values": ["low", "medium", "high", "xhigh", "max", "ultra"],
+                "map": "{\"reasoning\": {\"effort\": reasoningLevel}}"
+              }
+            }
+          }
+        },
+        {
+          "providerId": "account:openai-plan",
+          "modelId": "gpt-6-sol",
+          "config": {
+            "enabled": true,
+            "optionSpecs": {
+              "reasoningLevel": {
+                "values": ["low", "medium", "high", "xhigh", "max", "ultra"],
+                "map": "{\"reasoning\": {\"effort\": reasoningLevel}}"
+              }
+            }
+          }
+        },
+        {
+          "providerId": "account:openai-plan",
+          "modelId": "gpt-6-luna",
+          "config": {
+            "enabled": true,
+            "optionSpecs": {
+              "reasoningLevel": {
+                "values": ["low", "medium", "high", "xhigh", "max"],
+                "map": "{\"reasoning\": {\"effort\": reasoningLevel}}"
+              }
+            }
+          }
+        },
+        {
+          "providerId": "account:openai-plan",
+          "modelId": "gpt-5.6-sol",
+          "config": {
+            "enabled": true,
+            "optionSpecs": {
+              "reasoningLevel": {
+                "values": ["low", "medium", "high", "xhigh", "max", "ultra"],
+                "map": "{\"reasoning\": {\"effort\": reasoningLevel}}"
+              }
+            }
+          }
+        },
+        {
+          "providerId": "account:openai-plan",
+          "modelId": "gpt-5.6-terra",
+          "config": {
+            "enabled": true,
+            "optionSpecs": {
+              "reasoningLevel": {
+                "values": ["low", "medium", "high", "xhigh", "max", "ultra"],
+                "map": "{\"reasoning\": {\"effort\": reasoningLevel}}"
+              }
+            }
+          }
+        },
+        {
+          "providerId": "account:openai-plan",
+          "modelId": "gpt-5.6-luna",
+          "config": {
+            "enabled": true,
+            "optionSpecs": {
+              "reasoningLevel": {
+                "values": ["low", "medium", "high", "xhigh", "max"],
+                "map": "{\"reasoning\": {\"effort\": reasoningLevel}}"
+              }
+            }
+          }
+        },
+        {
+          "providerId": "account:openai-plan",
+          "modelId": "gpt-5.5",
+          "config": {
+            "enabled": true,
+            "optionSpecs": {
+              "reasoningLevel": {
+                "values": ["low", "medium", "high", "xhigh"],
+                "map": "{\"reasoning\": {\"effort\": reasoningLevel}}"
+              }
+            }
           }
         }
       ]

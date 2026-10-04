@@ -2,9 +2,26 @@ import { randomUUID } from "node:crypto";
 
 type ProviderFetch = typeof globalThis.fetch;
 
-export function createOpenAIResponsesJsonCompatFetch(baseFetch: ProviderFetch): ProviderFetch {
+export interface OpenAIResponsesJsonCompatOptions {
+  /**
+   * ChatGPT Codex 后端（chatgpt.com/backend-api/codex）强制请求体显式
+   * store:false（非公开 API 约定，spec openai-oauth-provider §2.7）；AI SDK 的
+   * OpenAIResponsesLanguageModel 不发送该字段，缺省会收到
+   * 400 "Store must be set to false"。开启后仅在 store 缺省时补 false，
+   * 不覆盖显式设置；api.openai.com 等其他 baseUrl 不受影响。
+   */
+  readonly forceStoreFalse?: boolean;
+}
+
+export function createOpenAIResponsesJsonCompatFetch(
+  baseFetch: ProviderFetch,
+  options: OpenAIResponsesJsonCompatOptions = {},
+): ProviderFetch {
   return async (input, init) => {
-    const response = await baseFetch(input, init);
+    const response = await baseFetch(
+      input,
+      options.forceStoreFalse ? withStoreFalseRequestBody(init) : init,
+    );
     if (!response.ok || isEventStream(response)) {
       return response;
     }
@@ -29,6 +46,22 @@ export function createOpenAIResponsesJsonCompatFetch(baseFetch: ProviderFetch): 
       statusText: response.statusText,
     });
   };
+}
+
+function withStoreFalseRequestBody(init: RequestInit | undefined): RequestInit | undefined {
+  // AI SDK 的 JSON 请求体是字符串；流式等其他 body 形态保持原样（best-effort 补丁，
+  // 解析失败也不得阻断请求）。
+  if (!init?.body || typeof init.body !== "string") return init;
+  let body: unknown;
+  try {
+    body = JSON.parse(init.body);
+  } catch {
+    return init;
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) return init;
+  const record = body as Record<string, unknown>;
+  if (record.store !== undefined) return init;
+  return { ...init, body: JSON.stringify({ ...record, store: false }) };
 }
 
 function normalizeOpenAIResponsesJson(value: unknown): Record<string, unknown> | undefined {

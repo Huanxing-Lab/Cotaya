@@ -54,7 +54,9 @@ export const integratedTerminalShellSelectionSchema = z.discriminatedUnion("mode
     path: nonEmptyStringSchema,
   }),
 ]);
-const providerFamilyDomainSchema = z.enum(["zai", "bigmodel"]);
+// openai 与 z.ai 域并存：登录 openai 后同样落 providerFamilyDomain，
+// 供设置页按身份域聚焦 family；旧值不受影响（枚举扩展是加法）。
+const providerFamilyDomainSchema = z.enum(["zai", "bigmodel", "openai"]);
 
 export const postUpdateReleaseNotesPayloadSchema = z.object({
   version: nonEmptyStringSchema,

@@ -5,6 +5,7 @@ import type {
   CommandCenterApiKeyOptions,
   CommandCenterBigmodelLoginOptions,
   CommandCenterLoginOptions,
+  CommandCenterOpenAILoginOptions,
 } from "./command-center/types.js";
 
 export async function loginForTui(
@@ -55,6 +56,32 @@ export async function loginBigmodelForTui(
     abortSignal: options?.abortSignal,
     env,
     onAuthorizeUrl: options?.onAuthorizeUrl,
+  });
+}
+
+export async function loginOpenaiForTui(
+  deps: RunDependencies,
+  options?: CommandCenterOpenAILoginOptions,
+) {
+  const env = deps.env ?? process.env;
+  const workingDirectory = (deps.cwd ?? process.cwd)();
+  const dotenvResult = (deps.loadDotenv ?? loadCliDotenv)({
+    cwd: workingDirectory,
+    env,
+  });
+
+  if (dotenvResult.error) {
+    throw new Error(`Failed to load environment file: ${dotenvResult.path}`, {
+      cause: dotenvResult.error,
+    });
+  }
+
+  const login = deps.loginOpenAICli ?? (await loadBootstrapModule()).loginOpenAICli;
+  return await login({
+    abortSignal: options?.abortSignal,
+    env,
+    onAuthorizeUrl: options?.onAuthorizeUrl,
+    onDeviceCode: options?.onDeviceCode,
   });
 }
 

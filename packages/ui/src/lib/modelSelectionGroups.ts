@@ -75,6 +75,10 @@ function getRegistryAccountProviderGroupPresentation(
 ): Pick<ModelSelectGroup, "label" | "labelBadge"> {
   const familySpec = resolveModelProviderFamilySpecByProviderId(providerId);
   const label = familySpec?.label ?? providerId;
+  // chatgpt-account（openai 域）无 z.ai 域套餐分层：分组只展示品牌名，不挂套餐徽标。
+  if (access.type !== "zhipu-account") {
+    return { label };
+  }
   if (access.mode === "start-plan") {
     return { label: "Start Plan", labelBadge: labels.startPlanBadgeLabel ?? "Free" };
   }

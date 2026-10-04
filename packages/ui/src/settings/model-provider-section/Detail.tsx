@@ -9,9 +9,11 @@ import {
   type StartPlanPreviewConfig,
   isStartPlanModelProviderId,
   isIndividualCodingPlanModelProviderId,
+  isZhipuAccountProviderFamily,
   resolveModelProviderFamilySpecByProviderId,
   type ModelConnectivityResult,
   type OAuthProviderId,
+  isOpenAIPlanModelProviderId,
 } from "@zcode/shared";
 import {
   getProviderFormApiKeyManagementUrl,
@@ -190,7 +192,9 @@ function resolveTeamPlanInspectionAccess(
   item: Extract<ModelProviderNavItem, { type: "teamPlan" }>,
 ) {
   // 不可用套餐仍需查询失效原因；组织/项目身份来自团队导航，不能被执行可用性门禁清空。
-  const family = resolveModelProviderFamilySpecByProviderId(item.presetId)?.id;
+  const familyRaw = resolveModelProviderFamilySpecByProviderId(item.presetId)?.id;
+  // Team Plan 导航项只来自 z.ai 身份域；openai plan 不构造 zhipu-account 团队身份。
+  const family = isZhipuAccountProviderFamily(familyRaw) ? familyRaw : null;
   const productId = item.currentProductId?.trim();
   const organizationId = item.organizationId?.trim();
   const projectId = item.projectId?.trim();
@@ -402,7 +406,18 @@ export function ModelProviderSectionDetail({
         return <ModelProviderLoadingCard loadingLabel={loadingLabel} />;
       }
 
-      return <PresetProviderPlaceholderCard displayName={selectedNavItem.displayName} />;
+      return (
+        <PresetProviderPlaceholderCard
+          displayName={selectedNavItem.displayName}
+          // openai 是账号登录型 provider：无 z.ai 域"同步套餐"语义，
+          // 占位文案按"登录账号后可用"引导，不复用 OAuth 同步占位语。
+          messageId={
+            isOpenAIPlanModelProviderId(selectedNavItem.presetId)
+              ? "settings.modelProvider.openai.presetEmpty"
+              : undefined
+          }
+        />
+      );
     }
 
     const presetProvider = selectedNavItem.provider;

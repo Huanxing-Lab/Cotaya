@@ -1,5 +1,8 @@
 import type { ProviderSettingsView } from "@zcode/services";
-import { resolveModelProviderFamilySpecByProviderId } from "@zcode/shared";
+import {
+  isZhipuAccountProviderFamily,
+  resolveModelProviderFamilySpecByProviderId,
+} from "@zcode/shared";
 import type { UseUsageEntitlementOptions } from "@/hooks/useUsageEntitlement.js";
 import { resolveAccountProviderInspectionAccess } from "@/lib/accountProviderAccess.js";
 import { buildUsageEntitlementCacheKey } from "@/lib/usageEntitlementCache.js";
@@ -12,14 +15,16 @@ export function buildStartPlanEntitlementOptions(
   const inspection = resolveAccountProviderInspectionAccess(view, providerId);
   const provider = view?.providers.find((entry) => entry.providerId === providerId);
   const family = resolveModelProviderFamilySpecByProviderId(providerId);
+  // Start Plan 是 z.ai 身份域专属；openai 无此权益，不构造 zhipu-account 身份。
+  const zhipuFamilyId = family && isZhipuAccountProviderFamily(family.id) ? family.id : null;
   const fingerprint = inspection
     ? JSON.stringify([provider?.accountState?.connectionKey ?? view?.revision, inspection])
     : "";
   return {
-    enabled: Boolean(inspection && family),
+    enabled: Boolean(inspection && zhipuFamilyId),
     preferredProviderId: providerId,
-    accountAccess: family
-      ? { type: "zhipu-account", family: family.id, planKind: "start-plan" }
+    accountAccess: zhipuFamilyId
+      ? { type: "zhipu-account", family: zhipuFamilyId, planKind: "start-plan" }
       : undefined,
     includeSubscription: true,
     allowDisabledPreferredProvider: true,

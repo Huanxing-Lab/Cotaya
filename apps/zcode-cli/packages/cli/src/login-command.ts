@@ -1,8 +1,12 @@
 import { formatJson } from "@zcode/core";
 import type { GlobalOptions, RunContext } from "@zcode/shared-types";
 import { loadBootstrapModule } from "./bootstrap-loader.js";
-import { loadCliDotenv } from "./env.js";
+import { loadCliDotenv, type CliEnv } from "./env.js";
 import type { RunDependencies } from "./cli-types.js";
+
+export type LoginProviderId = "bigmodel" | "openai" | "zai";
+
+const LOGIN_PROVIDER_IDS: readonly LoginProviderId[] = ["bigmodel", "openai", "zai"];
 
 export async function runLoginCommand(
   ctx: RunContext,
@@ -13,9 +17,10 @@ export async function runLoginCommand(
 ): Promise<number> {
   try {
     const providerId = args[0] ?? "zai";
-    if (args.length > 1 || (providerId !== "zai" && providerId !== "bigmodel")) {
-      throw new Error("Usage: zcode login [zai|bigmodel] [--no-browser]");
+    if (args.length > 1 || !LOGIN_PROVIDER_IDS.includes(providerId as LoginProviderId)) {
+      throw new Error("Usage: zcode login [zai|bigmodel|openai] [--no-browser]");
     }
+    const loginProviderId = providerId as LoginProviderId;
     const env = deps.env ?? process.env;
     const workingDirectory = (deps.cwd ?? process.cwd)();
     const dotenvResult = (deps.loadDotenv ?? loadCliDotenv)({
@@ -29,20 +34,10 @@ export async function runLoginCommand(
       });
     }
 
-    const login = deps.loginZCodeCli ?? (await loadBootstrapModule()).loginZCodeCli;
-    const result = await login({
-      env,
-      noBrowser,
-      providerId,
-      onAuthorizeUrl: (data) => {
-        writeAuthorizeUrl(ctx, options, data.authorize_url, noBrowser, providerId);
-      },
-      onBrowserOpen: (browser) => {
-        if (!options.json && !browser.opened) {
-          ctx.stdout.write(`Browser open failed: ${browser.reason ?? "unknown error"}\n`);
-        }
-      },
-    });
+    const result =
+      loginProviderId === "openai"
+        ? await runOpenAILogin(ctx, options, deps, env, noBrowser)
+        : await runZaiDomainLogin(ctx, options, deps, env, noBrowser, loginProviderId);
 
     if (options.json) {
       ctx.stdout.write(
@@ -59,6 +54,7 @@ export async function runLoginCommand(
           credentialsPath: result.credentialsPath,
           configPath: result.configPath,
           browserOpened: result.browser?.opened ?? false,
+          ...(result.method ? { method: result.method } : {}),
         }),
       );
       return 0;
@@ -81,6 +77,75 @@ export async function runLoginCommand(
     }
     return 1;
   }
+}
+
+interface CliLoginResult {
+  browser?: { opened: boolean; reason?: string };
+  configPath: string;
+  credentialsPath: string;
+  method?: "loopback" | "device-code";
+  model: string;
+  providerId: LoginProviderId;
+  user: { avatar?: string; email?: string; name?: string; user_id: string };
+}
+
+async function runZaiDomainLogin(
+  ctx: RunContext,
+  options: GlobalOptions,
+  deps: RunDependencies,
+  env: CliEnv,
+  noBrowser: boolean,
+  providerId: "bigmodel" | "zai",
+): Promise<CliLoginResult> {
+  const login = deps.loginZCodeCli ?? (await loadBootstrapModule()).loginZCodeCli;
+  const result = await login({
+    env,
+    noBrowser,
+    providerId,
+    onAuthorizeUrl: (data) => {
+      writeAuthorizeUrl(ctx, options, data.authorize_url, noBrowser, providerId);
+    },
+    onBrowserOpen: (browser) => {
+      if (!options.json && !browser.opened) {
+        ctx.stdout.write(`Browser open failed: ${browser.reason ?? "unknown error"}\n`);
+      }
+    },
+  });
+  return { ...result, providerId };
+}
+
+async function runOpenAILogin(
+  ctx: RunContext,
+  options: GlobalOptions,
+  deps: RunDependencies,
+  env: CliEnv,
+  noBrowser: boolean,
+): Promise<CliLoginResult> {
+  const login = deps.loginOpenAICli ?? (await loadBootstrapModule()).loginOpenAICli;
+  const result = await login({
+    env,
+    noBrowser,
+    onAuthorizeUrl: (authorizeUrl) => {
+      writeAuthorizeUrl(ctx, options, authorizeUrl, noBrowser, "openai");
+    },
+    // 设备码 fallback：userCode 必须展示给用户（json 模式走 stderr，保持 stdout 纯 JSON）。
+    onDeviceCode: (data) => {
+      const target = options.json ? ctx.stderr : ctx.stdout;
+      target.write(
+        [
+          "Switched to OpenAI device code flow (loopback port unavailable or no browser).",
+          `Open ${data.inputPageUrl} and enter this code:`,
+          `  ${data.userCode}`,
+        ].join("\n") + "\n",
+      );
+    },
+    onBrowserOpen: (browser) => {
+      if (!options.json && !browser.opened) {
+        ctx.stdout.write(`Browser open failed: ${browser.reason ?? "unknown error"}\n`);
+      }
+    },
+  });
+  return { ...result, providerId: "openai" };
 }
 
 export async function runLogoutCommand(
@@ -109,7 +174,9 @@ export async function runLogoutCommand(
       ctx.stdout.write(
         formatJson({
           status: "logged_out",
-          provider: "zai",
+          // 登出按 active_provider 分域：openai 域仅清 oauth:openai:*；zai 表示
+          // z.ai 域整域登出（zai/bigmodel + standalone coding-plan key）。
+          provider: result.provider,
           credentialsPath: result.credentialsPath,
         }),
       );
@@ -117,7 +184,9 @@ export async function runLogoutCommand(
     }
 
     ctx.stdout.write(
-      `Logged out from Coding Plan accounts. Credentials: ${result.credentialsPath}\n`,
+      result.provider === "openai"
+        ? `Logged out from OpenAI account. Credentials: ${result.credentialsPath}\n`
+        : `Logged out from Coding Plan accounts. Credentials: ${result.credentialsPath}\n`,
     );
     return 0;
   } catch (error) {
@@ -135,7 +204,7 @@ function writeAuthorizeUrl(
   options: GlobalOptions,
   authorizeUrl: string,
   noBrowser: boolean,
-  providerId: "zai" | "bigmodel",
+  providerId: LoginProviderId,
 ): void {
   const target = options.json ? ctx.stderr : ctx.stdout;
   if (noBrowser) {
@@ -144,8 +213,14 @@ function writeAuthorizeUrl(
   }
 
   target.write(
-    `Opening browser for ${providerId === "bigmodel" ? "BigModel" : "Z.AI"} authorization.\nFallback URL:\n${authorizeUrl}\n`,
+    `Opening browser for ${loginProviderDisplayName(providerId)} authorization.\nFallback URL:\n${authorizeUrl}\n`,
   );
+}
+
+function loginProviderDisplayName(providerId: LoginProviderId): string {
+  if (providerId === "bigmodel") return "BigModel";
+  if (providerId === "openai") return "OpenAI";
+  return "Z.AI";
 }
 
 function formatUserLabel(user: { email?: string; name?: string; user_id: string }): string {

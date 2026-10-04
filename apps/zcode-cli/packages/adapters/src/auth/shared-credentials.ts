@@ -17,6 +17,12 @@ export const SHARED_ZCODE_CREDENTIAL_KEYS = {
   bigmodelAccessToken: "oauth:bigmodel:access_token",
   bigmodelRefreshToken: "oauth:bigmodel:refresh_token",
   bigmodelUserInfo: "oauth:bigmodel:user_info",
+  // openai 是独立身份域（spec openai-oauth-provider §2.3）：key 与 Desktop OAuthCredentialRepo
+  // 同名同文件，登录/刷新只写本段；expires_at 为毫秒时间戳字符串（token 生命周期归 openai 域自有）。
+  openaiAccessToken: "oauth:openai:access_token",
+  openaiRefreshToken: "oauth:openai:refresh_token",
+  openaiUserInfo: "oauth:openai:user_info",
+  openaiExpiresAt: "oauth:openai:expires_at",
   zaiAccessToken: "oauth:zai:access_token",
   zaiRefreshToken: "oauth:zai:refresh_token",
   zaiUserInfo: "oauth:zai:user_info",
@@ -61,6 +67,11 @@ export interface SharedZCodeCredentialStore {
   onDidChange?(listener: () => void | Promise<void>): () => void;
   save(key: string, value: string): Promise<void>;
   saveMany(entries: Readonly<Record<string, string>>): Promise<void>;
+  saveManyIfValue(
+    guardKey: string,
+    expectedGuardValue: string,
+    entries: Readonly<Record<string, string>>,
+  ): Promise<boolean>;
   saveReplacing(key: string, value: string, replacedKeys: readonly string[]): Promise<void>;
   saveZaiLoginCredentials(payload: ZaiLoginCredentialPayload): Promise<void>;
 }
@@ -215,6 +226,42 @@ export function createSharedZCodeCredentialStore(
           rawCredentials[key] = encryptedValue;
         }
       });
+    },
+
+    /**
+     * 条件事务：`guardKey` 当前值与期望值相等才写入 `entries` 全部 key，否则一个都不写。
+     *
+     * 与 `deleteManyIfValue` 互为镜像，服务于同一类所有者约束：openai 的
+     * refresh_token 一次性轮换发生在请求鉴权路径（不经 Desktop OAuthService 会话队列），
+     * 写回前必须确认磁盘事实仍是刷新发起时的快照——否则刷新在途期间用户登出会凭空
+     * 复活已清除的凭据，另一进程先完成轮换时会用旧结果覆盖新 refresh_token。
+     */
+    async saveManyIfValue(
+      guardKey: string,
+      expectedGuardValue: string,
+      entries: Readonly<Record<string, string>>,
+    ): Promise<boolean> {
+      const validatedGuardKey = validateCredentialKey(guardKey);
+      const validatedExpectedValue = validateCredentialValue(expectedGuardValue);
+      const encryptedEntries = Object.entries(entries).map(
+        ([key, value]) =>
+          [validateCredentialKey(key), cipher.encrypt(validateCredentialValue(value))] as const,
+      );
+      let saved = false;
+      await mutateRawCredentialRecord(filePath, (rawCredentials) => {
+        const encryptedGuard = rawCredentials[validatedGuardKey];
+        if (
+          encryptedGuard === undefined ||
+          cipher.decrypt(encryptedGuard) !== validatedExpectedValue
+        ) {
+          return;
+        }
+        for (const [key, encryptedValue] of encryptedEntries) {
+          rawCredentials[key] = encryptedValue;
+        }
+        saved = true;
+      });
+      return saved;
     },
 
     async saveReplacing(

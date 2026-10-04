@@ -1,5 +1,6 @@
 import type { IServiceAccessor, ProviderSettingsView } from "@zcode/services";
 import type { ProviderFamilyConnectionSelection } from "@zcode/shared";
+import { isZhipuAccountProviderFamily } from "@zcode/shared";
 import type { AccountConnectionLoss } from "@/root/accountConnectionRefreshObserver.js";
 import {
   resolveFirstSubscribedTeamPlanConnectionWithContext,
@@ -16,6 +17,9 @@ export async function prepareAccountConnectionSwitch(
 ) {
   const settings = await services.settingService.get();
   const family = settings.providerFamilyDomain;
+  // openai 是独立身份域：连接丢失走重登引导（reauthentication-required），
+  // 不提供 z.ai 域套餐切换建议。
+  if (!family || !isZhipuAccountProviderFamily(family)) return null;
   const original = family && settings.providerFamilyConnectionSelections?.[family];
   if (!family || !original || original.kind === "start-plan" || !event.isCurrent()) return null;
   if (

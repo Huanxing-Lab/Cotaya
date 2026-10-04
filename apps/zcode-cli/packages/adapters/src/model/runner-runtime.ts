@@ -50,3 +50,13 @@ export const defaultRuntime: AiSdkModelRuntime = {
   generateText: aiGenerateText,
   streamText: aiStreamText,
 };
+
+/**
+ * off-peak 是 z.ai 域 zhipu-account 专属 mode；openai 域 chatgpt-account 无套餐分层，
+ * 联合收窄后不得直接读 mode。
+ */
+export function isOffPeakAccountAccess(
+  access: ZCodeProviderAccountAccess | undefined,
+): boolean {
+  return access?.type === "zhipu-account" && access.mode === "off-peak";
+}

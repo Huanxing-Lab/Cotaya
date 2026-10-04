@@ -1,5 +1,8 @@
 import { useCallback } from "react";
-import { resolveModelProviderFamilyIdByProviderId } from "@zcode/shared";
+import {
+  isZhipuAccountProviderFamily,
+  resolveModelProviderFamilyIdByProviderId,
+} from "@zcode/shared";
 import { useProviderSettingsView } from "@/hooks/useProviderSettingsView.js";
 import { useServices } from "@/hooks/useServices.js";
 import { type CodingPlanProviderId } from "@/settings/model-provider-section/constants.js";
@@ -81,9 +84,12 @@ export function CodingPlanUpgradeDialog({
   const productsProviderId = providerId
     ? resolveCodingPlanUpgradeProductsProviderId(providerId)
     : null;
-  const teamPlanFamily = productsProviderId
+  // 购买完成后的团队产品刷新只在 z.ai 身份域存在；openai plan 无团队套餐购买回传。
+  const teamPlanFamilyRaw = productsProviderId
     ? resolveModelProviderFamilyIdByProviderId(productsProviderId)
     : null;
+  const teamPlanFamily =
+    teamPlanFamilyRaw && isZhipuAccountProviderFamily(teamPlanFamilyRaw) ? teamPlanFamilyRaw : null;
   const refreshProviderState = useCallback(
     () => providerSettingsService.refresh("coding-plan-purchase-complete"),
     [providerSettingsService],

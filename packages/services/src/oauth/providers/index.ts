@@ -1,6 +1,12 @@
-import { BIGMODEL_PROVIDER_ID, ZAI_PROVIDER_ID, type ApiClient } from "@zcode/shared";
+import {
+  BIGMODEL_PROVIDER_ID,
+  OPENAI_PROVIDER_ID,
+  ZAI_PROVIDER_ID,
+  type ApiClient,
+} from "@zcode/shared";
 import type { OAuthRuntimeConfig } from "../runtimeConfig.js";
 import { BigModelProviderAdapter } from "./bigmodelProviderAdapter.js";
+import { OpenAIProviderAdapter } from "./openaiProviderAdapter.js";
 import type { OAuthProviderAdapter } from "./providerAdapter.js";
 import { ZaiProviderAdapter } from "./zaiProviderAdapter.js";
 
@@ -25,6 +31,10 @@ export function createOAuthProviderAdapters(
       case ZAI_PROVIDER_ID:
         adapters.push(new ZaiProviderAdapter(providerConfig, apiClient));
         break;
+      case OPENAI_PROVIDER_ID:
+        // openai 是独立身份域（与 z.ai 域互不删凭据），协议见 openaiProviderAdapter。
+        adapters.push(new OpenAIProviderAdapter(providerConfig, apiClient));
+        break;
       default:
         // 未知 provider 直接忽略，避免单个配置错误拖垮全部登录能力。
         break;
@@ -34,4 +44,8 @@ export function createOAuthProviderAdapters(
   return adapters;
 }
 
-export type { OAuthProviderAdapter, OAuthProviderContext } from "./providerAdapter.js";
+export type {
+  LoopbackDeviceCodeProviderAdapter,
+  OAuthProviderAdapter,
+  OAuthProviderContext,
+} from "./providerAdapter.js";

@@ -144,12 +144,18 @@ export class AiSdkModelAdapter {
       optionSpecs: options.modelConfig.optionSpecs,
     });
     const properties = options.modelConfig.properties;
+    // 账号登录型 access（z.ai 域 zhipu-account / openai 域 chatgpt-account）都走请求期动态鉴权：
+    // 材料经 refreshBeforeModelRequest 链路（host 反向 RPC 或 standalone 端口）在每次
+    // 真实请求 attempt 前解析下发，access 本身不携带静态 key。
+    const accountAccess =
+      options.providerConfig.access.type === "zhipu-account" ||
+      options.providerConfig.access.type === "chatgpt-account"
+        ? options.providerConfig.access
+        : undefined;
     const resolved = {
       ...boundResolution.resolved,
       properties,
-      ...(options.providerConfig.access.type === "zhipu-account"
-        ? { accountAccess: options.providerConfig.access }
-        : {}),
+      ...(accountAccess ? { accountAccess } : {}),
     };
     const optionSpecs = options.modelConfig.optionSpecs;
     const toLegacyRequest = (request: ModelExecutionRequest): AiSdkModelTextRequest => {
@@ -178,7 +184,7 @@ export class AiSdkModelAdapter {
             }
             return { headersApplied: true, requestAuth };
           }
-        : options.providerConfig.access.type === "zhipu-account"
+        : accountAccess
           ? (contextRefreshRuntimeHeadersBeforeAttempt ??
             (async () => {
               throw new ModelProtocolError(
@@ -212,9 +218,7 @@ export class AiSdkModelAdapter {
               refreshRuntimeHeadersBeforeAttempt: (input) =>
                 refreshRuntimeHeadersBeforeAttempt({
                   ...input,
-                  ...(options.providerConfig.access.type === "zhipu-account"
-                    ? { accountAccess: options.providerConfig.access }
-                    : {}),
+                  ...(accountAccess ? { accountAccess } : {}),
                 }),
             }
           : {}),
@@ -238,9 +242,7 @@ export class AiSdkModelAdapter {
               }),
             ),
             properties,
-            ...(options.providerConfig.access.type === "zhipu-account"
-              ? { accountAccess: options.providerConfig.access }
-              : {}),
+            ...(accountAccess ? { accountAccess } : {}),
           })
         : () => ({
             ...boundResolution.resolveRequest({
@@ -250,9 +252,7 @@ export class AiSdkModelAdapter {
               },
             }),
             properties,
-            ...(options.providerConfig.access.type === "zhipu-account"
-              ? { accountAccess: options.providerConfig.access }
-              : {}),
+            ...(accountAccess ? { accountAccess } : {}),
           });
     };
     return createModel({

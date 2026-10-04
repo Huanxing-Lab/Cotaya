@@ -19,7 +19,7 @@ import {
   type ModelRequestAuth,
 } from "@zcode/contracts";
 import type { RegistryProviderConfig } from "@zcode/provider";
-import { withOpenRouterAttributionHeaders } from "@zcode/shared";
+import { DEFAULT_OPENAI_CODEX_BASE_URL, withOpenRouterAttributionHeaders } from "@zcode/shared";
 import { createAnthropicCompatFetch } from "./anthropic-stream-compat.js";
 import { createOpenAIResponsesJsonCompatFetch } from "./openai-responses-json-compat.js";
 import { createModelOptionMapFetch, type RawRequestBodyCapture } from "./model-option-map-fetch.js";
@@ -283,7 +283,11 @@ export class AiSdkModelExecution {
         const provider = createOpenAI({
           apiKey,
           baseURL: providerConfig.baseURL,
-          fetch: createOpenAIResponsesJsonCompatFetch(optionFetch),
+          fetch: createOpenAIResponsesJsonCompatFetch(optionFetch, {
+            // 仅 ChatGPT Codex 后端强制 store:false；api.openai.com 保持 SDK 默认，
+            // 不改变 api-key 模板行为（spec openai-oauth-provider §2.7）。
+            forceStoreFalse: isOpenAICodexResponsesBaseUrl(providerConfig.baseURL),
+          }),
           headers,
         });
         return provider.responses as LanguageModelFactory;
@@ -352,7 +356,9 @@ function toAiSdkProviderConfig(
   config: RegistryProviderConfig,
 ): AiSdkProviderConfig {
   const common = {
-    ...(config.access.type !== "zhipu-account" && config.access.apiKey
+    // 账号登录型 access（z.ai 域 zhipu-account / openai 域 chatgpt-account）都没有静态
+    // apiKey：鉴权材料由请求期 requestAuth 动态下发，不能把 access 上的可选字段误当静态 key。
+    ...(isStaticApiKeyAccess(config.access) && config.access.apiKey
       ? { apiKey: config.access.apiKey }
       : {}),
     baseURL: config.api.baseUrl,
@@ -371,6 +377,12 @@ function toAiSdkProviderConfig(
   throw new Error(`Unsupported Provider API type: ${String(config.api.type)}`);
 }
 
+function isStaticApiKeyAccess(
+  access: RegistryProviderConfig["access"],
+): access is Extract<RegistryProviderConfig["access"], { apiKey?: string }> {
+  return access.type === "api-key" || access.type === "zhipu-coding-plan-api-key";
+}
+
 function applyModelRequestAuth(
   providerConfig: AiSdkProviderConfig,
   requestAuth: ModelRequestAuth | undefined,
@@ -383,6 +395,11 @@ function applyModelRequestAuth(
       ? { headers: mergeModelRequestHeaders(providerConfig.headers, requestAuth.headers) }
       : {}),
   };
+}
+
+function isOpenAICodexResponsesBaseUrl(baseUrl: string): boolean {
+  const normalized = baseUrl.trim().replace(/\/+$/, "");
+  return normalized === DEFAULT_OPENAI_CODEX_BASE_URL;
 }
 
 function withAnthropicAuthorizationHeader(

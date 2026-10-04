@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- Coding Plan 订阅协议类型需要集中导出给 UI、services 和 RPC 共享，拆散会增加跨包类型入口复杂度。 */
-import type { ProviderFamilyDomain } from "./model-provider-family.js";
+import type { ZhipuAccountFamilyId } from "./model-provider-family.js";
 import type { BUILTIN_MODEL_PROVIDER_IDS } from "./model-provider-types.js";
 
 export type CodingPlanPayType = "ALI" | "WECHAT";
@@ -417,8 +417,9 @@ export interface EnterpriseCodingPlanPricingRequest {
    * 指定按哪个 family 读取企业定价。
    * 缺省时按 bigmodel 处理，向后兼容既有调用点。
    * service 层据此路由到对应 family 的 subscription provider。
+   * 企业定价是 z.ai 身份域专属（openai 无 z.ai 套餐体系），类型收窄到 z.ai 域。
    */
-  family?: ProviderFamilyDomain;
+  family?: ZhipuAccountFamilyId;
 }
 
 export interface EnterpriseCodingPlanBalanceResponse {

@@ -3,6 +3,7 @@ import {
   createSharedZCodeCredentialStore,
   createCliOAuthClient,
   createCliOAuthPollToken,
+  loginWithOpenAIOAuth,
   openUrlInBrowser,
   SHARED_ZCODE_CREDENTIAL_KEYS,
   type BrowserOpenResult,
@@ -11,11 +12,12 @@ import {
   type CliOAuthInitData,
   type CliOAuthPollData,
   type CliOAuthUser,
+  type OpenAILoginCallbacks,
 } from "@zcode/adapters";
 import { createConfig } from "@zcode/adapters/config";
 import { createNodeHttpClientAdapter } from "@zcode/adapters/http";
 import type { EnvRecord } from "@zcode/adapters/model";
-import { buildZCodeEndpointUrls, resolveRuntimeZCodeEndpointOrigin } from "@zcode/shared";
+import { buildZCodeEndpointUrls, OPENAI_PROVIDER_ID, resolveRuntimeZCodeEndpointOrigin } from "@zcode/shared";
 import {
   NodeModelSelectionConfigRepository,
   NodePersonalProviderConfigRepository,
@@ -72,6 +74,33 @@ export interface LoginZCodeCliResult {
 export type LoginBigmodelCodingPlanOptions = Omit<LoginZCodeCliOptions, "providerId">;
 export type LoginBigmodelCodingPlanResult = LoginZCodeCliResult & { providerId: "bigmodel" };
 
+export interface LoginOpenAICliOptions {
+  abortSignal?: AbortSignal;
+  credentialStore?: SharedZCodeCredentialStore;
+  env?: EnvRecord;
+  httpClient?: Parameters<typeof loginWithOpenAIOAuth>[0]["httpClient"];
+  noBrowser?: boolean;
+  now?: () => number;
+  onAuthorizeUrl?: OpenAILoginCallbacks["onAuthorizeUrl"];
+  onDeviceCode?: OpenAILoginCallbacks["onDeviceCode"];
+  onBrowserOpen?: OpenAILoginCallbacks["onBrowserOpen"];
+  openBrowser?: Parameters<typeof loginWithOpenAIOAuth>[0]["openBrowser"];
+  sleep?: (ms: number) => Promise<void>;
+  timeoutMs?: number;
+  personalProviderConfigPath?: string;
+}
+
+export interface LoginOpenAICliResult {
+  browser?: BrowserOpenResult;
+  configPath: string;
+  credentialsPath: string;
+  /** 实际完成的流程：loopback 主流程或设备码 fallback（1455 被占/无浏览器）。 */
+  method: "loopback" | "device-code";
+  model: string;
+  providerId: "openai";
+  user: { user_id: string; email?: string; name?: string };
+}
+
 export interface ConfigureCodingPlanApiKeyOptions {
   apiKey: string;
   credentialStore?: SharedZCodeCredentialStore;
@@ -93,6 +122,12 @@ export interface LogoutZCodeCliOptions {
 
 export interface LogoutZCodeCliResult {
   credentialsPath: string;
+  /**
+   * 本次登出的身份域：`openai`（独立身份域，仅清 oauth:openai:* 与指针）或
+   * `zai`（z.ai 域整域登出，含 zai/bigmodel 与 standalone coding-plan key）。
+   * 按 active_provider 分域（spec openai-oauth-provider §2.3），供 CLI 输出使用。
+   */
+  provider: "openai" | "zai";
 }
 
 export async function hasConfiguredStandaloneCodingPlan(
@@ -255,6 +290,121 @@ export async function loginBigmodelCodingPlan(
   };
 }
 
+/**
+ * OpenAI（ChatGPT 账号）登录：授权码 + PKCE + loopback 1455 主流程，
+ * 1455 被占或 --no-browser 时自动降级设备码流程。
+ * 凭据写入与 Desktop 同名 key（oauth:openai: 加 active_provider），
+ * openai 是独立身份域：不写 zcodejwttoken、不触碰 zai 与 bigmodel 的凭据。
+ */
+export async function loginOpenAICli(
+  options: LoginOpenAICliOptions = {},
+): Promise<LoginOpenAICliResult> {
+  const env = options.env ?? process.env;
+  const credentialStore = options.credentialStore ?? createSharedZCodeCredentialStore({ env });
+  const login = await loginWithOpenAIOAuth({
+    httpClient: options.httpClient ?? createDefaultHttpClient(env),
+    ...(options.env ? { env: options.env } : {}),
+    noBrowser: options.noBrowser,
+    ...(options.now ? { now: options.now } : {}),
+    ...(options.openBrowser ? { openBrowser: options.openBrowser } : {}),
+    ...(options.sleep ? { sleep: options.sleep } : {}),
+    ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}),
+    signal: options.abortSignal,
+    onAuthorizeUrl: options.onAuthorizeUrl,
+    onDeviceCode: options.onDeviceCode,
+    onBrowserOpen: options.onBrowserOpen,
+  });
+  const { tokenSet } = login;
+
+  try {
+    // user_info 与 Desktop OAuthUserProfile 同构：id = chatgpt_account_id，
+    // rawProfile 保留原始 claim 供排查（spec §2.6）。
+    await credentialStore.saveMany({
+      [SHARED_ZCODE_CREDENTIAL_KEYS.activeProvider]: OPENAI_PROVIDER_ID,
+      [SHARED_ZCODE_CREDENTIAL_KEYS.openaiAccessToken]: tokenSet.accessToken,
+      [SHARED_ZCODE_CREDENTIAL_KEYS.openaiRefreshToken]: tokenSet.refreshToken,
+      [SHARED_ZCODE_CREDENTIAL_KEYS.openaiExpiresAt]: String(tokenSet.expiresAt),
+      [SHARED_ZCODE_CREDENTIAL_KEYS.openaiUserInfo]: JSON.stringify({
+        id: tokenSet.profile.id,
+        username: tokenSet.profile.username,
+        displayName: tokenSet.profile.displayName,
+        rawProfile: {
+          chatgpt_account_id: tokenSet.profile.chatgptAccountId ?? "",
+          email: tokenSet.profile.email ?? "",
+          sub: tokenSet.profile.sub ?? "",
+        },
+      }),
+    });
+  } catch (error) {
+    throw new ZCodeCliLoginError(
+      "credential_write_failed",
+      "Login succeeded but writing credentials failed.",
+      { cause: error },
+    );
+  }
+
+  let configPatch: StandaloneCodingPlanPersistenceResult;
+  try {
+    configPatch = await persistOpenAIPlanDefaultModel({
+      credentialStore,
+      env,
+      personalProviderConfigPath: options.personalProviderConfigPath,
+    });
+  } catch (error) {
+    throw new ZCodeCliLoginError(
+      "config_update_failed",
+      "Login succeeded but updating ZCode config failed.",
+      { cause: error },
+    );
+  }
+  return {
+    ...(login.browser ? { browser: login.browser } : {}),
+    configPath: configPatch.path,
+    credentialsPath: credentialStore.filePath,
+    method: login.method,
+    model: configPatch.mainModel,
+    providerId: OPENAI_PROVIDER_ID,
+    user: {
+      user_id: tokenSet.profile.id,
+      ...(tokenSet.profile.email ? { email: tokenSet.profile.email } : {}),
+      ...(tokenSet.profile.username ? { name: tokenSet.profile.username } : {}),
+    },
+  };
+}
+
+/** openai 域登录后的默认模型选择：仅写 defaultModelSelection，无 account-provider api key 语义。 */
+async function persistOpenAIPlanDefaultModel(input: {
+  credentialStore: SharedZCodeCredentialStore;
+  env: EnvRecord;
+  personalProviderConfigPath?: string;
+}): Promise<StandaloneCodingPlanPersistenceResult> {
+  const configuredProvider = await resolveStandaloneCodingPlanProvider("openai", input.env);
+  const path =
+    input.personalProviderConfigPath ??
+    input.env[ZCODE_PERSONAL_PROVIDER_CONFIG_FILE_ENV]?.trim() ??
+    join(dirname(input.credentialStore.filePath), PERSONAL_PROVIDER_CONFIG_FILE_NAME);
+  // 登录与运行时共享文件和事务；首次写入仍先保留旧用户 Provider，不能仅写默认值。
+  const personalRepository = new NodePersonalProviderConfigRepository({
+    filePath: path,
+    importLegacy: () => readLegacyCliPersonalProviderConfig({}),
+    pollingIntervalMs: false,
+  });
+  const repository = new NodeModelSelectionConfigRepository({ personalRepository });
+  try {
+    await repository.saveConfiguredDefault({
+      providerId: configuredProvider.providerId,
+      modelId: configuredProvider.modelId,
+    });
+  } finally {
+    repository.dispose();
+    personalRepository.dispose();
+  }
+  return {
+    mainModel: `${configuredProvider.providerId}/${configuredProvider.modelId}`,
+    path,
+  };
+}
+
 export async function configureCodingPlanApiKey(
   options: ConfigureCodingPlanApiKeyOptions,
 ): Promise<ConfigureCodingPlanApiKeyResult> {
@@ -284,6 +434,27 @@ export async function logoutZCodeCli(
 ): Promise<LogoutZCodeCliResult> {
   const credentialStore =
     options.credentialStore ?? createSharedZCodeCredentialStore({ env: options.env });
+  const activeProvider = (
+    await credentialStore.load(SHARED_ZCODE_CREDENTIAL_KEYS.activeProvider)
+  )?.trim();
+  if (activeProvider === OPENAI_PROVIDER_ID) {
+    // 按 active_provider 分域清理（spec openai-oauth-provider §2.3）：active=openai 时
+    // 仅清 oauth:openai:* 与指针，对齐 Desktop clearActiveSession 语义；z.ai 域凭据、
+    // zcodejwttoken 与 standalone coding-plan key 均不动。deleteManyIfValue 条件事务
+    // 保证读取后并发切换 provider 时不会误删新会话。
+    await credentialStore.deleteManyIfValue(
+      SHARED_ZCODE_CREDENTIAL_KEYS.activeProvider,
+      OPENAI_PROVIDER_ID,
+      [
+        SHARED_ZCODE_CREDENTIAL_KEYS.openaiAccessToken,
+        SHARED_ZCODE_CREDENTIAL_KEYS.openaiRefreshToken,
+        SHARED_ZCODE_CREDENTIAL_KEYS.openaiUserInfo,
+        SHARED_ZCODE_CREDENTIAL_KEYS.openaiExpiresAt,
+        SHARED_ZCODE_CREDENTIAL_KEYS.activeProvider,
+      ],
+    );
+    return { credentialsPath: credentialStore.filePath, provider: "openai" };
+  }
   const providerIds = (await readStandaloneCodingPlanProviders(options.env ?? process.env)).map(
     ({ providerId }) => providerId,
   );
@@ -301,7 +472,12 @@ export async function logoutZCodeCli(
       : [];
   });
   const keys = [
-    ...Object.values(SHARED_ZCODE_CREDENTIAL_KEYS),
+    // z.ai 域登出只清本域 key：openai 是独立身份域（spec openai-oauth-provider §2.3），
+    // 其凭据 key 与本域共用 SHARED_ZCODE_CREDENTIAL_KEYS 命名空间，但不得随 z.ai 域
+    // 登出被跨域删除（“反向亦然”）。
+    ...Object.entries(SHARED_ZCODE_CREDENTIAL_KEYS)
+      .filter(([name]) => !name.startsWith("openai"))
+      .map(([, key]) => key),
     ...identityKeys,
     ...dynamicApiKeyKeys,
   ];
@@ -313,6 +489,7 @@ export async function logoutZCodeCli(
   );
   return {
     credentialsPath: credentialStore.filePath,
+    provider: "zai",
   };
 }
 

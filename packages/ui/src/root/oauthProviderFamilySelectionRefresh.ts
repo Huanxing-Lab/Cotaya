@@ -8,6 +8,7 @@ import type {
 } from "@zcode/shared";
 import {
   getModelProviderFamilySpec,
+  isZhipuAccountProviderFamily,
   resolveProviderFamilyDomainFromOAuthProvider,
 } from "@zcode/shared";
 import { logger } from "@/logger.js";
@@ -102,6 +103,11 @@ export async function refreshLatestModelProviderFamilySelectionAfterLogin(params
   const domain = resolveProviderFamilyDomainFromOAuthProvider(params.provider);
   if (!domain) {
     return null;
+  }
+  // openai 是独立身份域：登录后固定连接 account:openai-plan（等价 individual
+  // 选择），不发起 z.ai 域套餐权益/团队定价刷新（那两条链路按 zhipu-account 身份工作）。
+  if (!isZhipuAccountProviderFamily(domain)) {
+    return { kind: "individual-coding-plan" };
   }
 
   const familySpec = resolveModelProviderFamilySpecFromOAuth(params.provider);

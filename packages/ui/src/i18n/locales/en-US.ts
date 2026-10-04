@@ -872,9 +872,17 @@ const enUS: Record<string, string> = {
   "login.oauth.button": "Continue with {provider}",
   "login.oauth.button.zai": "Connect to Z.ai",
   "login.oauth.button.bigmodel": "Connect to BigModel",
+  "login.oauth.button.openai": "Connect to OpenAI",
   "login.oauth.regionTag.zai": "Global",
   "login.oauth.regionTag.bigmodel": "CN",
+  "login.oauth.regionTag.openai": "ChatGPT account",
   "login.oauth.waiting": "Waiting for {provider} authentication...",
+  "login.oauth.deviceCode.title": "Enter the device code to finish authorization",
+  "login.oauth.deviceCode.description":
+    "The browser callback is unavailable, so we switched to device-code sign-in. Open the authorization page and enter the code below to continue.",
+  "login.oauth.deviceCode.copy": "Copy code",
+  "login.oauth.deviceCode.copied": "Copied",
+  "login.oauth.deviceCode.openAuthorizationPage": "Open authorization page",
   "login.oauth.loginFailure": "Login failed, please try again",
   "login.oauth.cancel": "Cancel",
   "login.oauth.retry": "Retry login",
@@ -3680,6 +3688,8 @@ const enUS: Record<string, string> = {
   "settings.modelProvider.presetDescription":
     "Built-in Z.ai and BigModel providers with OAuth-assisted configuration.",
   "settings.modelProvider.presetEmpty": "Not synced yet. Complete OAuth login first.",
+  "settings.modelProvider.openai.presetEmpty":
+    "Sign in with your OpenAI account to use the built-in models.",
   "settings.modelProvider.customTitle": "Custom providers",
   "settings.modelProvider.refresh": "Refresh",
   "settings.modelProvider.reorderProvider": "Drag to reorder provider",

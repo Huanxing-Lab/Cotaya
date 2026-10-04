@@ -46,11 +46,8 @@ import {
 } from "./runner-status.js";
 import type { EnvRecord } from "./model-execution.js";
 import type { ResolvedAiSdkModelRetryOptions } from "./retry-policy.js";
-import type {
-  AiSdkModelRuntime,
-  AiSdkModelTextRequest,
-  ResolvedAiSdkModel,
-} from "./runner-runtime.js";
+import type { AiSdkModelRuntime, AiSdkModelTextRequest, ResolvedAiSdkModel } from "./runner-runtime.js";
+import { isOffPeakAccountAccess } from "./runner-runtime.js";
 import { resolveModelForAttempt, RuntimeHeadersRefreshError } from "./runner-runtime-headers.js";
 import { retryAllowedByFailurePolicy } from "./workflow-model-failure-policy.js";
 import { modelFailureStatusFields, providerRequestIdFromHeaders } from "./runner-telemetry.js";
@@ -344,7 +341,7 @@ export async function runGenerateText(input: {
       // off-peak 特判（仅 idle plan provider，见 offpeak-retry.ts）：排队 429 豁免预算、
       // 3102（兼容旧 3001）以稳定标记落败触发 desktop 侧续跑。
       const offPeak = resolveOffPeakFailureDecision({
-        offPeak: resolved.accountAccess?.mode === "off-peak",
+        offPeak: isOffPeakAccountAccess(resolved.accountAccess),
         failure: classified,
         error: unwrapRetryError(error),
       });

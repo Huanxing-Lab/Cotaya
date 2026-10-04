@@ -837,15 +837,29 @@ export const zcodeAccountAccessSchema = z.discriminatedUnion("planKind", [
 ]);
 export type ZCodeAccountAccess = z.infer<typeof zcodeAccountAccessSchema>;
 
-/** Active Model 固定的账号访问类别；当前商品和 Team scope 由账号服务在请求期解析。 */
-export const zcodeProviderAccountAccessSchema = z
-  .object({
-    type: z.literal("zhipu-account"),
-    accountType: z.enum(["zai", "bigmodel"]),
-    mode: z.enum(["start-plan", "individual-coding-plan", "team-coding-plan", "off-peak"]),
-    entitled: z.boolean(),
-  })
-  .strict();
+/**
+ * Active Model 固定的账号访问类别；当前商品和 Team scope 由账号服务在请求期解析。
+ * chatgpt-account 是 openai 域（ChatGPT 账号 OAuth 登录）的账号 access：CLI 在
+ * provider runtime headers 反向 RPC 中随请求上送，host 按 providerId 走 openai
+ * 分支解析动态材料，不进入 z.ai 域 planKind 语义。
+ */
+export const zcodeProviderAccountAccessSchema = z.discriminatedUnion("type", [
+  z
+    .object({
+      type: z.literal("zhipu-account"),
+      accountType: z.enum(["zai", "bigmodel"]),
+      mode: z.enum(["start-plan", "individual-coding-plan", "team-coding-plan", "off-peak"]),
+      entitled: z.boolean(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("chatgpt-account"),
+      accountType: z.literal("openai"),
+      entitled: z.boolean(),
+    })
+    .strict(),
+]);
 export type ZCodeProviderAccountAccess = z.infer<typeof zcodeProviderAccountAccessSchema>;
 
 export type ZCodeSessionMode = z.infer<typeof zcodeSessionModeSchema>;

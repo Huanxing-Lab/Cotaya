@@ -10,6 +10,8 @@ export const providerGroupDataSchema = z.enum([
   "standard-personal",
   "zai-family",
   "bigmodel-family",
+  // OpenAI（ChatGPT 账号）登录的账号 provider 分组；独立身份域，不与 z.ai 域互斥。
+  "openai-family",
 ]);
 export const zhipuAccountModeDataSchema = z.enum([
   "start-plan",
@@ -52,13 +54,30 @@ export const zhipuAccountAccessDataSchema = z
     type: completeZhipuAccountAccessDataSchema.shape.type,
   })
   .strict();
+export const completeChatGPTAccountAccessDataSchema = z
+  .object({
+    type: z.literal("chatgpt-account"),
+    // 独立于 zhipu-account 的账号 access：OpenAI（ChatGPT 账号）OAuth 登录专用，
+    // 不携带 z.ai 域套餐 mode 语义，entitled 仅表达本地 token 有效性投影。
+    accountType: z.literal("openai"),
+    entitled: z.boolean(),
+  })
+  .strict();
+export const chatgptAccountAccessDataSchema = z
+  .object({
+    ...sparseShape(completeChatGPTAccountAccessDataSchema.shape),
+    type: completeChatGPTAccountAccessDataSchema.shape.type,
+  })
+  .strict();
 export const providerAccessDataSchema = z.discriminatedUnion("type", [
   apiKeyAccessDataSchema,
   zhipuAccountAccessDataSchema,
+  chatgptAccountAccessDataSchema,
 ]);
 const completeProviderAccessDataSchema = z.discriminatedUnion("type", [
   completeApiKeyAccessDataSchema,
   completeZhipuAccountAccessDataSchema,
+  completeChatGPTAccountAccessDataSchema,
 ]);
 
 export const completeProviderApiDataSchema = z

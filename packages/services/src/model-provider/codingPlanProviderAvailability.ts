@@ -4,6 +4,7 @@ import {
   BIGMODEL_PROVIDER_ID,
   buildBigModelApiUrl,
   buildRuntimeZaiBusinessUrl,
+  OPENAI_PROVIDER_ID,
   resolveBigModelApiOrigin,
   ZAI_PROVIDER_ID,
   type ApiClient,
@@ -56,6 +57,8 @@ interface CodingPlanAvailabilityContext {
   apiClient?: ApiClient;
   credentialService?: CodingPlanAvailabilityCredentialService;
   providerFamilyConnectionSelections?: ProviderFamilyConnectionSelectionSettings;
+  /** 非 z.ai 域账号 provider 的动态模型目录端口（spec openai-oauth-provider §2.8）。 */
+  openAIModelCatalog?: { resolveModelIds(): Promise<readonly string[] | null> };
 }
 
 interface BigModelCustomerInfoEnvelope {
@@ -160,6 +163,43 @@ export async function validateBigModelAccountProviderAvailability(
     individualProvider,
     teamProvider,
   });
+}
+
+/**
+ * OpenAI（ChatGPT 账号）可用性：以本地 token 有效性为 entitled，无 zcode 后端套餐校验。
+ * access_token 存在即视为有效——过期 token 由请求鉴权的 60s 主动刷新续期，
+ * 这里按过期时间降级会把"可刷新"误判成"未连接"。
+ */
+export async function validateOpenAIAccountProviderAvailability(
+  providers: readonly CodingPlanAvailabilityProvider[],
+  context: CodingPlanAvailabilityContext,
+): Promise<Partial<Record<string, CodingPlanAvailabilityResult>>> {
+  const provider = providers.find((candidate) => candidate.family === "openai");
+  if (!provider) {
+    return {};
+  }
+  const accessToken = (
+    await context.credentialService?.load(`oauth:${OPENAI_PROVIDER_ID}:access_token`)
+  )?.trim();
+  if (!accessToken) {
+    return {
+      [provider.providerId]: { kind: "unavailable", reason: "coding_plan_not_authenticated" },
+    };
+  }
+  // 目录端口返回 null（未注入/未登录/拉取失败且无缓存）时不带 models，
+  // zcode-builtin.json 静态清单兜底；空数组是后端权威结果，投影为权威空清单。
+  const models = await context.openAIModelCatalog?.resolveModelIds().catch((error: unknown) => {
+    // 目录内部的网络/缓存失败已自行 warn；这里兜住凭据/注入侧的意外抛错，
+    // 按「目录不可得」降级而不是让 availability 整体失败。
+    log.warn(`OpenAI 模型目录解析异常，回静态清单兜底：${String(error)}`);
+    return null;
+  });
+  return {
+    [provider.providerId]: {
+      kind: "available",
+      ...(models ? { models: Object.freeze([...models]) } : {}),
+    },
+  };
 }
 
 function findAvailabilityProvider(

@@ -9,7 +9,7 @@ import {
   type MouseEvent,
 } from "react";
 import { ArrowUpRightIcon, MoonIcon, SunIcon } from "lucide-react";
-import { BIGMODEL_PROVIDER_ID, ZAI_PROVIDER_ID } from "@zcode/shared";
+import { BIGMODEL_PROVIDER_ID, OPENAI_PROVIDER_ID, ZAI_PROVIDER_ID } from "@zcode/shared";
 import type { ConversationSharePreview } from "@zcode/shared";
 import { ConversationShareReadonlyTimeline } from "@zcode/ui/conversation-share-readonly";
 import { renderOAuthProviderIcon } from "@zcode/ui/oauth-provider-icon";
@@ -23,10 +23,14 @@ import {
 } from "./conversationSharePreviewClient.js";
 import { resolveShareHeaderView, type ShareHeaderView } from "./shareHeaderLayout.js";
 
-/** 登录入口的展示顺序，与桌面端登录卡片一致（z.ai 在上）。 */
+/**
+ * 登录入口的展示顺序，与桌面端登录卡片一致（z.ai 在上）。
+ * openai 走设备码流程：点击后由 WebOpenAIDeviceLoginGate 页内展示输码面板，不跳转。
+ */
 const SHARE_LOGIN_PROVIDERS: readonly WebOAuthProviderId[] = [
   ZAI_PROVIDER_ID,
   BIGMODEL_PROVIDER_ID,
+  OPENAI_PROVIDER_ID,
 ];
 
 type ConversationShareLandingLocale = "zh-CN" | "en-US";
@@ -61,6 +65,11 @@ interface Copy {
   /** 每个 provider 的登录按钮文案与区域徽标，对齐桌面端 login.oauth.* 口径。 */
   loginWith: Record<WebOAuthProviderId, string>;
   loginRegion: Record<WebOAuthProviderId, string>;
+  /**
+   * openai 身份暂不支持私有分享授权（服务端分享鉴权只认 zcode JWT，spec §2.1
+   * deviation）：登录卡片上必须明示，避免用户登录 openai 后仍打不开分享且无解释。
+   */
+  loginOpenAILimitationHint: string;
   expiredTitle: string;
   expiredDescription: string;
   notFoundTitle: string;
@@ -101,14 +110,17 @@ const COPY: Record<ConversationShareLandingLocale, Copy> = {
     loginWith: {
       zai: "连接 Z.ai 继续使用",
       bigmodel: "连接 BigModel 继续使用",
+      openai: "连接 OpenAI 继续使用",
     },
-    loginRegion: { zai: "全球", bigmodel: "中国" },
+    loginRegion: { zai: "全球", bigmodel: "中国", openai: "ChatGPT 账号" },
+    loginOpenAILimitationHint:
+      "OpenAI 身份暂不支持私有分享授权。私有分享请使用 Z.ai 或 BigModel 账号打开。",
     expiredTitle: "分享已过期",
     expiredDescription: "这个分享链接已经过期，请让分享者重新生成链接。",
     notFoundTitle: "找不到分享内容",
     notFoundDescription: "链接可能无效、分享已被移除，或当前登录账号无法访问。",
     notFoundAccountHint:
-      "Z.ai 与 BigModel 的账号数据不互通。请检查是否选错了登录平台或使用了其他账号。",
+      "Z.ai、BigModel 与 OpenAI 的账号数据不互通。请检查是否选错了登录平台或使用了其他账号。",
     backToHome: "回到首页",
     networkTitle: "暂时无法加载分享",
     networkDescription: "请检查网络后重试。",
@@ -138,15 +150,18 @@ const COPY: Record<ConversationShareLandingLocale, Copy> = {
     loginWith: {
       zai: "Connect to Z.ai",
       bigmodel: "Connect to BigModel",
+      openai: "Connect to OpenAI",
     },
-    loginRegion: { zai: "Global", bigmodel: "CN" },
+    loginRegion: { zai: "Global", bigmodel: "CN", openai: "ChatGPT" },
+    loginOpenAILimitationHint:
+      "OpenAI sign-in cannot yet authorize private shares. Use a Z.ai or BigModel account to open private shares.",
     expiredTitle: "Share expired",
     expiredDescription: "This share link has expired. Ask the author to create a new one.",
     notFoundTitle: "Share not found",
     notFoundDescription:
       "The link may be invalid, the share may have been removed, or your current account may not have access.",
     notFoundAccountHint:
-      "Z.ai and BigModel do not share account data. Check whether you selected the wrong sign-in platform or used a different account.",
+      "Z.ai, BigModel, and OpenAI do not share account data. Check whether you selected the wrong sign-in platform or used a different account.",
     backToHome: "Back to home",
     networkTitle: "Unable to load share",
     networkDescription: "Check your network connection and try again.",
@@ -638,9 +653,10 @@ export function ConversationShareLandingStatus({
           </p>
         ) : null}
         {/*
-          两个 provider 竖排全宽，对齐桌面端登录卡片（图标 + 文案 + 区域徽标）。
-          必须两个都给：private 分享的 owner 身份是 provider 特定的，页面无法预先知道
-          这份分享属于哪一边——猜错就等于把用户挡在自己的分享外面。
+          各 provider 竖排全宽，对齐桌面端登录卡片（图标 + 文案 + 区域徽标）。
+          z.ai 域两个都要给：private 分享的 owner 身份是 provider 特定的，页面无法预先知道
+          这份分享属于哪一边——猜错就等于把用户挡在自己的分享外面。openai 是独立身份域，
+          点击后由 main.tsx 的 WebOpenAIDeviceLoginGate 切换到页内设备码输码面板。
         */}
         {showLogin && onLogin ? (
           <div className="mt-5 space-y-2">
@@ -659,6 +675,11 @@ export function ConversationShareLandingStatus({
                 </span>
               </button>
             ))}
+            {/* openai 登录入口保留（spec §2.1），但私有分享授权暂不认 openai 身份：
+                卡片上明示限制，而不是让用户登录后再撞上“找不到分享”且无解释。 */}
+            <p className="pt-1 text-ui-sm leading-5 text-foreground-subtle">
+              {copy.loginOpenAILimitationHint}
+            </p>
           </div>
         ) : null}
         {canRetry || isNotFound ? (

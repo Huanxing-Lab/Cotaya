@@ -1,5 +1,6 @@
 import type { OAuthProviderId } from "@zcode/shared";
 import { createBigModelProviderRuntimeConfig } from "./providers/bigmodelProviderConfig.js";
+import { createOpenAIProviderRuntimeConfig } from "./providers/openaiProviderConfig.js";
 import { createZaiProviderRuntimeConfig } from "./providers/zaiProviderConfig.js";
 
 /** Provider 运行时配置（仅 host process 可见） */
@@ -10,7 +11,8 @@ export interface OAuthProviderRuntimeConfig {
   order: number;
   authorizeUrl: string;
   tokenUrl: string;
-  userinfoUrl: string;
+  /** OpenAI 无后端 userinfo（用户信息内联在 id_token），该字段允许缺省。 */
+  userinfoUrl?: string;
   appId: string;
   redirectUri: string;
   businessLoginUrl?: string;
@@ -29,6 +31,10 @@ export interface OAuthRuntimeConfig {
  */
 export function createOAuthRuntimeConfig(env: NodeJS.ProcessEnv = process.env): OAuthRuntimeConfig {
   return {
-    providers: [createBigModelProviderRuntimeConfig(env), createZaiProviderRuntimeConfig(env)],
+    providers: [
+      createBigModelProviderRuntimeConfig(env),
+      createZaiProviderRuntimeConfig(env),
+      createOpenAIProviderRuntimeConfig(env),
+    ],
   };
 }

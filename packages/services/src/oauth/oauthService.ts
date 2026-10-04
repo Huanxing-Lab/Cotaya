@@ -5,9 +5,13 @@ import {
   formatLogPrefix,
   type ApiClient,
   BIGMODEL_PROVIDER_ID,
+  getOAuthProviderCapabilities,
+  OPENAI_PROVIDER_ID,
   ZAI_PROVIDER_ID,
   type OAuthCallbackResult,
   type OAuthCachedSessionRestoreResult,
+  type OAuthDeviceCodeChallenge,
+  type OAuthDeviceCodePollResult,
   type OAuthProviderId,
   type OAuthProviderMeta,
   type OAuthStartResponse,
@@ -26,7 +30,12 @@ import {
   refreshLegacyBigModelCachedProfile,
   withProviderProfileSchema,
 } from "./oauthProfileSchema.js";
-import { createOAuthProviderAdapters, type OAuthProviderAdapter } from "./providers/index.js";
+import { isOpenAIRefreshInvalidError } from "./providers/openaiProviderAdapter.js";
+import {
+  createOAuthProviderAdapters,
+  type LoopbackDeviceCodeProviderAdapter,
+  type OAuthProviderAdapter,
+} from "./providers/index.js";
 import { OAuthCredentialRepo } from "./repo/oauthCredentialRepo.js";
 import { createOAuthRuntimeConfig } from "./runtimeConfig.js";
 import {
@@ -56,6 +65,15 @@ interface PendingState {
     pollToken: string;
     pollUrl: string;
   };
+  /** OpenAI loopback 主流程：本地 1455 server 的生命周期与收到的回调 URL。 */
+  loopback?: {
+    server: { stop(): void };
+    callbackUrl: string | null;
+    /** flow 截止时刻；poll 侧据此向 UI 抛出过期错误（与 polling.expiresAt 同语义）。 */
+    expiresAt: number;
+  };
+  /** OpenAI 设备码 fallback：轮询编排所需的 challenge 信息。 */
+  deviceCode?: OAuthDeviceCodeChallenge & { nextPollAt: number };
 }
 
 interface OAuthFlowEnvelope {
@@ -100,11 +118,31 @@ function isSameOAuthProfile(left: OAuthUserProfile, right: OAuthUserProfile): bo
 }
 
 function resolveInactiveOAuthProvider(provider: OAuthProviderId): OAuthProviderId | null {
+  // 身份域划分（spec openai-oauth-provider §2.3）：zai 与 bigmodel 同属 z.ai 域，
+  // 域内互删语义保留；openai 是独立身份域，登录/切换互不清除对方凭据，
+  // 仅覆盖 oauth:active_provider 单指针，因此返回 null。
   if (provider === ZAI_PROVIDER_ID) {
     return BIGMODEL_PROVIDER_ID;
   }
   if (provider === BIGMODEL_PROVIDER_ID) {
     return ZAI_PROVIDER_ID;
+  }
+  return null;
+}
+
+/** 按 provider 能力声明识别 loopback + 设备码 adapter（当前仅 openai 实现）。 */
+function asLoopbackDeviceCodeAdapter(
+  adapter: OAuthProviderAdapter,
+): LoopbackDeviceCodeProviderAdapter | null {
+  const capabilities = getOAuthProviderCapabilities(adapter.providerId);
+  if (
+    capabilities?.callbackChannel === "loopback" &&
+    "startLoopbackCallbackServer" in adapter &&
+    "requestDeviceCode" in adapter &&
+    "pollDeviceCodeToken" in adapter &&
+    "exchangeDeviceCodeToken" in adapter
+  ) {
+    return adapter as unknown as LoopbackDeviceCodeProviderAdapter;
   }
   return null;
 }
@@ -206,6 +244,13 @@ export class OAuthService implements IOAuthService {
       return { status: "signed-out" };
     }
 
+    if (activeProvider === OPENAI_PROVIDER_ID) {
+      // openai 是独立身份域：不写共享 zcodejwttoken（即便残留 z.ai 域旧 JWT 也不参与
+      // openai 会话判定），启动恢复按 oauth:openai:expires_at 判断，
+      // 过期但有 refresh_token 时同步刷新一次（spec §2.5）。
+      return this.restoreOpenAICachedSessionState(restoreGeneration, profile);
+    }
+
     // 启动缓存恢复只需要检查共享 zcode JWT；若通过 loadActiveTokenSet 连带读取
     // provider access token，会把原本后台执行的 BigModel profile 迁移重新阻塞到首屏恢复链路。
     const zcodeJwtToken = (await this.credentialService.load(ZCODE_JWT_TOKEN_KEY))?.trim() ?? "";
@@ -266,6 +311,88 @@ export class OAuthService implements IOAuthService {
 
     log("restoreCachedSession restored:", activeProvider, profile.id);
     return { status: "authenticated", userInfo: toUserInfo(profile) };
+  }
+
+  /**
+   * openai 启动恢复：未过期直接恢复展示态；已过期且有 refresh_token 时同步刷新一次；
+   * 刷新明确失效（refresh_token 过期/重放/作废）则只清 openai 域凭据并引导重登，
+   * z.ai 域凭据与共享 zcodejwttoken 不动（spec §2.5）。
+   */
+  private async restoreOpenAICachedSessionState(
+    restoreGeneration: number,
+    profile: OAuthUserProfile,
+  ): Promise<OAuthCachedSessionRestoreResult> {
+    const tokenSet = await this.repo.loadTokenSet(OPENAI_PROVIDER_ID);
+    if (!tokenSet?.accessToken) {
+      log("restoreCachedSession skipped: missing openai token set");
+      return { status: "signed-out" };
+    }
+    if (tokenSet.expiresAt !== undefined && tokenSet.expiresAt > this.now()) {
+      log("restoreCachedSession restored:", OPENAI_PROVIDER_ID, profile.id);
+      return { status: "authenticated", userInfo: toUserInfo(profile) };
+    }
+    if (!tokenSet.refreshToken) {
+      // access token 已过期且没有 refresh_token：凭据无法自愈，按失效清理后引导重登。
+      log("restoreCachedSession openai expired without refresh token");
+      const invalidated = await this.invalidateOpenAICachedSession(restoreGeneration, profile);
+      if (!invalidated) {
+        return this.restoreCachedSessionState();
+      }
+      return { status: "reauthentication-required", reason: "jwt-expired" };
+    }
+
+    try {
+      await this.refreshToken(OPENAI_PROVIDER_ID);
+      log("restoreCachedSession restored after refresh:", OPENAI_PROVIDER_ID, profile.id);
+      return { status: "authenticated", userInfo: toUserInfo(profile) };
+    } catch (error) {
+      if (isOpenAIRefreshInvalidError(error)) {
+        const invalidated = await this.invalidateOpenAICachedSession(restoreGeneration, profile);
+        if (!invalidated) {
+          return this.restoreCachedSessionState();
+        }
+      } else {
+        // 网络/服务端瞬时失败：保留本地凭据（下次启动仍可重试），但本次按需重登引导。
+        serviceLog.warn("openai cached session refresh failed", { error });
+      }
+      return { status: "reauthentication-required", reason: "jwt-expired" };
+    }
+  }
+
+  private async invalidateOpenAICachedSession(
+    expectedGeneration: number,
+    expectedProfile: OAuthUserProfile,
+  ): Promise<boolean> {
+    const invalidated = await this.runSessionMutation(async () => {
+      const currentProvider = await this.repo.getActiveProvider();
+      const currentProfile = await this.repo.loadUserProfile(OPENAI_PROVIDER_ID);
+      if (
+        this.oauthSessionGeneration !== expectedGeneration ||
+        currentProvider !== OPENAI_PROVIDER_ID ||
+        !currentProfile ||
+        !isSameOAuthProfile(currentProfile, expectedProfile)
+      ) {
+        // 读取期间可能已完成新登录或切换；旧恢复任务只能清理仍与其快照一致的会话。
+        serviceLog.info("skipped stale openai session invalidation");
+        return false;
+      }
+      this.oauthSessionGeneration += 1;
+      // clearActiveSession 只清当前 active provider（openai）命名空间与指针，
+      // 不会触碰 z.ai 域凭据与共享 zcodejwttoken。
+      await this.repo.clearActiveSession();
+      return true;
+    });
+    if (!invalidated) {
+      return false;
+    }
+    await this.cancelPending(OPENAI_PROVIDER_ID);
+    try {
+      await this.notifyProviderLogout(OPENAI_PROVIDER_ID, expectedProfile.id);
+    } catch (error) {
+      // 主认证事实已失效；派生 provider 清理失败不能把 UI 留在伪登录态。
+      serviceLog.warn("openai derived provider cleanup failed", { error });
+    }
+    return true;
   }
 
   private async invalidateExpiredCachedSession(
@@ -555,6 +682,22 @@ export class OAuthService implements IOAuthService {
       return null;
     }
 
+    // openai（usesZcodeJwtToken=false 的身份域）没有远端 userinfo 端点：用户信息内联在
+    // id_token，登录时已随 user_info 落盘。这里若仍走 fetchUserInfo 远端校验，state 为空
+    // 的缓存 miss 只能拿到占位 profile，saveActiveUserProfile 会用它覆盖落盘的
+    // chatgpt_account_id（loadChatGPTAccountId 与 chatgpt-account-id 请求头的来源），
+    // 因此直接返回 repo 缓存 profile，不做远端校验。
+    if (getOAuthProviderCapabilities(activeProvider)?.usesZcodeJwtToken === false) {
+      const cachedProfile = await this.repo.loadUserProfile(activeProvider);
+      if (!cachedProfile) {
+        log("restoreSession failed: missing cached profile, logging out:", activeProvider);
+        await this.logout();
+        return null;
+      }
+      log("restoreSession restored from cached profile:", activeProvider, cachedProfile.id);
+      return toUserInfo(cachedProfile);
+    }
+
     try {
       log("restoreSession validating token with provider userinfo endpoint:", activeProvider);
       const profile = await this.runWithAdapterError(adapter, () =>
@@ -592,6 +735,11 @@ export class OAuthService implements IOAuthService {
   }
 
   async startOAuthWithPolling(provider: OAuthProviderId): Promise<OAuthStartResponse> {
+    if (provider === OPENAI_PROVIDER_ID) {
+      // openai 不走 zcode 后端 init/poll；主流程是本地 1455 loopback server，
+      // 端口被占时自动降级设备码（spec openai-oauth-provider §2.2）。
+      return this.startOpenAIOAuth();
+    }
     if (provider !== ZAI_PROVIDER_ID && provider !== BIGMODEL_PROVIDER_ID) {
       return this.startOAuthInternal(provider);
     }
@@ -704,6 +852,37 @@ export class OAuthService implements IOAuthService {
       return null;
     }
     const pending = this.pendingState;
+
+    // openai loopback 主流程：本地 server 已收到回调时，交给 handleCallback 复用
+    // state 校验、runPendingSessionCompletion 与 persistOAuthSession 的既有落盘路径。
+    if (pending?.loopback) {
+      const callbackUrl = pending.loopback.callbackUrl;
+      if (!callbackUrl) {
+        // loopback 超时经 poll 侧过期检查抛出（server 已由超时定时器停止）：与
+        // zai/bigmodel polling 的过期分支一致，不能永远返回 null 让 UI 停在“等待认证”。
+        if (this.now() >= pending.loopback.expiresAt) {
+          this.clearPendingState();
+          throw new Error("OAuth flow 已过期");
+        }
+        return null;
+      }
+      pending.loopback.callbackUrl = null;
+      try {
+        return await this.handleCallback(callbackUrl);
+      } catch (error) {
+        if (this.pendingState === pending) {
+          this.clearPendingState();
+        }
+        throw error;
+      }
+    }
+
+    // openai 设备码 fallback：按 challenge.interval 轮询，403/404 继续等待、410 过期、
+    // 2xx 拿到授权码 + 服务端下发的 code_verifier 后走统一落盘路径。
+    if (pending?.deviceCode) {
+      return this.pollOpenAIDeviceCode(pending);
+    }
+
     const polling = pending?.polling;
     if (!pending || !polling) {
       return null;
@@ -822,6 +1001,239 @@ export class OAuthService implements IOAuthService {
       if (this.pendingState === pending) this.clearPendingState();
       throw error;
     }
+  }
+
+  private async pollOpenAIDeviceCode(pending: PendingState): Promise<OAuthCallbackResult | null> {
+    const deviceCode = pending.deviceCode!;
+    const adapter = this.getAdapter(pending.provider);
+    const deviceCodeAdapter = asLoopbackDeviceCodeAdapter(adapter);
+    if (!deviceCodeAdapter) {
+      this.clearPendingState();
+      throw new Error("OpenAI OAuth adapter 缺少设备码能力");
+    }
+    if (this.now() >= deviceCode.expiresAt) {
+      this.clearPendingState();
+      throw new Error("OpenAI 设备码已过期，请重新发起登录");
+    }
+    if (this.now() < deviceCode.nextPollAt) {
+      return null;
+    }
+    // 先推进 nextPollAt 再请求，防止慢响应期间的并发轮询（与 zcode polling 一致）。
+    deviceCode.nextPollAt = this.now() + deviceCode.pollIntervalMs;
+
+    let polled: OAuthDeviceCodePollResult;
+    try {
+      polled = await this.runWithAdapterError(adapter, () =>
+        deviceCodeAdapter.pollDeviceCodeToken(deviceCode),
+      );
+    } catch (error) {
+      if (this.pendingState !== pending) return null;
+      if (
+        error instanceof ApiError &&
+        error.status !== undefined &&
+        error.status >= 400 &&
+        error.status < 500 &&
+        error.status !== 429
+      ) {
+        // 403/404/410 已在 adapter 归类；其余 4xx 属于流程自身失败，不能空转重试。
+        this.clearPendingState();
+        throw error;
+      }
+      // 网络/5xx/限流是瞬时失败：保留 flow 与服务端下发间隔，下一轮继续尝试。
+      serviceLog.debug("openai device code poll will retry", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+    if (this.pendingState !== pending) {
+      return null;
+    }
+    if (polled.status === "pending") {
+      return null;
+    }
+    if (polled.status === "expired") {
+      this.clearPendingState();
+      throw new Error("OpenAI 设备码已过期，请重新发起登录");
+    }
+
+    try {
+      const result = await this.runPendingSessionCompletion(pending, async () => {
+        // 设备码流程的 code_verifier 由服务端返回（非本地生成），redirect_uri 为
+        // OpenAI 端固定 deviceauth/callback。
+        const tokenSet = await this.runWithAdapterError(adapter, () =>
+          deviceCodeAdapter.exchangeDeviceCodeToken(
+            { authorizationCode: polled.authorizationCode, codeVerifier: polled.codeVerifier },
+            {
+              providerId: pending.provider,
+              state: pending.state,
+              redirectUri: adapter.redirectUri,
+              now: this.now,
+            },
+          ),
+        );
+        let profile: OAuthUserProfile = { id: "unknown", username: "user", displayName: "User" };
+        if (adapter.fetchUserInfo) {
+          try {
+            profile = await this.runWithAdapterError(adapter, () =>
+              adapter.fetchUserInfo!(tokenSet, {
+                providerId: pending.provider,
+                state: pending.state,
+                redirectUri: adapter.redirectUri,
+                now: this.now,
+              }),
+            );
+          } catch {
+            // 获取用户信息失败不阻塞登录（与 deep link 流程语义一致）。
+          }
+        }
+        return { tokenSet, profile };
+      });
+      if (result?.kind === "session") {
+        serviceLog.info("openai device code flow completed");
+      }
+      return result;
+    } catch (error) {
+      if (this.pendingState === pending) this.clearPendingState();
+      throw error;
+    }
+  }
+
+  /**
+   * openai 登录编排：loopback 主流程（127.0.0.1:1455）→ EADDRINUSE 时降级设备码。
+   * 两种流程都复用 pendingState 生命周期：loopback 回调与设备码兑换结果统一汇入
+   * handleCallback/runPendingSessionCompletion，保持单一落盘路径与取消语义。
+   */
+  private async startOpenAIOAuth(): Promise<OAuthStartResponse> {
+    const adapter = this.getEnabledAdapter(OPENAI_PROVIDER_ID);
+    const deviceCodeAdapter = asLoopbackDeviceCodeAdapter(adapter);
+    if (!deviceCodeAdapter) {
+      // 能力声明与 adapter 实现不一致属于装配错误，直接回退通用 deep-link 流程只会
+      // 打开一个无法回调的 authorize URL，这里显式失败更可排查。
+      throw new Error("OpenAI OAuth adapter 缺少 loopback/设备码能力");
+    }
+
+    // 同窗口快速连续点击不同 provider 时先取消旧 pending，避免两条流程抢占回调通道。
+    await this.runSessionMutation(async () => {
+      this.oauthFlowStartGeneration += 1;
+      this.oauthFlowStartProvider = null;
+      this.clearPendingState();
+    });
+
+    const state = randomBytes(32).toString("hex");
+    let server: Awaited<ReturnType<typeof deviceCodeAdapter.startLoopbackCallbackServer>>;
+    try {
+      server = await deviceCodeAdapter.startLoopbackCallbackServer((url) => {
+        const pending = this.pendingState;
+        // 只记录仍指向同一 pending 的回调；state 校验交给 handleCallback。
+        if (
+          pending?.state === state &&
+          pending.provider === OPENAI_PROVIDER_ID &&
+          pending.loopback
+        ) {
+          pending.loopback.callbackUrl = url;
+        }
+      });
+    } catch (loopbackError) {
+      // 端口被占（EADDRINUSE）→ 设备码 fallback；其他启动错误也走 fallback 并记录原因，
+      // 让用户至少还有一个可完成的登录通道。
+      serviceLog.warn("openai loopback server unavailable, falling back to device code", {
+        error: loopbackError instanceof Error ? loopbackError.message : String(loopbackError),
+      });
+      return this.startOpenAIDeviceCodeFlow(adapter, deviceCodeAdapter, state);
+    }
+
+    // server 已监听 1455：后续步骤失败必须先释放 server 与定时器再降级，否则泄漏的
+    // server 会占住 1455 让后续登录永远静默降级设备码，残留定时器还可能清掉新 flow
+    // 的 pending（两条流程共用同一 state 字符串）。
+    let timeout: NodeJS.Timeout | undefined;
+    try {
+      timeout = setTimeout(() => {
+        // 超时只负责释放 1455 端口；pending 保留给 pollPendingOAuth 的过期分支向 UI
+        // 抛出超时错误（与 zai/bigmodel polling 的“OAuth flow 已过期”语义一致），
+        // 不能再静默清掉——那会让 UI 永远停在“等待认证”。pending 由 poll 侧过期
+        // 分支或下一次登录/cancel 清理。
+        server.stop();
+      }, OAUTH_TIMEOUT_MS);
+      this.pendingState = {
+        state,
+        provider: OPENAI_PROVIDER_ID,
+        timeout,
+        phase: "awaiting-attribution-or-code",
+        loopback: {
+          server,
+          callbackUrl: null,
+          expiresAt: this.now() + OAUTH_TIMEOUT_MS,
+        },
+      };
+      const authorizeUrl = adapter.buildAuthorizeUrl({
+        providerId: adapter.providerId,
+        state,
+        redirectUri: adapter.redirectUri,
+        now: this.now,
+      });
+      serviceLog.info("openai loopback OAuth flow started", { port: server.port });
+      return { provider: OPENAI_PROVIDER_ID, authorizeUrl, state };
+    } catch (loopbackError) {
+      clearTimeout(timeout);
+      server.stop();
+      if (this.pendingState?.state === state) {
+        this.pendingState = null;
+      }
+      serviceLog.warn(
+        "openai loopback flow failed after server start, falling back to device code",
+        {
+          error: loopbackError instanceof Error ? loopbackError.message : String(loopbackError),
+        },
+      );
+      return this.startOpenAIDeviceCodeFlow(adapter, deviceCodeAdapter, state);
+    }
+  }
+
+  private async startOpenAIDeviceCodeFlow(
+    adapter: OAuthProviderAdapter,
+    deviceCodeAdapter: LoopbackDeviceCodeProviderAdapter,
+    state: string,
+  ): Promise<OAuthStartResponse> {
+    const challenge = await this.runWithAdapterError(adapter, () =>
+      deviceCodeAdapter.requestDeviceCode({
+        providerId: OPENAI_PROVIDER_ID,
+        state,
+        redirectUri: adapter.redirectUri,
+        now: this.now,
+      }),
+    );
+    const remainingLifetimeMs = challenge.expiresAt - this.now();
+    if (remainingLifetimeMs <= 0) {
+      throw new Error("OpenAI 设备码响应无效：已过期");
+    }
+    const timeout = setTimeout(() => {
+      if (this.pendingState?.state === state) {
+        this.clearPendingState();
+      }
+    }, remainingLifetimeMs);
+    this.pendingState = {
+      state,
+      provider: OPENAI_PROVIDER_ID,
+      timeout,
+      phase: "awaiting-attribution-or-code",
+      deviceCode: { ...challenge, nextPollAt: this.now() },
+    };
+    serviceLog.info("openai device code flow started", {
+      pollIntervalMs: challenge.pollIntervalMs,
+      expiresInMs: remainingLifetimeMs,
+    });
+    return {
+      provider: OPENAI_PROVIDER_ID,
+      // authorizeUrl 为输码页；renderer 必须同时展示 userCode（OAuthStartResponse.deviceCode）。
+      authorizeUrl: challenge.inputPageUrl,
+      state,
+      deviceCode: {
+        userCode: challenge.userCode,
+        inputPageUrl: challenge.inputPageUrl,
+        pollIntervalMs: challenge.pollIntervalMs,
+        expiresAt: challenge.expiresAt,
+      },
+    };
   }
 
   private async startOAuthInternal(provider: OAuthProviderId): Promise<OAuthStartResponse> {
@@ -1105,6 +1517,8 @@ export class OAuthService implements IOAuthService {
     }
 
     clearTimeout(this.pendingState.timeout);
+    // openai loopback server 只服务本次登录会话；pending 结束（完成/取消/超时）即停止监听。
+    this.pendingState.loopback?.server.stop();
     this.pendingState = null;
   }
 

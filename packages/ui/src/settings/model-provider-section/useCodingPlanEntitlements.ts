@@ -15,7 +15,10 @@ import {
 } from "@/hooks/useUsageEntitlement.js";
 import type { CodingPlanEntitlementState } from "@/settings/model-provider-section/constants.js";
 import { buildUsageEntitlementCacheKey } from "@/lib/usageEntitlementCache.js";
-import { resolveAccountProviderInspectionAccess } from "@/lib/accountProviderAccess.js";
+import {
+  resolveAccountProviderInspectionAccess,
+  type ZhipuProviderAccountAccess,
+} from "@/lib/accountProviderAccess.js";
 
 function resolveCodingPlanProviderFingerprintAutoRefresh({
   loading,
@@ -131,7 +134,9 @@ function useProviderFamilyEntitlements(params: {
 }
 
 function resolveEntitlementAccountAccess(
-  access: ZCodeProviderAccountAccess | undefined,
+  // 套餐权益查询只描述 z.ai 域：入参已在 accountProviderAccess 边界收窄为
+  // zhipu-account，chatgpt-account（openai 域）没有 planKind 查询语义。
+  access: ZhipuProviderAccountAccess | undefined,
   selection: ProviderFamilyConnectionSelection | undefined,
 ): ZCodeProviderAccountAccess | ZCodeAccountAccess | undefined {
   if (access?.mode !== "team-coding-plan" || selection?.kind !== "team-coding-plan") {

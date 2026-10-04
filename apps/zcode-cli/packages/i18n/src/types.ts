@@ -62,6 +62,12 @@ export interface TuiCopy {
         primary: string;
         secondary: string;
       };
+      openaiOauth: {
+        pendingPrimary: string;
+        pendingSecondary: string;
+        primary: string;
+        secondary: string;
+      };
       zaiApiKey: {
         inputPrimary: string;
         inputSecondary: string;
