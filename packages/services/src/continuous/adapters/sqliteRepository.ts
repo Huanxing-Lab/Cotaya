@@ -41,6 +41,7 @@ import {
 import {
   applyReportImportReady,
   appendEventReady,
+  listCycleEventsReady,
   listPendingDecisionsReady,
   listQueueableCandidatesReady,
   saveCandidateReady,
@@ -229,6 +230,15 @@ export class SqliteContinuousRepository implements ContinuousRepositoryPort {
   async appendEvent(event: ContinuousEvent): Promise<void> {
     await this.ensureReady();
     appendEventReady(this.database(), event);
+  }
+
+  async listCycleEvents(
+    programId: string,
+    cycleId: string,
+    type?: string,
+  ): Promise<ContinuousEvent[]> {
+    await this.ensureReady();
+    return listCycleEventsReady(this.database(), programId, cycleId, type);
   }
 
   async applyReportImport(input: ReportImportInput): Promise<void> {

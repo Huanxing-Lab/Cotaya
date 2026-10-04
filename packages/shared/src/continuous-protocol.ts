@@ -347,3 +347,8 @@ export * from "./continuous-execution-protocol.js";
 // 价格快照 schema 与微美元估算数学放 continuous-budget-protocol.ts（CLI 闸门与 Host 账本
 // 共用同一实现；见那边文件头）。同样从这里再导出，公开路径不变。
 export * from "./continuous-budget-protocol.js";
+
+// ── 报告协议（CT-05）──
+// 版本化 ContinuousReportV1 的载荷 schema 放 continuous-report-protocol.ts（模板产出侧与
+// 导入校验侧共用同一份词汇表；见那边文件头）。同样从这里再导出，公开路径不变。
+export * from "./continuous-report-protocol.js";

@@ -25,5 +25,16 @@ Invariants that types cannot express (rules: `docs/specs/continuous.md`):
 - 健康字段（`activeDurationMs`/`normalBlockedDurationMs`/`lastProgressAt`/`lastProbeAt`/
   `healthState`）的唯一写入者是 `ContinuousHealthMonitor`；离线/重启缺口不计入有效时长，
   suspected_hang 只挂起询问、不直接 failed/cancelled。
+- `ContinuousSupervisor`（CT-05）是 Cycle 执行编排与结算的唯一写者：Run now 全链路
+  （授权核对 → worktree 准备 → Cycle 快照（脚本 bytes/hash）→ submitOnce → 报告增量导入
+  → settling（Run 失败也导入已保存报告）→ 选择复核 → 终态 Cycle 与 nextCycleAt 同事务）。
+  每个 Cycle 实例内至多一条监督循环；重放的 Run now 复用同一 completion，不重复结算。
+- `ContinuousReportIngestion`（CT-05）是报告进队列的唯一入口：V1 schema 校验后单事务导入
+  （队列/关联/事件/cursor 同事务，I-03 语义）；malformed 条目记 `report.rejected` 事件、
+  不丢批次内其余条目；`candidate_result` 的 done 只有在 tests/browser/review 三阶段
+  validation 事实（本批 + 已导入事件）全 passed 时才被采信——模型自述不能覆盖验证事实。
+  候选/决策行 id 由 fingerprint 确定派生（UNIQUE(program_id,fingerprint) 的稳定主键）。
 - 本模块不得导入 AgentRuntime 或 CLI 具体实现；执行经 `application/ports.ts`
-  的注入端口（adapters 由 CLI bootstrap 侧实现）。
+  的注入端口（adapters 由 CLI bootstrap 侧实现）；固定模板（bootstrap
+  `continuous-templates`）经 Host 注入的 `ContinuousTemplateSource` 进入，模板 hash 与
+  Program 授权绑定不符时 `template_mismatch` 明确失败，不静默换脚本。

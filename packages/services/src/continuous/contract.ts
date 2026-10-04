@@ -119,6 +119,35 @@ export {
   CONTINUOUS_HANG_THRESHOLD_MS,
   CONTINUOUS_PROBE_INTERVAL_MS,
 } from "./application/healthMonitor.js";
+// CT-05：手动完整 Cycle 的编排与报告导入。supervisor 是 Cycle 执行编排/结算的唯一写者
+// （预算账本与健康字段的所有者仍是 CT-04 的两个服务）；reportIngestion 是报告进队列的
+// 唯一入口（schema 校验 → 单事务导入 → done 三阶段验证门）。
+export type {
+  ContinuousSupervisorDeps,
+  ContinuousTemplateSource,
+  RunNowResult,
+} from "./application/supervisor.js";
+export { ContinuousSupervisor, ContinuousSupervisorError } from "./application/supervisor.js";
+export type { SupervisedCycleOutcome } from "./application/supervisorLifecycle.js";
+export { nextCycleAtFor } from "./domain/cadencePolicy.js";
+export type {
+  IngestedCandidateResult,
+  ReportBatchInput,
+  ReportIngestionDeps,
+  ReportIngestionOutcome,
+  ReportRejection,
+} from "./application/reportIngestion.js";
+export { ContinuousReportIngestion } from "./application/reportIngestion.js";
+export type {
+  BlockingDecision,
+  CandidateDeferralEntry,
+  CandidateExclusionReason,
+  CandidateSelection,
+  CandidateSelectionEntry,
+  CandidateSelectionInput,
+  SelectableCandidate,
+} from "./domain/candidatePolicy.js";
+export { candidateScore, selectCandidates } from "./domain/candidatePolicy.js";
 
 /**
  * Continuous 服务接口（Host 持有唯一实例；业务写入唯一路径）。

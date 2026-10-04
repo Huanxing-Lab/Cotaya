@@ -130,6 +130,29 @@ export function listEventsReady(db: ContinuousDatabaseSync, programId: string): 
   return rows.map((row) => decodeEvent(row as unknown as EventRow));
 }
 
+/** 同 Cycle 的已导入事件（CT-05 done 门槛的跨批次读回；type 过滤可选）。 */
+export function listCycleEventsReady(
+  db: ContinuousDatabaseSync,
+  programId: string,
+  cycleId: string,
+  type?: string,
+): ContinuousEvent[] {
+  const rows = (
+    type === undefined
+      ? db
+          .prepare(
+            "SELECT * FROM continuous_event WHERE program_id = ? AND cycle_id = ? ORDER BY id",
+          )
+          .all(programId, cycleId)
+      : db
+          .prepare(
+            "SELECT * FROM continuous_event WHERE program_id = ? AND cycle_id = ? AND type = ? ORDER BY id",
+          )
+          .all(programId, cycleId, type)
+  ) as unknown[];
+  return rows.map((row) => decodeEvent(row as EventRow));
+}
+
 export function applyReportImportReady(db: ContinuousDatabaseSync, input: ReportImportInput): void {
   inContinuousTransaction(db, () => {
     // 归属校验先于任何写入：cycle 必须属于同一 Program，跨 Program 输入立即拒绝。

@@ -43,6 +43,12 @@ export interface ContinuousRepositoryPort {
   listPendingDecisions(programId: string): Promise<Decision[]>;
   /** 审计事件；event_key UNIQUE，重复写入被数据库拒绝（导入重放走 applyReportImport）。 */
   appendEvent(event: ContinuousEvent): Promise<void>;
+  /**
+   * 同 Cycle 的已导入事件（按 id 升序；CT-05）。done 门槛要跨批次复核验证事实——
+   * readReports 分页可能把 validation 与 candidate_result 切进两批，cursor 只保证
+   * 不重读，不保证同门证据同批到达。
+   */
+  listCycleEvents(programId: string, cycleId: string, type?: string): Promise<ContinuousEvent[]>;
   /** 报告导入：队列/关联/事件/cursor 同事务提交；中断无半条队列（I-03）。 */
   applyReportImport(input: ReportImportInput): Promise<void>;
   /** 终态 Cycle 与 Program 的 nextCycleAt/失败计数同事务提交（I-03/R-08）。 */

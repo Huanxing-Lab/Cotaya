@@ -505,9 +505,11 @@ interface ContinuousExecutionPort {
 
 submitOnce 对非终态的既有行按同身份幂等复用（不铸第二个引擎）：执行是否真的活着由 inspectHealth 的可达性回答，死进程行的核对与接管归恢复流程；终态行 completed/errored/superseded/stopped 全部拒绝重提交（恢复走 resume，且 superseded/errored 不可恢复）。
 
-报告使用现有 report/artifact，新增版本化 `ContinuousReportV1`：candidate、decision、validation、candidate_result、cycle_result。每项 itemKey 加来源 journal sequence 去重，schema 校验后事务导入。Run 失败也导入已保存报告；不能只依赖模型最后一段总结。读侧（CLI 执行适配器的 readReports）不丢行也不编造类别：载荷投影不出 V1 形状的条目以 kind "unknown" 原样上送，schema 校验与拒绝事件归导入侧。
+报告使用现有 report/artifact，新增版本化 `ContinuousReportV1`：candidate、decision、validation、candidate_result、cycle_result。每项 itemKey 加来源 journal sequence 去重，schema 校验后事务导入。Run 失败也导入已保存报告；不能只依赖模型最后一段总结。读侧（CLI 执行适配器的 readReports）不丢行也不编造类别：载荷投影不出 V1 形状的条目以 kind "unknown" 原样上送，schema 校验与拒绝事件归导入侧。导入侧对 done 复核：candidate_result 声称 done 时，必须存在该候选 tests/browser/review 三阶段 validation 事实（本批或已导入事件）且全部 passed 才被采信；不满足记拒绝事件，不得据此 done 或提交——终局 CycleResult 的 changedFiles/commits 只采信过门的 done 结果。
 
 当前 report 有数量/大小限制。图片和长输出为 artifact/受控引用；MVP 不添加无限日志到报告。malformed report 记录拒绝事件，不能据此 done 或提交。
+
+固定模板以版本化注册表提供（bootstrap `continuous-templates`，templateId@version + 脚本 sha256 绑定 Program 授权）；Host 经注入的模板来源解析，模板不可用或 hash 与授权不符时结构化拒绝，不静默换脚本。模板只使用现有 typed ask/submit_result/report/artifact 能力，不扩 compiler/lowering；每个 Cycle 都是新 submitOnce（非 amend），imported cache 不跨 Cycle，新 Cycle 的 actor 会话身份按 runId 派生、不复用旧轮。
 
 专用执行接口新增 suspendAtSafeBoundary、resumeSuspended、inspectHealth，明确不等同 stop；挂起请求/工具准入与旧执行确认是同一所有者链。单轮计时不使用会直接 abort Run 的固定墙钟 timeout。
 
