@@ -48,8 +48,10 @@ export {
 
 export type {
   Candidate,
+  ContinuationGrant,
   ContinuationRequest,
   ContinuationRequestReason,
+  ContinuationRequestResolution,
   Cycle,
   CycleHealthState,
   CycleOutcome,
@@ -72,6 +74,13 @@ export {
   requiresProgramReauthorization,
 } from "./domain/types.js";
 export type {
+  BudgetAdmissionDenialLimit,
+  BudgetAdmissionLimits,
+  DayWindow,
+  UsageLedgerSummary,
+} from "./domain/budgetPolicy.js";
+export { dayWindowFor, mergeContinuationGrants } from "./domain/budgetPolicy.js";
+export type {
   AdmissionRequest,
   AdmissionTicket,
   ContinuousClockPort,
@@ -89,6 +98,27 @@ export type {
   WorkspacePreparationRequest,
   WorkspacePreparationResult,
 } from "./application/ports.js";
+// CT-04 应用服务（Host 组装进 supervisor，CT-05）：预算准入/继续确认/健康监控。
+// 预算账本唯一写入路径 = ContinuousBudgetAdmission → repository（CLI 侧只经端口转发）。
+export type {
+  ContinuationAnswer,
+  ContinuousContinuationServiceDeps,
+  OpenContinuationInput,
+} from "./application/continuationService.js";
+export { ContinuousContinuationService } from "./application/continuationService.js";
+export type { ContinuousBudgetAdmissionDeps } from "./application/budgetAdmission.js";
+export { ContinuousBudgetAdmission } from "./application/budgetAdmission.js";
+export type {
+  ContinuousHealthClassification,
+  ContinuousHealthMonitorDeps,
+  HealthAssessment,
+} from "./application/healthMonitor.js";
+export {
+  ContinuousHealthMonitor,
+  CONTINUOUS_HANG_PROBE_CONFIRMATIONS,
+  CONTINUOUS_HANG_THRESHOLD_MS,
+  CONTINUOUS_PROBE_INTERVAL_MS,
+} from "./application/healthMonitor.js";
 
 /**
  * Continuous 服务接口（Host 持有唯一实例；业务写入唯一路径）。

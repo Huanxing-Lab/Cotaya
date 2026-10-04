@@ -16,5 +16,14 @@ Invariants that types cannot express (rules: `docs/specs/continuous.md`):
 - Goal/Scope/模板/模型配置变更需要重新授权（revision+1，撤销旧写入许可）；
   单纯预算增减与 cadence 修改不递增授权 revision、不扩大 Scope。
 - 金额一律整数微美元；unknown usage 保留 reservation，不得静默清零。
+- 预算账本的唯一写入路径是 `ContinuousBudgetAdmission`（application/budgetAdmission）：
+  原子准入（事务内汇总+判定+落库）、幂等结算（同值重放 no-op、不同值冲突）、unknown 显式核销。
+  CLI 侧预算闸门（bootstrap continuous-model-budget）只铸造 requestKey 并转发，不保存金额事实。
+- 继续确认（`ContinuousContinuationService`）与产品 Decision Queue 分开：同 Cycle 至多一条
+  pending（合并多上限触发）；resolve 按 version 乐观校验，grant 是**增量**——不重置已消耗量、
+  不铸新 Run、不解除其他限制。
+- 健康字段（`activeDurationMs`/`normalBlockedDurationMs`/`lastProgressAt`/`lastProbeAt`/
+  `healthState`）的唯一写入者是 `ContinuousHealthMonitor`；离线/重启缺口不计入有效时长，
+  suspected_hang 只挂起询问、不直接 failed/cancelled。
 - 本模块不得导入 AgentRuntime 或 CLI 具体实现；执行经 `application/ports.ts`
   的注入端口（adapters 由 CLI bootstrap 侧实现）。

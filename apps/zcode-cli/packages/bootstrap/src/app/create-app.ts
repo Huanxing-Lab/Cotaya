@@ -748,6 +748,15 @@ export async function createZCodeApp(options: ZCodeAppOptions): Promise<ZCodeApp
             ...(isDynamicWorkflowTaskLinkStore(sessionStore)
               ? { taskLinkStore: sessionStore }
               : {}),
+            // CT-04 预算闸门接缝（规格 §11「最小接缝」）：只有 Host 登记过闸门的 managed run
+            // 会被包装；其余 runId 原样返回，普通 Workflow 行为零改动。
+            ...(options.continuousManagedCycles?.modelBudgetGateFor === undefined
+              ? {}
+              : {
+                  wrapModelRequestAdmission: ({ runId, admission }) =>
+                    options.continuousManagedCycles?.modelBudgetGateFor?.(runId)?.wrap(admission) ??
+                    admission,
+                }),
           });
     // Continuous managed cycle 的执行适配器（CT-03 专用组装）：只在三件事同时成立时构造——
     //   1. 开关（continuousManagedCycles.enabled，默认关闭，规格 §13；Host 接线属 CT-05+）；

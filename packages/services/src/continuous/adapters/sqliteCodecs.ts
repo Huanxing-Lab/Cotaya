@@ -31,6 +31,8 @@ import type {
 
 export const programConfigSchema = z.strictObject({
   goal: z.string().min(1),
+  /** 创建时持久化的 IANA 时区（CT-04）：日窗口统计唯一基准；encode/decode 经 ...config 展开。 */
+  timeZone: z.string().min(1),
   scope: continuousScopePolicySchema,
   budget: continuousBudgetPolicySchema,
   cadence: continuousCadencePolicySchema,
@@ -136,6 +138,7 @@ function decodeJson<T>(field: string, schema: z.ZodType<T>, raw: string): T {
 export function encodeProgram(program: Program): ProgramRow {
   const config = encodeJson("config_json", programConfigSchema, {
     goal: program.goal,
+    timeZone: program.timeZone,
     scope: program.scope,
     budget: program.budget,
     cadence: program.cadence,

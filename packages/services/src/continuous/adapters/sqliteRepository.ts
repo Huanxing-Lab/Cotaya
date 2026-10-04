@@ -9,6 +9,8 @@ import { dirname } from "node:path";
 import { CONTINUOUS_OPEN_CYCLE_STATUSES } from "@zcode/shared";
 import type {
   Candidate,
+  ContinuationGrant,
+  ContinuationRequest,
   ContinuousEvent,
   Cycle,
   Decision,
@@ -19,6 +21,7 @@ import type {
   UsageSettlementPatch,
   WorkspaceLease,
 } from "../domain/types.js";
+import type { BudgetAdmissionLimits, UsageLedgerSummary } from "../domain/budgetPolicy.js";
 import type { ContinuousRepositoryPort } from "../application/ports.js";
 import {
   decodeCycle,
@@ -49,7 +52,22 @@ import {
   getLeaseReady,
   releaseLeaseReady,
 } from "./sqliteLifecycleStore.js";
-import { insertUsageRecordReady, settleUsageRecordReady } from "./sqliteUsageStore.js";
+import {
+  admitUsageReservationReady,
+  getUsageRecordReady,
+  insertUsageRecordReady,
+  markUsageUnknownReady,
+  settleUsageRecordReady,
+  summarizeUsageReady,
+  type UsageReservationAdmission,
+} from "./sqliteUsageStore.js";
+import {
+  getContinuationRequestReady,
+  getPendingContinuationRequestReady,
+  insertContinuationRequestReady,
+  listCycleContinuationGrantsReady,
+  saveContinuationRequestReady,
+} from "./sqliteContinuationStore.js";
 
 export class SqliteContinuousRepository implements ContinuousRepositoryPort {
   private db: ContinuousDatabaseSync | null = null;
@@ -240,7 +258,7 @@ export class SqliteContinuousRepository implements ContinuousRepositoryPort {
     releaseLeaseReady(this.database(), workspaceKey, updatedAt);
   }
 
-  // ── 使用账本（sqliteUsageStore）──
+  // ── 使用账本（sqliteUsageStore；CT-04 admission）──
 
   async insertUsageRecord(record: UsageRecord): Promise<void> {
     await this.ensureReady();
@@ -250,5 +268,62 @@ export class SqliteContinuousRepository implements ContinuousRepositoryPort {
   async settleUsageRecord(patch: UsageSettlementPatch): Promise<void> {
     await this.ensureReady();
     settleUsageRecordReady(this.database(), patch);
+  }
+
+  async getUsageRecord(requestKey: string): Promise<UsageRecord | null> {
+    await this.ensureReady();
+    return getUsageRecordReady(this.database(), requestKey);
+  }
+
+  async markUsageUnknown(requestKey: string, updatedAt: number): Promise<void> {
+    await this.ensureReady();
+    markUsageUnknownReady(this.database(), requestKey, updatedAt);
+  }
+
+  async summarizeUsage(query: {
+    programId: string;
+    cycleId?: string;
+    windowFromMs?: number;
+    windowToMs?: number;
+  }): Promise<UsageLedgerSummary> {
+    await this.ensureReady();
+    return summarizeUsageReady(this.database(), query);
+  }
+
+  async admitUsageReservation(input: {
+    programId: string;
+    reservation: UsageRecord;
+    limits: BudgetAdmissionLimits;
+    window: { fromMs: number; toMs: number };
+  }): Promise<UsageReservationAdmission> {
+    await this.ensureReady();
+    return admitUsageReservationReady(this.database(), input);
+  }
+
+  // ── 继续确认（sqliteContinuationStore；CT-04）──
+
+  async insertContinuationRequest(request: ContinuationRequest): Promise<void> {
+    await this.ensureReady();
+    insertContinuationRequestReady(this.database(), request);
+  }
+
+  async getContinuationRequest(requestId: string): Promise<ContinuationRequest | null> {
+    await this.ensureReady();
+    return getContinuationRequestReady(this.database(), requestId);
+  }
+
+  async getPendingContinuationRequest(cycleId: string): Promise<ContinuationRequest | null> {
+    await this.ensureReady();
+    return getPendingContinuationRequestReady(this.database(), cycleId);
+  }
+
+  async saveContinuationRequest(request: ContinuationRequest): Promise<void> {
+    await this.ensureReady();
+    saveContinuationRequestReady(this.database(), request);
+  }
+
+  async listCycleContinuationGrants(cycleId: string): Promise<ContinuationGrant[]> {
+    await this.ensureReady();
+    return listCycleContinuationGrantsReady(this.database(), cycleId);
   }
 }

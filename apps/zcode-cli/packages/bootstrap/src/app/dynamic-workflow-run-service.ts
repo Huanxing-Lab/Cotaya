@@ -256,6 +256,19 @@ export interface DynamicWorkflowRunServiceDeps {
    */
   concurrency?: WorkflowConcurrencyPort;
   /**
+   * 模型请求准入的 per-run 包装点（CT-04，规格 §11「最小接缝」）：driver 为每个 actor 组装出
+   * 准入端口（治理器 + 座位闸门）之后、下传 runtime 之前经过这里。Continuous 的预算闸门经它
+   * 接入——先过既有座位/治理器，再向 Host 账本原子预留。
+   *
+   * **可选且只影响返回的包装**：缺席即行为逐字不变（普通 Workflow 零改动）；在场但对某
+   * runId 返回原 admission（或 undefined）时该 run 也不受影响——只有 managed cycle 的 run
+   * 被登记进闭包（create-app 的 continuousManagedCycles.modelBudgetGateFor）。
+   */
+  wrapModelRequestAdmission?: (input: {
+    runId: string;
+    admission: ModelRequestAdmission | undefined;
+  }) => ModelRequestAdmission | undefined;
+  /**
    * 把一次启动登记为父 runtime 的**常驻阻塞工作**。
    *
    * 引擎活在会话 App 的闭包里、不进 runtime task registry，而常驻池当时

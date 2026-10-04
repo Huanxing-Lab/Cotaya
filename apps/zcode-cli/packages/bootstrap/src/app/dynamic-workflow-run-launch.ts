@@ -264,6 +264,12 @@ export function launchDynamicWorkflowRun(
       submitProfile,
       modelRequestAdmission,
     }) => {
+      // CT-04 准入包装点（见 DynamicWorkflowRunServiceDeps.wrapModelRequestAdmission）：
+      // driver 组装好的准入端口（治理器 + 座位）在这里按 runId 交给他方包装。缺席或返回
+      // 原值时逐字不变；返回 undefined 也合法（本就没有治理器的装配）。
+      const wrappedAdmission =
+        deps.wrapModelRequestAdmission?.({ runId, admission: modelRequestAdmission }) ??
+        modelRequestAdmission;
       const runtime = deps.createActorRuntime({
         runId,
         sessionId,
@@ -272,8 +278,8 @@ export function launchDynamicWorkflowRun(
         submitPort,
         // 工厂据 profile 决定端口是否注入、声明是否 typed（create-app.ts 的 createActorRuntime）。
         submitProfile,
-        // 请求级准入端口与两个工具端口同路下传到 runtime deps。
-        ...(modelRequestAdmission === undefined ? {} : { modelRequestAdmission }),
+        // 请求级准入端口与两个工具端口同路下传到 runtime deps（可能已带预算闸门）。
+        ...(wrappedAdmission === undefined ? {} : { modelRequestAdmission: wrappedAdmission }),
         // 升级端口与 submit 端口同路下传：core 侧的注册门以端口存在为准，所以恒传。
         escalatePort,
         // resume 的 pin：这个 actor 上一次跑在哪个模型上。必须在**造 runtime 之前**读，

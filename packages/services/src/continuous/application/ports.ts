@@ -5,6 +5,8 @@
 
 import type {
   Candidate,
+  ContinuationGrant,
+  ContinuationRequest,
   ContinuousEvent,
   Cycle,
   Decision,
@@ -15,6 +17,11 @@ import type {
   UsageSettlementPatch,
   WorkspaceLease,
 } from "../domain/types.js";
+import type {
+  BudgetAdmissionDenialLimit,
+  BudgetAdmissionLimits,
+  UsageLedgerSummary,
+} from "../domain/budgetPolicy.js";
 
 // ── Repository：长期状态持久化（tasks-index 新表，独立于 DWF journal）──
 export interface ContinuousRepositoryPort {
@@ -46,9 +53,53 @@ export interface ContinuousRepositoryPort {
   acquireLease(lease: WorkspaceLease): Promise<void>;
   /** 正常释放：cycle/owner/expiry 同步置空，epoch 保留不重置。 */
   releaseLease(workspaceKey: string, updatedAt: number): Promise<void>;
-  // ── 使用账本（continuous_usage；CT-04 在此之上建 admission）──
+  // ── 使用账本（continuous_usage；CT-04 admission 的存储面）──
   insertUsageRecord(record: UsageRecord): Promise<void>;
   settleUsageRecord(patch: UsageSettlementPatch): Promise<void>;
+  /** 按 requestKey 读账本行（幂等结算与 unknown 核对的读面）。 */
+  getUsageRecord(requestKey: string): Promise<UsageRecord | null>;
+  /** 无 usage 证据的终局：保留 reservation 置 unknown（已终态的行不动，幂等）。 */
+  markUsageUnknown(requestKey: string, updatedAt: number): Promise<void>;
+  /**
+   * 账本汇总（规格 §9 计算式）：已结算按实际值、未结算（reserved/unknown）按预留值。
+   * cycleId 缺省 = 整个 Program（日窗口）；windowMs 为 [from, to) 的 occurred_at 过滤。
+   */
+  summarizeUsage(query: {
+    programId: string;
+    cycleId?: string;
+    windowFromMs?: number;
+    windowToMs?: number;
+  }): Promise<UsageLedgerSummary>;
+  /**
+   * 原子准入（I-07/E-33）：事务内汇总 + 领域判定 + INSERT reservation，三者同事务；
+   * 拒绝时不落行并返回 denial（不抛异常——拒绝是业务结果不是故障）。
+   * limits 由 application 预先算好（预算策略 + 本轮 grant），事务内不再读 Program。
+   */
+  admitUsageReservation(input: {
+    programId: string;
+    reservation: UsageRecord;
+    limits: BudgetAdmissionLimits;
+    window: { fromMs: number; toMs: number };
+  }): Promise<
+    | { status: "admitted"; record: UsageRecord }
+    | {
+        status: "denied";
+        denial: {
+          limitKind: BudgetAdmissionDenialLimit;
+          cycleSummary: UsageLedgerSummary;
+          dailySummary?: UsageLedgerSummary;
+        };
+      }
+  >;
+  // ── 继续确认（continuous_continuation_request；CT-04）──
+  insertContinuationRequest(request: ContinuationRequest): Promise<void>;
+  getContinuationRequest(requestId: string): Promise<ContinuationRequest | null>;
+  /** 同 Cycle 至多一条 pending（部分唯一索引兜底；service 层先做合并）。 */
+  getPendingContinuationRequest(cycleId: string): Promise<ContinuationRequest | null>;
+  /** 乐观 version 保存：行 version 领先于携带值时抛 version_conflict。 */
+  saveContinuationRequest(request: ContinuationRequest): Promise<void>;
+  /** 本轮全部已 resolved 的继续 grant（准入的增量来源；不重置消耗量）。 */
+  listCycleContinuationGrants(cycleId: string): Promise<ContinuationGrant[]>;
 }
 
 // ── Execution：现有 Dynamic Workflow 的受控执行边界（CLI bootstrap adapter 实现）──
@@ -191,6 +242,8 @@ export interface ContinuousClockPort {
   now(): number;
   /** 创建 Program 时读取系统 IANA 时区并持久化；后续以 Program 时区为准。 */
   timeZone(): string;
+  /** 定时器（CT-04 healthMonitor 的 15 秒探活节拍）；返回取消函数。缺省用真实 setTimeout。 */
+  schedule?(callback: () => void, delayMs: number): () => void;
 }
 
 // ── RequestAdmission：模型请求准入与幂等结算（§9；ContinuousService 是账本唯一写入者）──

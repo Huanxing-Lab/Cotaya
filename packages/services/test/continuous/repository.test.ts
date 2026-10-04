@@ -92,6 +92,7 @@ function makeProgram(overrides: Partial<Program> = {}): Program {
     workspacePath: "/repos/app",
     revision: 1,
     goal: "持续改进桌面 UI",
+    timeZone: "Asia/Shanghai",
     scope: {
       allowedPaths: ["packages/ui/src"],
       forbiddenPaths: [],
@@ -960,7 +961,10 @@ test("service CRUD：身份规则、trigger 幂等、open cycle 检查、revisio
   const path = newDbPath();
   const repo = await preparedRepository(path);
   const now = 17000;
-  const service = new ContinuousService({ repository: repo, clock: { now: () => now } });
+  const service = new ContinuousService({
+    repository: repo,
+    clock: { now: () => now, timeZone: () => "Asia/Shanghai" },
+  });
   const templateProgram = makeProgram();
 
   const program = await service.createProgram({

@@ -160,6 +160,8 @@ interface Program {
   remoteSessionId?: string;
   revision: number;
   goal: string;
+  /** 创建时读取并持久化的系统 IANA timezone（§2 时区行）；日窗口统计的唯一基准，后续不随系统改变。 */
+  timeZone: string;
   scope: ScopePolicy;
   budget: BudgetPolicy;
   cadence: CadencePolicy;
@@ -418,9 +420,11 @@ CLI 请求计划
 
 每个请求必须有输入上限和输出上限，按价格快照保守预留。价格缺失或不能限制请求时拒绝费用限额下的自动执行，显示原因。tokens 使用相同预留机制，不能仅在全部费用发生后才检查。
 
-计算：已结算估算费用 + 未结算保留额度 + 新预留 <= 当前额度。金额用整数微美元，不用浮点累加。不累加 amend lineage 的 spentTokens。
+计算：已结算估算费用 + 未结算保留额度 + 新预留 <= 当前额度。金额用整数微美元，不用浮点累加；每项按价格向上取整（保守侧），累加结果超出安全整数即拒绝。不累加 amend lineage 的 spentTokens。
 
-unknown usage 保留 reservation。重启查询 provider 或可用执行证据核对；无可靠数据时仍 unknown，只能用户显式核销，保留审计。未知预留足以耗尽限额时暂停并询问；继续必须显式增加额度或核销，不能因用户点击继续而清零未知记录。
+价格快照是带版本号的 provider/model 单价表（每百万 token 的微美元整数），schema 与取整数学在 @zcode/shared 单一实现，CLI 闸门与 Host 账本共用。预留基数为装配注入的单请求输入/输出 token 上限；价格缺失、上限缺失或非正时，费用限额下的自动执行必须拒绝并显示原因。准入检查与 reservation 落库在同一事务内（原子，不靠内存锁）；同轮继续 grant 以增量并入单轮费用/token/时间上限，不重置已消耗量。
+
+unknown usage 保留 reservation。重启查询 provider 或可用执行证据核对；无可靠数据时仍 unknown，只能用户显式核销，保留审计。connect 阶段失败（请求未发出）结算为零；其余无 usage 证据的终局按 unknown 保留。晚到/重复 usage 按 requestKey 幂等结算：同值重放为 no-op，不同值冲突拒绝。未知预留足以耗尽限额时暂停并询问；继续必须显式增加额度或核销，不能因用户点击继续而清零未知记录。
 
 日窗口根据请求预留时持久化的发生时间和 Program 时区统计；后来的补结算仍归入原窗口。新一天不删除旧记录。多个 Program 各有预算，UI 明示没有账户总费用上限。
 
@@ -494,6 +498,8 @@ interface ContinuousExecutionPort {
 保持不变：compiler、analysis、schema synthesis、lowering、Engine、AskScheduler、VM sandbox、原 DWF 表、普通 Workflow escalation、权限 mode 枚举。
 
 最小扩展：Run service 的受控 submitOnce、停止检查、按序报告读取、create-app 装配、协议 handler。工具、模型和 escalation 使用专用注入适配器；需要普通 driver 增加接缝时，只做无默认行为变化的可选接口。
+
+模型请求准入复用既有 `ModelRequestAdmission` 接缝：run service 提供可选的 per-run 准入包装点（缺席即普通 Workflow 行为逐字不变），Continuous 的预算闸门经它包住每个 actor 的准入端口——先过既有座位/治理器，再向 Host 账本原子预留，票据同时是结算事件汇。不改变所有 session 的全局 retry；单请求尝试上限由该闸门施加。
 
 受控执行面在 CLI 侧经 v4 命令 `continuousManagedCycle` 暴露（九个操作共用一张 strict 载荷：引用四元组必带，op 专属字段按 op 校验在场；词表与拒绝 fault 前缀在 shared continuous-protocol）。能力缺席（未装配/功能关闭/旧 CLI）必须回答不支持，绝不退回普通 prompt 自主执行。
 

@@ -51,6 +51,7 @@ function makeProgram(revision = 4): Program {
     workspacePath: "/repos/app",
     revision,
     goal: "持续改进桌面 Web UI",
+    timeZone: "Asia/Shanghai",
     scope: {
       allowedPaths: ["packages/ui/src"],
       forbiddenPaths: ["packages/services/src/session/tasksDatabase"],

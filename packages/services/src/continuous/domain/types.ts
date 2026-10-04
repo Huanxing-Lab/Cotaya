@@ -46,6 +46,8 @@ export interface Program {
   remoteSessionId?: string;
   revision: number;
   goal: string;
+  /** 创建时持久化的系统 IANA timezone（规格 §2/§9）：日窗口统计的唯一基准。 */
+  timeZone: string;
   scope: ContinuousScopePolicy;
   budget: ContinuousBudgetPolicy;
   cadence: ContinuousCadencePolicy;
@@ -188,18 +190,46 @@ export type ContinuationRequestReason =
   | "suspected_hang"
   | "health_unknown";
 
+/**
+ * 本轮继续 grant（规格 §6.1）：只增加受影响上限的**增量**，不重置已消耗量；
+ * 仅作用于当前 Cycle，下一轮仍用 Program 配置。字段全部可选——只确认受影响的上限。
+ */
+export interface ContinuationGrant {
+  costMicros?: number;
+  tokens?: number;
+  /** 有效执行时间的增量（ms）。 */
+  activeMs?: number;
+}
+
+/** 继续确认的回答（AskUserQuestion 的四个选项，规格 §6.1）。 */
+export interface ContinuationRequestResolution {
+  kind: "continue_with_grant" | "adjust_config_and_continue" | "stay_paused" | "end_cycle";
+  resolvedAt: number;
+  /** continue_with_grant / adjust_config_and_continue 携带的本轮增量。 */
+  grant?: ContinuationGrant;
+  /** adjust_config_and_continue 时用户给出的新长期配置（保存归 supervisor/CT-05，不扩大 Scope）。 */
+  configAdjustment?: {
+    perCycleCostUsdMicros?: number;
+    perCycleTokens?: number;
+    activeExecutionLimitMs?: number;
+    dailyCostUsdMicros?: number | null;
+  };
+}
+
 export interface ContinuationRequest {
   id: string;
   programId: string;
   cycleId: string;
   reason: ContinuationRequestReason;
   limitKind: "cost" | "token" | "time" | "change" | "retry" | "resume" | "health";
+  /** 多项上限同时触发时合并进同一条请求（规格 §5「不重复弹窗」）；reason 保持首因。 */
+  reasons: ContinuationRequestReason[];
   observedUsage: unknown;
   currentLimit: unknown;
   recommendedExtension: unknown;
   version: number;
   status: "pending" | "resolved";
-  resolution?: unknown;
+  resolution?: ContinuationRequestResolution;
   createdAt: number;
   resolvedAt?: number;
 }

@@ -186,7 +186,17 @@ export interface ZCodeAppOptions {
    * Host/桌面接线（CT-05+）显式打开。关闭时 app 不暴露 continuousManagedCycleExecution，
    * v4 命令面回答能力不支持——这是「关闭 managed capability」的回滚位，不触碰普通 Workflow。
    */
-  continuousManagedCycles?: { enabled: boolean };
+  continuousManagedCycles?: {
+    enabled: boolean;
+    /**
+     * CT-04 预算闸门登记处：Host（CT-05 装配）在 submitOnce 前按 workflowRunId 登记该轮的
+     * 闸门；run service 经 wrapModelRequestAdmission 接缝为该 run 的每个 actor 准入端口包上
+     * 预算边界。缺席/未登记的 runId 不受影响（普通 Workflow 逐字不变）。
+     */
+    modelBudgetGateFor?: (
+      runId: string,
+    ) => import("./continuous-model-budget.js").ContinuousModelBudgetGate | undefined;
+  };
   /** 首次真实用户执行或 cold-resume fallback 时解析一次，之后由 app 生命周期缓存。 */
   resolveInitialBashShellSelection?: () => Promise<ExecutionShellSelection | undefined>;
   /** Trusted embedder policy; workspace/project files cannot populate this field. */

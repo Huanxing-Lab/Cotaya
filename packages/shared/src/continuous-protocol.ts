@@ -342,3 +342,8 @@ export function isContinuousError(value: unknown): value is ContinuousError {
 // 结果，不是边界变化——见那边文件头）。这里原样再导出，公开路径保持 continuous-protocol 一个，
 // 既有 importer（services contract、zcode-protocol index）不必改。
 export * from "./continuous-execution-protocol.js";
+
+// ── 预算协议（CT-04）──
+// 价格快照 schema 与微美元估算数学放 continuous-budget-protocol.ts（CLI 闸门与 Host 账本
+// 共用同一实现；见那边文件头）。同样从这里再导出，公开路径不变。
+export * from "./continuous-budget-protocol.js";

@@ -24,7 +24,8 @@ import type { ContinuousClockPort, ContinuousRepositoryPort } from "./ports.js";
 
 export interface ContinuousServiceDeps {
   repository: ContinuousRepositoryPort;
-  clock: Pick<ContinuousClockPort, "now">;
+  /** timeZone 用于创建 Program 时持久化系统时区（规格 §2；CT-04）。 */
+  clock: Pick<ContinuousClockPort, "now" | "timeZone">;
 }
 
 export interface CreateProgramInput {
@@ -32,6 +33,8 @@ export interface CreateProgramInput {
   workspaceIdentity?: string;
   remoteSessionId?: string;
   goal: string;
+  /** IANA 时区；缺席时按规格 §2 读取创建时刻的系统时区并持久化（Clock.timeZone）。 */
+  timeZone?: string;
   scope: Program["scope"];
   budget: Program["budget"];
   cadence: Program["cadence"];
@@ -75,6 +78,7 @@ export class ContinuousService {
       remoteSessionId: input.remoteSessionId,
       revision: 1,
       goal: input.goal,
+      timeZone: input.timeZone ?? this.deps.clock.timeZone(),
       scope: input.scope,
       budget: input.budget,
       cadence: input.cadence,
