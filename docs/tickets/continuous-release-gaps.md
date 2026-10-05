@@ -106,7 +106,7 @@ sequenceDiagram
 
 ## CT-16：固定运行时、安装包与真实模型验收（P0，最后）
 
-按 `mise.toml` 的 Node 24.14.0 重跑类型检查、Lint 和全部自动 suite。随后在真实打包 app 中重复暂停/退出/恢复/停止/本地提交。其他平台逐一取得真实机器证据才登记 autonomous。
+按 `mise.toml` 的 Node 版本要求（≥ 24）重跑类型检查、Lint 和全部自动 suite，并在验收记录中写明实际使用的 Node 版本，保证同一版本可复现。随后在真实打包 app 中重复暂停/退出/恢复/停止/本地提交。其他平台逐一取得真实机器证据才登记 autonomous。
 
 live 走现有显式 `--allow-live` 入口，使用用户可用测试配置并遵守预算；分别验证真实 usage、compaction/sidecar、限流、unknown、无进展和同轮继续。没有配置则记录 blocked，不用模拟结果替代。
 

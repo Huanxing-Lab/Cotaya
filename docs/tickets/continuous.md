@@ -12,7 +12,7 @@
 
 ## 总体执行规则
 
-1. 开工先运行 freshness，保留用户本地改动；Node 24.14.0、pnpm 10.33.2 以 mise 为准。
+1. 开工先运行 freshness，保留用户本地改动；Node ≥ 24、pnpm 10.33.2 以 mise 为准。
 2. 行为变更先更新规格和测试；代码使用 architecture-governance，先检查再读目标模块受控上下文。
 3. 一张 ticket 一个可独立审查的功能提交；基础设施可分更小提交，不混无关重构。
 4. services 不能引用 AgentRuntime 实现；UI 必须通过 hooks；Main/scheduler 不保存业务队列。
