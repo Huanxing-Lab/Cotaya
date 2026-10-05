@@ -15,6 +15,7 @@ import {
   type ContinuousCreateProgramParams,
   type ContinuousDismissDecisionParams,
   type ContinuousPauseProgramParams,
+  type ContinuousPlatformExecution,
   type ContinuousProgramDetailParams,
   type ContinuousProgramDetailResult,
   type ContinuousResolveContinuationParams,
@@ -52,6 +53,13 @@ export interface ContinuousCommandServiceDeps {
    * 缺省回落到 Program 预算值——只在真的没有更准事实时使用，不伪称平台能力。
    */
   platformConcurrency?: (program: Program) => number;
+  /**
+   * 平台执行能力评估（CT-10，规格 §13）：Host 装配时经 shared
+   * assessContinuousPlatformExecution({platform, arch}) 计算注入；capability 结果携带
+   * 该评估供 UI 解释 observe_only（E-24「可观察的模式明确只读」）。缺席时不伪造——
+   * capability 不带 platform 字段（supervisor 侧的启动门仍独立强制）。
+   */
+  platformExecution?: ContinuousPlatformExecution;
   logger?: { warn?: (message: string, meta?: unknown) => void };
 }
 
@@ -75,7 +83,16 @@ export class ContinuousCommandService implements IContinuousService, IContinuous
   capability(): ContinuousCapabilityResult {
     // 装配即支持：本类被构造 = Host 显式开启了 managed cycles（默认关闭时根本不注册）。
     // 协议小版本 1 = CT-08 的 additive 读/回答面（templates/programDetail/resolveContinuation）。
-    return { supported: true, capability: CONTINUOUS_MANAGED_CYCLE_CAPABILITY, version: 1 };
+    // platform（CT-10 additive）：observe_only 平台的「只提供观察」解释面（§13/E-24）；
+    // 缺席 = 装配者未注入评估（不伪造平台事实；supervisor 启动门仍独立强制）。
+    return {
+      supported: true,
+      capability: CONTINUOUS_MANAGED_CYCLE_CAPABILITY,
+      version: 1,
+      ...(this.deps.platformExecution === undefined
+        ? {}
+        : { platform: this.deps.platformExecution }),
+    };
   }
 
   async snapshot(params: ContinuousSnapshotParams): Promise<ContinuousSnapshotResult> {

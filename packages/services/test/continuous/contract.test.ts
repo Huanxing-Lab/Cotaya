@@ -11,6 +11,8 @@ import {
   CONTINUOUS_MANAGED_CYCLE_CAPABILITY,
   CONTINUOUS_METHODS,
   CONTINUOUS_OPEN_CYCLE_STATUSES,
+  CONTINUOUS_VERIFIED_PLATFORM_EXECUTION,
+  assessContinuousPlatformExecution,
   continuousBudgetPolicySchema,
   continuousCapabilityResultSchema,
   continuousCommandContextSchema,
@@ -255,6 +257,69 @@ test("U-01 兼容性：命令词表与默认值经 @zcode/shared 公开入口可
       perCycleCostUsdMicros: 1.5,
     }).success,
     false,
+  );
+});
+
+test("U-01 CT-10 additive：平台能力契约（登记表/评估/capability 可选字段/错误码）", () => {
+  // §13 固定能力规则：未登记平台 fail closed（observe_only + 稳定原因 token）。
+  const unverified = assessContinuousPlatformExecution({ platform: "win32", arch: "x64" });
+  assert.deepEqual(unverified, {
+    mode: "observe_only",
+    platformKey: "win32-x64",
+    verified: false,
+    reason: "platform_not_verified",
+  });
+  // 登记表条目必须携带证据出处与实测覆盖面（追加平台 = 随附 suite 证据）。
+  for (const [platformKey, fact] of Object.entries(CONTINUOUS_VERIFIED_PLATFORM_EXECUTION)) {
+    assert.ok(fact.verifiedAt.length > 0, `${platformKey} 登记缺 verifiedAt`);
+    assert.ok(fact.evidence.length > 0, `${platformKey} 登记缺 evidence 出处`);
+    assert.ok(fact.verifiedScopes.length > 0, `${platformKey} 登记缺实测覆盖面`);
+    const assessment = assessContinuousPlatformExecution({
+      platform: platformKey.split("-")[0]!,
+      arch: platformKey.split("-")[1]!,
+    });
+    assert.equal(assessment.mode, "autonomous");
+    assert.equal(assessment.platformKey, platformKey);
+  }
+  // capability 结果的可选 platform 字段：旧形状（无 platform）仍合法（additive）；
+  // 带字段的形状必须经 strict schema。
+  assert.equal(
+    continuousCapabilityResultSchema.safeParse({
+      supported: true,
+      capability: "continuousManagedCycles",
+      version: 1,
+    }).success,
+    true,
+    "无 platform 的旧 capability 形状必须继续合法",
+  );
+  const withPlatform = continuousCapabilityResultSchema.parse({
+    supported: true,
+    capability: "continuousManagedCycles",
+    version: 1,
+    platform: { mode: "observe_only", platformKey: "win32-x64", verified: false },
+  });
+  assert.equal(withPlatform.platform?.mode, "observe_only");
+  assert.equal(
+    continuousCapabilityResultSchema.safeParse({
+      supported: true,
+      capability: "continuousManagedCycles",
+      version: 1,
+      platform: { mode: "something_else" },
+    }).success,
+    false,
+    "platform 字段非法值必须被拒绝",
+  );
+  // 错误词表 additive：platform_execution_not_supported 在 wire 词表内且可被结构化错误解析。
+  assert.ok(
+    (CONTINUOUS_ERROR_CODES as readonly string[]).includes("platform_execution_not_supported"),
+  );
+  assert.equal(
+    isContinuousError({
+      code: "platform_execution_not_supported",
+      message: "x",
+      retryable: false,
+    }),
+    true,
   );
 });
 

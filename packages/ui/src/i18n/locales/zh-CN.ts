@@ -6518,6 +6518,9 @@ const zhCN: Record<string, string> = {
     "第一版 Continuous 仅支持本地 workspace；远程执行会被明确拒绝，不会退回普通 prompt 执行。",
   "continuous.unsupported.description":
     "Host 或 Agent CLI 不支持受控 Cycle。请升级应用并确认功能已开启。",
+  "continuous.platform.observeOnly.title": "本平台仅提供观察",
+  "continuous.platform.observeOnly.description":
+    "该平台尚未验证可靠的文件与命令限制能力，Continuous 在这里只提供观察：Program、队列与历史的读取照常可用，自主实施会被明确拒绝（platform_execution_not_supported）。",
   "continuous.list.title": "Program 列表",
   "continuous.create.button": "创建 Program",
   "continuous.empty.title": "还没有改进 Program",

@@ -517,7 +517,7 @@ submitOnce 对非终态的既有行按同身份幂等复用（不铸第二个引
 
 专用执行接口新增 suspendAtSafeBoundary、resumeSuspended、inspectHealth，明确不等同 stop；挂起请求/工具准入与旧执行确认是同一所有者链。单轮计时不使用会直接 abort Run 的固定墙钟 timeout。
 
-结构化错误至少包括：authorization_stale、scope_denied、budget_denied、usage_unknown、lease_lost、execution_not_quiescent、execution_identity_mismatch、template_mismatch、remote_execution_not_supported、validation_unavailable；CT-08 起 additive 追加 version_conflict（resolve/dismiss/继续确认的旧 version 或异答重放拒绝）、program_not_runnable（paused/failed/completed Program 的启动/恢复类命令拒绝）与 open_cycle_exists（幂等竞态吸收后的明确回执）——三者都是服务层既有语义上送 wire，不改变原有错误。
+结构化错误至少包括：authorization_stale、scope_denied、budget_denied、usage_unknown、lease_lost、execution_not_quiescent、execution_identity_mismatch、template_mismatch、remote_execution_not_supported、validation_unavailable；CT-08 起 additive 追加 version_conflict（resolve/dismiss/继续确认的旧 version 或异答重放拒绝）、program_not_runnable（paused/failed/completed Program 的启动/恢复类命令拒绝）与 open_cycle_exists（幂等竞态吸收后的明确回执）；CT-10 起 additive 追加 platform_execution_not_supported（未验证平台的自主实施拒绝，见 §13）——四者都是服务层既有语义上送 wire，不改变原有错误。
 
 ### 11.1 UI 命令面（CT-08 additive，协议小版本 1）
 
@@ -535,7 +535,7 @@ submitOnce 对非终态的既有行按同身份幂等复用（不铸第二个引
 
 Program 详情必须包含：Status、Goal、Scope、Budget、Cadence、Health/最近进展、继续确认、Current Cycle、Latest Cycles、Improvement Queue、Decision Queue、Run now、Pause、立即停止本轮、分支/提交交付位置。
 
-费用明确标“估算”；unknown 另列。默认并发10、tokens10亿、单轮USD100、每日USD1,000、有效执行1小时；界面同时显示实际运行平台并发能力，不能隐藏较低的机器限制。显示最近探活、最近进展、正常等待原因与有效/墙钟时间。资源暂停显示待确认额度/时间，不混入产品Decision队列。Decision 数量与执行状态分开。历史能从 resolution 追到候选、实施 Cycle、Run、commit 和验证证据。Run timeline/graph 复用现有侧栏，不能用工具调用次数代替改进数。
+费用明确标“估算”；unknown 另列。默认并发10、tokens10亿、单轮USD100、每日USD1,000、有效执行1小时；界面同时显示实际运行平台并发能力，不能隐藏较低的机器限制。当前平台处于只读观察模式（§13 平台能力）时，capability 结果携带平台模式，页面在进入时明确解释“本平台仅提供观察、不开放自动实施”与原因，不用隐藏入口代替解释。显示最近探活、最近进展、正常等待原因与有效/墙钟时间。资源暂停显示待确认额度/时间，不混入产品Decision队列。Decision 数量与执行状态分开。历史能从 resolution 追到候选、实施 Cycle、Run、commit 和验证证据。Run timeline/graph 复用现有侧栏，不能用工具调用次数代替改进数。
 
 桌面与手机按服务 snapshot 展示；局部草稿和 optimistic overlay 不是业务事实。手机重连按 replayable 语义补状态，不能重复发已接受命令。UI 消费服务的唯一入口是 `packages/ui/src/hooks/useContinuous.ts`（snapshot/programDetail 轮询读面 + 命令转发；本地只保存最近一份快照与未提交草稿/命令 pending）；稳定测试标识在 shared `test-ids-continuous`。创建授权表单的默认值取产品常量（并发 10、tokens 10 亿、单轮 USD100、每日 USD1,000、有效执行 1 小时；表单不自带第二套默认值），Unlimited 只取消每日额度且必须显式勾选；超出安全整数的额度/grant 输入在表单层即拒绝，不静默截断。
 
@@ -546,6 +546,12 @@ Program 详情必须包含：Status、Goal、Scope、Budget、Cadence、Health/�
 实施按 ticket CT-00 至 CT-10 顺序，详细范围见任务文档。先更新 spec/contract，再补行为测试，再实现；交互必须 E2E。不在当前文档阶段创建 migration、runner 或源代码。
 
 功能默认关闭，最后完成端到端恢复和操作限制才开启。跨平台没有可验证的写入/命令限制时，该平台只提供观察，不开放自动实施；这是固定能力规则，不是待决策产品选项。
+
+平台能力的判定与执行（CT-10）：
+
+- 已验证平台登记在 shared 的单一注册表（`continuous-platform-protocol`：platformKey → 验证事实与证据出处），纯函数按 `{platform, arch}` 评估出 `autonomous` 或 `observe_only`；Host 装配与 CLI 执行策略共用该实现，不各自维护第二套平台清单。
+- 登记的依据是 platform suite 在真实机器上的实测证据（路径含空格/Unicode/大小写/symlink、进程树取消、worktree、SQL 约束、命令限制）；没有实测证据的平台一律 `observe_only`。向注册表追加平台必须同时提交该平台的 suite 证据，不允许凭代码审查登记。
+- 执行点有三层，缺一不可：supervisor 启动门（`observe_only` 平台拒绝启动/恢复自主实施 Cycle，结构化错误 `platform_execution_not_supported`，观察读面不受影响）；CLI 执行策略（`platform_read_only` 拒绝一切写入/删除/声明命令/本地提交，读与观察放行）；capability 结果携带平台模式供 UI 解释。三层使用同一个评估函数的输出，不出现口径不一致。
 
 关闭功能不删除表、worktree或历史。回滚先停止唤醒、撤销写入和新模型请求、等待停止，再回退代码；不删除用户提交或原始工作区。
 

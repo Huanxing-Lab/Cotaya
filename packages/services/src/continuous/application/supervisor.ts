@@ -18,12 +18,17 @@
 // 三个可注入入口）。
 
 import { randomUUID } from "node:crypto";
+import type { ContinuousPlatformExecutionMode } from "@zcode/shared";
 import type { Cycle, CycleTriggerKind, Program } from "../domain/types.js";
 import { manualTriggerKey } from "../domain/cadencePolicy.js";
 import { continueSuspendedCycle, stopCurrentCycle } from "./supervisorControl.js";
 import { watchCycle } from "./supervisorWatch.js";
 import { acquireCycleLease, type WorkspaceLeaseDeps } from "./workspaceLease.js";
-import { createManagedCycleRecord, ContinuousSupervisorError } from "./supervisorLifecycle.js";
+import {
+  createManagedCycleRecord,
+  ContinuousSupervisorError,
+  requireAutonomousPlatformExecution,
+} from "./supervisorLifecycle.js";
 import type {
   ContinuousClockPort,
   ContinuousExecutionPort,
@@ -54,6 +59,13 @@ export interface ContinuousSupervisorDeps {
   workspace: WorkspacePreparationPort;
   clock: ContinuousClockPort;
   templateSource: ContinuousTemplateSource;
+  /**
+   * 平台执行模式（CT-10，规格 §13）：Host 装配时经 shared
+   * assessContinuousPlatformExecution({platform, arch}) 评估注入；observe_only 平台拒绝
+   * 启动/恢复自主实施（结构化 platform_execution_not_supported），观察读面不受影响。
+   * 必填：装配者必须显式回答平台能力，不允许缺省视为 autonomous（fail closed）。
+   */
+  platformExecutionMode: ContinuousPlatformExecutionMode;
   logger?: {
     warn?: (message: string, meta?: unknown) => void;
     info?: (message: string, meta?: unknown) => void;
@@ -104,6 +116,7 @@ export class ContinuousSupervisor {
     triggerKind: CycleTriggerKind;
     requestId: string;
   }): Promise<RunNowResult> {
+    requireAutonomousPlatformExecution(this.deps.platformExecutionMode, "launchManagedCycle");
     const program = await this.deps.repository.getProgram(input.programId);
     if (!program) {
       throw new ContinuousSupervisorError(
@@ -177,6 +190,8 @@ export class ContinuousSupervisor {
    * 身份三元组来自 Cycle 行本身——不重新派生、不生成新 ID（ACK 丢失查原身份，§10）。
    */
   async submitExistingCycle(cycle: Cycle): Promise<RunNowResult> {
+    // 平台门同样覆盖恢复重提交：observe_only 平台不允许经恢复路径重启自主实施。
+    requireAutonomousPlatformExecution(this.deps.platformExecutionMode, "submitExistingCycle");
     const program = await this.deps.repository.getProgram(cycle.programId);
     if (!program) {
       throw new ContinuousSupervisorError(
@@ -190,6 +205,8 @@ export class ContinuousSupervisor {
 
   /** suspended Cycle 的同 Run 继续（§6.1）；实现随控制面落在 supervisorControl.ts。 */
   continueSuspendedCycle(cycleId: string): Promise<RunNowResult> {
+    // 用户继续授权不能越过平台能力规则（§6.1「Scope 禁止项不能通过继续绕过」同款纪律）。
+    requireAutonomousPlatformExecution(this.deps.platformExecutionMode, "continueSuspendedCycle");
     return continueSuspendedCycle(
       {
         repository: this.deps.repository,

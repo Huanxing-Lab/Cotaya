@@ -219,6 +219,8 @@ function makeRecovery(
     workspace: fakeWorkspace,
     clock,
     templateSource,
+    // CT-10：调度测试固定 autonomous 平台（observe_only 平台门在 platform suite 验证）。
+    platformExecutionMode: "autonomous",
     pollIntervalMs: 1,
   };
   const supervisor = new ContinuousSupervisor(deps);

@@ -47,6 +47,8 @@ function makeConfig(
     activeCandidate: { candidateId: "cand-1", targetPaths: ["packages/ui/src/header"] },
     pathStyle: "posix",
     caseInsensitiveFs: false,
+    // CT-10：默认 autonomous（observe_only 降级语义在 platform-runtime 测试验证）。
+    platformExecutionMode: "autonomous",
     ...overrides,
   };
 }

@@ -6837,6 +6837,9 @@ const enUS: Record<string, string> = {
     "Continuous supports local workspaces only in this version; remote execution is rejected instead of falling back to a normal prompt.",
   "continuous.unsupported.description":
     "The host or agent CLI does not support managed cycles. Upgrade the app and check that the feature is enabled.",
+  "continuous.platform.observeOnly.title": "Observation only on this platform",
+  "continuous.platform.observeOnly.description":
+    "This platform has not verified reliable file and command restrictions, so Continuous only observes here: reading programs, queues, and history stays available, while autonomous implementation is rejected (platform_execution_not_supported).",
   "continuous.list.title": "Programs",
   "continuous.create.button": "Create program",
   "continuous.empty.title": "No improvement programs yet",

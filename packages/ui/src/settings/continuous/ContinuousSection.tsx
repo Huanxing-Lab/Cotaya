@@ -5,6 +5,7 @@
 import { useState, type ReactNode } from "react";
 import {
   TID_CONTINUOUS_CREATE_OPEN,
+  TID_CONTINUOUS_PLATFORM_READ_ONLY,
   TID_CONTINUOUS_PROGRAM_CARD,
   TID_CONTINUOUS_PROGRAM_LIST,
   TID_CONTINUOUS_SECTION,
@@ -125,9 +126,28 @@ export function ContinuousSection({
   }
 
   const programs = continuous.snapshot?.programs ?? [];
+  // CT-10（规格 §13/E-24）：observe_only 平台在列表页明确解释「只提供观察、不开放自动实施」，
+  // 不用隐藏入口代替解释；观察读面（Program/队列/历史）照常可用。
+  const platformObserveOnly =
+    continuous.availability.status === "ready" &&
+    continuous.availability.capability.platform?.mode === "observe_only";
   return (
     <div data-testid={TID_CONTINUOUS_SECTION} className="flex flex-col">
       {pageHeader}
+      {platformObserveOnly ? (
+        <div
+          data-testid={TID_CONTINUOUS_PLATFORM_READ_ONLY}
+          role="status"
+          className="mt-3 rounded-lg border border-card-border bg-card px-3 py-2 text-ui-base text-foreground-subtle"
+        >
+          <p className="font-medium text-foreground">
+            {intl.formatMessage({ id: "continuous.platform.observeOnly.title" })}
+          </p>
+          <p className="mt-1 leading-5">
+            {intl.formatMessage({ id: "continuous.platform.observeOnly.description" })}
+          </p>
+        </div>
+      ) : null}
       <div className="mt-8 flex items-center justify-between">
         <h2 className="text-ui-base font-medium leading-5 text-foreground-subtle">
           {intl.formatMessage({ id: "continuous.list.title" })}

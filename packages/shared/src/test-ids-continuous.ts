@@ -11,6 +11,8 @@ export const TID_CONTINUOUS_PAGE_TAB_VALUE = "continuous";
 // Continuous 主区
 export const TID_CONTINUOUS_SECTION = "continuous-section";
 export const TID_CONTINUOUS_UNSUPPORTED = "continuous-unsupported";
+// CT-10（规格 §13/E-24）：observe_only 平台的只读观察解释横幅。
+export const TID_CONTINUOUS_PLATFORM_READ_ONLY = "continuous-platform-read-only";
 export const TID_CONTINUOUS_PROGRAM_LIST = "continuous-program-list";
 export const TID_CONTINUOUS_PROGRAM_CARD = "continuous-program-card";
 export const TID_CONTINUOUS_CREATE_OPEN = "continuous-create-open";

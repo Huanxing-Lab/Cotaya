@@ -34,8 +34,12 @@ export async function resolveElectronBinaryAsync() {
 /**
  * 启动实际 Electron（不另起 dev Electron / vite dev server）。
  * env 为完整环境（process.env 展开后覆盖隔离变量）；输出 tee 进 artifacts/logs。
+ * `quiet: true` 时不回显控制台（编排层 stdout 上限环境；stdoutText() 仍可用来做就绪判定）。
  */
-export async function launchDesktop(run, { env, logFileName = "electron-main.log" }) {
+export async function launchDesktop(
+  run,
+  { env, logFileName = "electron-main.log", quiet = false },
+) {
   const { default: playwright } = await import("playwright-core");
   const executablePath = await resolveElectronBinaryAsync();
   const mainBundle = path.join(DESKTOP_ROOT, "out", "main", "index.js");
@@ -52,7 +56,7 @@ export async function launchDesktop(run, { env, logFileName = "electron-main.log
       const text = chunk.toString("utf8");
       chunks.push(text);
       stream.write(text);
-      process.stdout.write(prefix ? `${prefix}${text}` : text);
+      if (!quiet) process.stdout.write(prefix ? `${prefix}${text}` : text);
     });
   };
   const child = electron.process();

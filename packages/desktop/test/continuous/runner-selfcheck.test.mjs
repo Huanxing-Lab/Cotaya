@@ -228,10 +228,28 @@ test("脱敏：凭据与 home 路径不落盘", () => {
 });
 
 test("CT-00 runner：空 manifest suite 非零退出且标 missing", async () => {
-  const result = await runNode(["scripts/test-continuous.mjs", "--suite", "platform"]);
-  assert.notEqual(result.exitCode, 0, "missing suite 不能退出 0");
-  assert.match(result.stdout, /"status": "missing"/);
-  assert.doesNotMatch(result.stdout, /"status": "passed"/);
+  // CT-10 起 platform/regression 都有真实 manifest；空 manifest 语义改用脚本副本验证：
+  // 副本放在 scripts/ 下（repoRoot 解析不变），把 platform suite 的 files 置空后运行。
+  // 随机后缀防并发自检互踩；finally 删除，不向仓库留临时文件。
+  const { writeFile } = await import("node:fs/promises");
+  const { randomUUID } = await import("node:crypto");
+  const tempName = `.test-continuous-selfcheck-${randomUUID().slice(0, 8)}.mjs`;
+  const tempScript = path.join(REPO_ROOT, "scripts", tempName);
+  const source = await readFile(path.join(REPO_ROOT, "scripts", "test-continuous.mjs"), "utf8");
+  const patched = source.replace(
+    /platform:\s*\{[^{}]*\},/,
+    'platform: { description: "selfcheck-empty", kind: "node-test", files: [] },',
+  );
+  assert.notEqual(patched, source, "platform suite 块未被替换（自检正则失配时大声失败）");
+  try {
+    await writeFile(tempScript, patched, "utf8");
+    const result = await runNode([`scripts/${tempName}`, "--suite", "platform"]);
+    assert.notEqual(result.exitCode, 0, "missing suite 不能退出 0");
+    assert.match(result.stdout, /"status": "missing"/);
+    assert.doesNotMatch(result.stdout, /"status": "passed"/);
+  } finally {
+    await rm(tempScript, { force: true });
+  }
 });
 
 test("CT-00 runner：未知 suite 非零退出（usage 错误）", async () => {
@@ -247,11 +265,17 @@ test("CT-00 runner：未授权 live 非零退出且标 blocked", async () => {
   assert.match(result.stdout, /--allow-live/);
 });
 
-test("报告契约：e2e/mobile/live 入口文件存在（script suite 不再 missing）", () => {
-  for (const entry of ["e2e.test.mjs", "mobile.test.mjs", "live.test.mjs"]) {
+test("报告契约：e2e/mobile/live/regression 入口与 platform manifest 存在（CT-10 起）", () => {
+  for (const entry of ["e2e.test.mjs", "mobile.test.mjs", "live.test.mjs", "regression.test.mjs"]) {
     assert.ok(
       existsSync(path.join(REPO_ROOT, "packages/desktop/test/continuous", entry)),
       `缺少 ${entry}`,
     );
+  }
+  for (const file of [
+    "packages/services/test/continuous/platform.test.ts",
+    "apps/zcode-cli/packages/bootstrap/test/continuous/platform-runtime.test.ts",
+  ]) {
+    assert.ok(existsSync(path.join(REPO_ROOT, file)), `platform manifest 条目缺失: ${file}`);
   }
 });

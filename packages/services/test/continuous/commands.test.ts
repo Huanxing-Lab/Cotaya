@@ -202,6 +202,8 @@ async function freshFixture(): Promise<Fixture> {
     workspace: fakeWorkspace,
     clock,
     templateSource,
+    // CT-10：命令面测试固定 autonomous 平台（平台门拒绝语义在 platform suite 验证）。
+    platformExecutionMode: "autonomous",
     pollIntervalMs: 1,
   });
   const commands = new ContinuousCommandService({

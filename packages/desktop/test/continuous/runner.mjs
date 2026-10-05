@@ -182,11 +182,15 @@ export async function buildAgentCli(run, { log = console.log } = {}) {
 /**
  * desktop 生产构建（main/host/preload/renderer），复用既有脚本：
  * ensure-local-runtime-assets → build-metadata → run-production-build.mjs。
- * renderer 构建带 VITE_ZCODE_E2E_STORE_BRIDGE=1（test build；生产构建不带该 flag，E-28）。
+ * renderer 构建默认带 VITE_ZCODE_E2E_STORE_BRIDGE=1（test build）；rendererBridge=false 是
+ * E-28 的另一半——无 bridge flag 的普通 production build（CT-10 regression suite）。
  * ZCODE_E2E_KEEP_BUILD_CACHE=1 时 run-production-build 跳过清空（沿用其既有语义）。
  * skipDesktopBuild=true 时只校验既有产物存在（由工作流预构建后复用）。
  */
-export async function ensureDesktopBuild(run, { skipDesktopBuild = false } = {}) {
+export async function ensureDesktopBuild(
+  run,
+  { skipDesktopBuild = false, rendererBridge = true, quiet = false } = {},
+) {
   const outDir = path.join(DESKTOP_ROOT, "out");
   const markers = [".main-build-ready", ".host-build-ready", ".preload-build-ready"].map((name) =>
     path.join(outDir, name),
@@ -205,7 +209,8 @@ export async function ensureDesktopBuild(run, { skipDesktopBuild = false } = {})
   const buildEnv = {
     ...process.env,
     NODE_ENV: "production",
-    VITE_ZCODE_E2E_STORE_BRIDGE: "1",
+    // 显式写 "0"（而不是删除）：防止外层进程（如先跑过 e2e）残留的 "1" 泄漏进构建。
+    VITE_ZCODE_E2E_STORE_BRIDGE: rendererBridge ? "1" : "0",
   };
   const steps = [
     ["ensure-runtime-assets", process.execPath, ["scripts/ensure-local-runtime-assets.mjs"]],
@@ -216,6 +221,7 @@ export async function ensureDesktopBuild(run, { skipDesktopBuild = false } = {})
     const result = await spawnCaptured(run, label, command, args, {
       cwd: DESKTOP_ROOT,
       env: buildEnv,
+      quiet,
     });
     if (result.exitCode !== 0) {
       throw new Error(
@@ -233,15 +239,21 @@ export async function ensureDesktopBuild(run, { skipDesktopBuild = false } = {})
   return { reused: false };
 }
 
-/** 登记并 spawn 子进程：输出 tee 到控制台与 artifacts/logs/<label>.log；只清理自己 spawn 的进程。 */
+/**
+ * 登记并 spawn 子进程：输出 tee 到控制台与 artifacts/logs/<label>.log；只清理自己 spawn 的
+ * 进程。`quiet: true` 时只落日志文件不回显——批量构建/测试类子进程（vite 生产构建动辄
+ * 300KB+ 输出）在编排层有 stdout 上限的环境（工作流门禁 rtk 262144 字节）会超限，regression
+ * suite 默认安静模式，控制台只留结论行。
+ */
 export function spawnCaptured(run, label, command, args, options = {}) {
   return new Promise((resolve) => {
+    const { quiet = false, ...spawnOptions } = options;
     const runtimeOptions = resolveSpawnRuntimeOptions(command, process.platform);
     const spawnArgs = runtimeOptions.shell ? quoteArgsForWindowsShell(args) : args;
     const logFile = path.join(run.dirs.logs, `${label}.log`);
     const stream = createWriteStream(logFile, { flags: "a" });
     const child = spawn(command, spawnArgs, {
-      ...options,
+      ...spawnOptions,
       stdio: ["ignore", "pipe", "pipe"],
       ...runtimeOptions,
     });
@@ -254,7 +266,7 @@ export function spawnCaptured(run, label, command, args, options = {}) {
       resolve({ ...payload, logFile });
     };
     const pump = (chunk) => {
-      process.stdout.write(chunk);
+      if (!quiet) process.stdout.write(chunk);
       stream.write(chunk);
     };
     const pumpErr = (chunk) => {

@@ -75,14 +75,19 @@ const SUITES = {
     requiresAllowLive: true,
   },
   platform: {
-    description: "跨平台路径/取消/限制（CT-10 按平台追加）",
+    description: "跨平台路径/取消/限制（E-25/§13：真实机器实测 + 证据 JSON）",
     kind: "node-test",
-    files: [],
+    files: [
+      // CT-10：两份实测文件在当前 OS 上运行并落证据；Windows/Linux 未在本仓库验证过，
+      // 其自主实施能力由 shared 登记表 fail closed（observe_only），不因 suite 通过而视为已验证。
+      "packages/services/test/continuous/platform.test.ts",
+      "apps/zcode-cli/packages/bootstrap/test/continuous/platform-runtime.test.ts",
+    ],
   },
   regression: {
-    description: "普通 Workflow/Automation/Goal/权限回归（CT-09/CT-10 接入）",
-    kind: "node-test",
-    files: [],
+    description: "兼容回归（E-26 普通功能/E-27 关闭回滚/E-28 生产测试桥；CT-10）",
+    kind: "script",
+    entry: "packages/desktop/test/continuous/regression.test.mjs",
   },
 };
 

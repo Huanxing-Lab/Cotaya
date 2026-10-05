@@ -251,7 +251,7 @@ test("E-28 生产测试桥关闭（双重条件）", async (t) => {
       ],
       evidence: evidence.list(),
       failureReason:
-        "无 VITE_ZCODE_E2E_STORE_BRIDGE 的普通 production build 半边未执行（需第二份 renderer 构建，归 platform/regression suite）",
+        "无 VITE_ZCODE_E2E_STORE_BRIDGE 的普通 production build 半边不在本 suite 执行（需第二份 renderer 构建；CT-10 起由 regression suite 真实执行并出证）",
     });
     t.skip("blocked: production（无 bridge flag）build 半边待 platform suite");
   } finally {

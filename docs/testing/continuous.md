@@ -13,21 +13,21 @@
 
 已经核对的入口：
 
-| 入口                                                | 当前状态                                    | 用途                                                      |
-| --------------------------------------------------- | ------------------------------------------- | --------------------------------------------------------- |
-| `pnpm typecheck`                                    | 已有                                        | 根 workspace TS 项目，未覆盖全部 CLI                      |
-| `pnpm lint`、`pnpm fmt:check`                       | 已有                                        | 根 lint/格式；旧失败需单独记录                            |
-| `pnpm architecture:check --changed`                 | 已有                                        | 变更模块边界                                              |
-| `pnpm verify:pre-push`                              | 已有                                        | lint 和 architecture，不包含全部测试                      |
-| `pnpm --dir apps/zcode-cli typecheck`、`lint`       | 已有                                        | CLI 子 workspace                                          |
-| `pnpm --dir apps/zcode-cli/packages/bootstrap test` | 已有                                        | bootstrap 的 tsx/Node test                                |
-| `packages/services/test/*.test.ts`                  | 已有                                        | Node test，但 services package 没有统一 test script       |
-| `packages/ui/test/*.test.ts`                        | 已有                                        | Node test，但 UI package 没有统一 test script             |
-| desktop 的 `playwright-core`                        | 已有依赖                                    | 可用于 Electron/浏览器控制，不等于已有 E2E runner         |
-| `packages/shared/src/e2e-test-bridge.ts`            | 已有                                        | 专用 build flag + run ID；不能仅凭 test 环境扩大权限      |
-| `packages/desktop/src/main/e2eCoverage.ts`          | 已有                                        | coverage 支持，不等于行为覆盖                             |
-| `scripts/test-continuous.mjs`                       | 已有（CT-00；CT-09 接入 script suite 契约） | suite 编排、报告、严格退出码                              |
-| `packages/desktop/test/continuous/*`                | 已有（CT-09）                               | runner/fixtures/evidence、Electron、手机、live 和故障测试 |
+| 入口                                                | 当前状态                                                         | 用途                                                     |
+| --------------------------------------------------- | ---------------------------------------------------------------- | -------------------------------------------------------- |
+| `pnpm typecheck`                                    | 已有                                                             | 根 workspace TS 项目，未覆盖全部 CLI                     |
+| `pnpm lint`、`pnpm fmt:check`                       | 已有                                                             | 根 lint/格式；旧失败需单独记录                           |
+| `pnpm architecture:check --changed`                 | 已有                                                             | 变更模块边界                                             |
+| `pnpm verify:pre-push`                              | 已有                                                             | lint 和 architecture，不包含全部测试                     |
+| `pnpm --dir apps/zcode-cli typecheck`、`lint`       | 已有                                                             | CLI 子 workspace                                         |
+| `pnpm --dir apps/zcode-cli/packages/bootstrap test` | 已有                                                             | bootstrap 的 tsx/Node test                               |
+| `packages/services/test/*.test.ts`                  | 已有                                                             | Node test，但 services package 没有统一 test script      |
+| `packages/ui/test/*.test.ts`                        | 已有                                                             | Node test，但 UI package 没有统一 test script            |
+| desktop 的 `playwright-core`                        | 已有依赖                                                         | 可用于 Electron/浏览器控制，不等于已有 E2E runner        |
+| `packages/shared/src/e2e-test-bridge.ts`            | 已有                                                             | 专用 build flag + run ID；不能仅凭 test 环境扩大权限     |
+| `packages/desktop/src/main/e2eCoverage.ts`          | 已有                                                             | coverage 支持，不等于行为覆盖                            |
+| `scripts/test-continuous.mjs`                       | 已有（CT-00；CT-09 script 契约；CT-10 platform/regression 接入） | suite 编排、报告、严格退出码                             |
+| `packages/desktop/test/continuous/*`                | 已有（CT-09；CT-10 增 regression 入口）                          | runner/fixtures/evidence、Electron、手机、live、回归测试 |
 
 不使用假定的根 `pnpm test`、`pnpm test:e2e` 或未安装的 `@playwright/test`。测试代码沿用 Node test；TypeScript 使用已有 tsx；Electron 使用 desktop 现有 playwright-core。
 
@@ -180,7 +180,7 @@ rtk proxy node scripts/test-continuous.mjs --suite live --allow-live
 rtk proxy node scripts/test-continuous.mjs --suite platform
 ```
 
-macOS/Windows/Linux 分别记录。平台无法可靠限制文件/命令时验证其观察模式和自主执行拒绝，不能标该平台自主写入通过。
+macOS/Windows/Linux 分别记录。平台无法可靠限制文件/命令时验证其观察模式和自主执行拒绝，不能标该平台自主写入通过。CT-10 起 platform suite 在两份实测文件（services 存储/工作区面 + bootstrap 执行策略/进程树面）于当前 OS 真实执行并把证据 JSON 写入 `os.tmpdir()/continuous-ct10-*`（路径打印到 stdout）；某平台从未运行过该 suite 时，其自主执行能力由 shared 登记表 fail closed（observe_only），登记追加必须随附该平台证据（`docs/release/continuous.md` 逐平台证据表）。
 
 ### 步骤 G：回归、汇总与发布
 
@@ -189,6 +189,8 @@ rtk proxy node scripts/test-continuous.mjs --suite regression
 rtk proxy node scripts/test-continuous.mjs --suite all
 rtk proxy pnpm verify:pre-push
 ```
+
+CT-10 起 regression suite 入口存在（`packages/desktop/test/continuous/regression.test.mjs`，普通 production build 即无 bridge flag 构建）：E-26（bootstrap 既有测试真实重跑 + 权限 mode 枚举 canary + Continuous 不引入并行 Goal 链的 grep 事实）、E-27（production build 默认关闭探针 + recovery 停止链重跑 + 回滚顺序文档在场）、E-28（production build 测试桥不可用 + 测试符号不进产物 bundle）。UI 级普通 Workflow Run 回归与手机 replayable 链路不由 regression 声称（归 e2e/mobile，其 blocked 状态见各自 artifacts/results.json）。
 
 all = unit/integration/recovery/e2e/mobile/platform/regression，当前机器不能运行的 OS 单独标 unavailable，不伪造结果。多 OS 发布汇总合并各自结果。
 

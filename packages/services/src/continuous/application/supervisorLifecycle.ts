@@ -9,7 +9,7 @@
 // （SupervisedCycleOutcome 类型也因此住在这里，避免环）。
 
 import { createHash, randomUUID } from "node:crypto";
-import type { ContinuousErrorCode } from "@zcode/shared";
+import type { ContinuousErrorCode, ContinuousPlatformExecutionMode } from "@zcode/shared";
 import type { Cycle, Program } from "../domain/types.js";
 import { isTerminalCycleStatus } from "../domain/types.js";
 import { selectCandidates } from "../domain/candidatePolicy.js";
@@ -45,6 +45,22 @@ export class ContinuousSupervisorError extends Error {
     super(message);
     this.name = "ContinuousSupervisorError";
   }
+}
+
+/**
+ * 平台能力门（CT-10，规格 §13 固定能力规则）：observe_only 平台只提供观察，不开放自动
+ * 实施。supervisor 三个启动/恢复入口在任何 workspace/lease/提交动作之前调用——拒绝无
+ * 文件与执行副作用（E-24）；停止链刻意不设此门（任何平台都必须能停止在飞执行）。
+ */
+export function requireAutonomousPlatformExecution(
+  mode: ContinuousPlatformExecutionMode,
+  entry: string,
+): void {
+  if (mode !== "observe_only") return;
+  throw new ContinuousSupervisorError(
+    "platform_execution_not_supported",
+    `当前平台未验证文件/命令限制能力，仅提供观察，不开放自主实施（${entry} 拒绝；规格 §13）`,
+  );
 }
 
 /** 生命周期操作需要的依赖子集（supervisor 交进来；测试可独立注入）。 */

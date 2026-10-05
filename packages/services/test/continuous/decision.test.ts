@@ -210,6 +210,8 @@ function makeSupervisorDeps(
       },
     },
     templateSource,
+    // CT-10：本文件固定 autonomous 平台（observe_only 拒绝语义在 platform suite 验证）。
+    platformExecutionMode: "autonomous",
     pollIntervalMs: 1,
   };
 }

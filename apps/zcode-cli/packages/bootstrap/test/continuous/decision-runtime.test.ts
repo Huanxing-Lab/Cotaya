@@ -126,6 +126,8 @@ test("E-05 escalate → 持久化输入先发、候选写入许可撤销、结�
     activeCandidate: active,
     pathStyle: "posix" as const,
     caseInsensitiveFs: false,
+    // CT-10：决策撤销语义在 autonomous 平台验证（observe_only 在 platform suite）。
+    platformExecutionMode: "autonomous" as const,
   });
   // 授权期内：候选路径内的写入放行。
   assert.equal(

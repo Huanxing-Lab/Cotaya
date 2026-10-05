@@ -21,6 +21,8 @@ import {
   continuousScopePolicySchema,
   continuousTemplateRefSchema,
 } from "./continuous-ui-protocol.js";
+// 平台能力评估（CT-10，规格 §13 固定能力规则）：capability 结果的可选 platform 字段。
+import { continuousPlatformExecutionSchema } from "./continuous-platform-protocol.js";
 
 const nonEmptyString = z.string().min(1);
 const idString = z.string().min(1);
@@ -38,6 +40,13 @@ export const continuousCapabilityResultSchema = z
     capability: z.literal(CONTINUOUS_MANAGED_CYCLE_CAPABILITY),
     /** 协议小版本；向后兼容的 additive 扩展才允许递增。 */
     version: z.number().int().nonnegative(),
+    /**
+     * 平台执行模式（CT-10 additive，规格 §13）：Host 装配时经
+     * assessContinuousPlatformExecution(process) 评估后携带；observe_only 平台 UI 明确
+     * 解释「只提供观察、不开放自动实施」。缺席 = 旧能力形状（autonomous 语义由 §13 的
+     * supervisor 启动门与执行策略守卫，不依赖本字段在场）。
+     */
+    platform: continuousPlatformExecutionSchema.optional(),
   })
   .superRefine((result, ctx) => {
     if (!result.supported && result.version > 0) {
@@ -235,6 +244,9 @@ export type ContinuousResolveContinuationParams = z.infer<
 //   version_conflict   —— resolve/dismiss/继续确认的旧 version 或异答重放拒绝；
 //   program_not_runnable —— paused/failed/completed Program 的启动/恢复类命令拒绝；
 //   open_cycle_exists  —— 同 Program 已有未结束 Cycle（幂等竞态吸收后的明确回执）。
+// CT-10 起 additive 追加（规格 §13 平台能力固定规则）：
+//   platform_execution_not_supported —— 未验证（observe_only）平台的自主实施启动/恢复拒绝；
+//   观察读面（snapshot/programDetail/队列/历史）不受影响，UI 经 capability.platform 解释。
 export const CONTINUOUS_ERROR_CODES = [
   "capability_missing",
   "authorization_stale",
@@ -250,6 +262,7 @@ export const CONTINUOUS_ERROR_CODES = [
   "version_conflict",
   "program_not_runnable",
   "open_cycle_exists",
+  "platform_execution_not_supported",
 ] as const;
 export type ContinuousErrorCode = (typeof CONTINUOUS_ERROR_CODES)[number];
 
@@ -286,3 +299,8 @@ export * from "./continuous-report-protocol.js";
 // 移动不是复制），三个 UI 命令（templates/programDetail/resolveContinuation）的结果与
 // 视图 schema 也在那边。同样从这里再导出，公开路径保持 continuous-protocol 一个。
 export * from "./continuous-ui-protocol.js";
+
+// ── 平台能力协议（CT-10）──
+// 已验证平台登记表与评估函数放 continuous-platform-protocol.ts（规格 §13 固定能力规则的
+// 单一实现；Host 装配与 CLI 执行策略共用）。同样从这里再导出，公开路径不变。
+export * from "./continuous-platform-protocol.js";

@@ -7,7 +7,7 @@
 // yolo 等权限 mode 不进入本模块：Continuous 限制独立于普通权限模式，不能被其绕过。
 
 import { posix, win32 } from "node:path";
-import type { ContinuousScopePolicy } from "@zcode/shared";
+import type { ContinuousPlatformExecutionMode, ContinuousScopePolicy } from "@zcode/shared";
 import { continuousProtectedPathReason } from "./continuous-protected-paths.js";
 
 export type ContinuousActorRole = "observer" | "builder" | "reviewer";
@@ -35,6 +35,14 @@ export interface ContinuousExecutionPolicyConfig {
   /** 路径风格与文件系统大小写策略：win32 恒不敏感；darwin 默认不敏感（APFS）。 */
   pathStyle: "posix" | "win32";
   caseInsensitiveFs: boolean;
+  /**
+   * 平台执行模式（CT-10，规格 §13 固定能力规则）：observe_only 平台只提供观察——
+   * 一切写入/删除/声明命令/本地提交在操作前拒绝（platform_read_only），读与观察放行。
+   * 必填：装配者必须经 shared assessContinuousPlatformExecution 显式回答平台能力，
+   * 不允许缺省视为 autonomous（fail closed）。supervisor 启动门是第一层拒绝；
+   * 本层是工具执行点的纵深防御，两层共用同一评估函数的输出。
+   */
+  platformExecutionMode: ContinuousPlatformExecutionMode;
 }
 
 export type ContinuousDenyReason =
@@ -44,6 +52,7 @@ export type ContinuousDenyReason =
   | "original_workspace_out_of_scope"
   | "symlink_escape"
   | "role_read_only"
+  | "platform_read_only"
   | "not_in_allowed_paths"
   | "forbidden_path"
   | "protected_path"
@@ -199,6 +208,13 @@ export function checkContinuousFilePath(
     return denied("role_read_only");
   }
 
+  // 平台能力（CT-10，规格 §13）：observe_only 平台连 builder 也只有读——观察对象是
+  // worktree 的当前状态，不开放任何自动实施写入。放在角色检查之后：先给出更具体的
+  // 角色拒绝，再给平台拒绝；两者都不泄漏路径内容之外的任何信息。
+  if (input.operation !== "read" && config.platformExecutionMode === "observe_only") {
+    return denied("platform_read_only");
+  }
+
   const inAllowed = config.scope.allowedPaths.some((prefix) =>
     segmentPrefixMatch(config, prefix, repoRelative),
   );
@@ -316,6 +332,10 @@ export function checkContinuousShellCommand(
   if (input.role !== "builder") {
     return denied("role_read_only");
   }
+  // 平台能力（CT-10，规格 §13）：observe_only 平台不开放命令执行（含声明的测试命令）。
+  if (config.platformExecutionMode === "observe_only") {
+    return denied("platform_read_only");
+  }
   const declared = config.declaredTestCommands.some(
     (command) =>
       command.argv.length === input.argv.length &&
@@ -350,7 +370,7 @@ export interface ContinuousGitOperationCheckInput {
 
 /** Git 操作检查：本地 commit 是唯一允许的变更操作；push/merge/deploy/migration 全禁。 */
 export function checkContinuousGitOperation(
-  _config: ContinuousExecutionPolicyConfig,
+  config: ContinuousExecutionPolicyConfig,
   input: ContinuousGitOperationCheckInput,
 ): ContinuousPolicyDecision {
   if (input.operation !== "commit") {
@@ -358,6 +378,11 @@ export function checkContinuousGitOperation(
   }
   if (input.role !== "builder") {
     return denied("role_read_only");
+  }
+  // 平台能力（CT-10，规格 §13）：observe_only 平台连验证通过的本地提交也不做——
+  // 不开放自动实施意味着不产生本功能管理的交付物（分支上没有新提交）。
+  if (config.platformExecutionMode === "observe_only") {
+    return denied("platform_read_only");
   }
   const verification = input.verification;
   if (

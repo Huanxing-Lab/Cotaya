@@ -231,6 +231,8 @@ function makeStack(
     workspace: fakeWorkspace,
     clock,
     templateSource,
+    // CT-10：恢复测试固定 autonomous 平台（observe_only 平台门在 platform suite 验证）。
+    platformExecutionMode: "autonomous",
     pollIntervalMs: 1,
     ...(options.ownerId === undefined ? {} : { ownerId: options.ownerId }),
   };
@@ -854,6 +856,8 @@ test("R-10/退避: 执行面暂不可用——30s/120s 自动重试后恢复成�
     workspace: fakeWorkspace,
     clock,
     templateSource,
+    // CT-10：恢复测试固定 autonomous 平台（observe_only 平台门在 platform suite 验证）。
+    platformExecutionMode: "autonomous",
     pollIntervalMs: 1,
   });
   const recovery = new ContinuousRecoveryService({
@@ -915,6 +919,8 @@ test("R-10/退避: 连续临时失败超限——暂停询问，不无限自动�
     workspace: fakeWorkspace,
     clock,
     templateSource,
+    // CT-10：恢复测试固定 autonomous 平台（observe_only 平台门在 platform suite 验证）。
+    platformExecutionMode: "autonomous",
     pollIntervalMs: 1,
   });
   const recovery = new ContinuousRecoveryService({
