@@ -4,6 +4,13 @@
 
 import { randomUUID } from "node:crypto";
 import type { ContinuationRequestReason, Cycle, CycleResult, Program } from "../domain/types.js";
+import type { ContinuousBudgetDenial } from "@zcode/shared/continuous-protocol";
+import {
+  continuationFactsOf,
+  continuationTriggersOf,
+  mergeContinuationTriggers,
+  type ContinuationFacts,
+} from "./continuationFacts.js";
 import type {
   ContinuousClockPort,
   ContinuousExecutionPort,
@@ -37,54 +44,86 @@ function referenceOf(cycle: Cycle): ExecutionReference {
 /**
  * CT-12 CLI 拒绝通知路径的挂起：与 suspendCycleForBudget 同一条落库链（先冻结执行侧准许、
  * 同轮唯一 pending 确认合并、program paused），但原因来自 CLI 侧准入所有者的结构化通知
- * （budget_denied/admission_closed/change_limit——§2.1 修复边界「CLI 通知 Host 保存暂停和
- * 继续确认」），不是 Run 终态的文本映射。重复通知幂等（existing pending 复用）。
+ * （budget_denied/admission_closed/change_limit/retry_limit——§2.1 修复边界「CLI 通知 Host
+ * 保存暂停和继续确认」），不是 Run 终态的文本映射。重复通知幂等（existing pending 复用）；
+ * 多个 actor 同时超限并发通知合并进同一条 pending（reasons 追加、观测更新，不重复弹窗，
+ * §5/CT-13——部分唯一索引兜底并发插入，冲突后重读复用）。
  */
 export async function suspendCycleForAgentNotification(
   deps: SuspendWriteDeps,
   input: {
     cycle: Cycle;
     program: Program;
-    code: "budget_denied" | "admission_closed" | "change_limit";
+    code: "budget_denied" | "admission_closed" | "change_limit" | "retry_limit";
     limitKind?: "file_limit" | "line_limit";
+    /** budget_denied 的结构化观测（wire denial 原样；CT-13 真实 limitKind/限额/需求）。 */
+    denial?: ContinuousBudgetDenial;
     message: string;
   },
 ): Promise<string> {
-  const { cycle, program, code, limitKind, message } = input;
-  const reason: ContinuationRequestReason = code === "change_limit" ? "change_limit" : "cost_limit";
+  const { cycle, program, code, limitKind, denial, message } = input;
+  const facts: ContinuationFacts = continuationFactsOf(code, limitKind, denial, message, program);
   const now = deps.clock.now();
   await deps.execution.suspendAtSafeBoundary(referenceOf(cycle), `${code}:${message}`);
-  const existing = await deps.repository.getPendingContinuationRequest(cycle.id);
-  let requestId = existing?.id;
-  if (requestId === undefined) {
-    requestId = randomUUID();
-    await deps.repository.insertContinuationRequest({
-      id: requestId,
-      programId: program.id,
-      cycleId: cycle.id,
-      reason,
-      limitKind: code === "change_limit" ? "change" : "cost",
-      reasons: [reason],
-      observedUsage: { code, ...(limitKind === undefined ? {} : { limitKind }) },
-      currentLimit:
-        code === "change_limit"
-          ? {
-              perCycleMaxFiles: program.budget.perCycleMaxFiles,
-              perCycleMaxChangedLines: program.budget.perCycleMaxChangedLines,
-            }
-          : { perCycleCostUsdMicros: program.budget.perCycleCostUsdMicros },
-      recommendedExtension:
-        code === "change_limit"
-          ? {
-              maxFiles: program.budget.perCycleMaxFiles,
-              maxChangedLines: program.budget.perCycleMaxChangedLines,
-            }
-          : { costMicros: program.budget.perCycleCostUsdMicros },
-      version: 1,
-      status: "pending",
-      createdAt: now,
-    });
+  let existing = await deps.repository.getPendingContinuationRequest(cycle.id);
+  if (existing === null) {
+    const requestId = randomUUID();
+    try {
+      await deps.repository.insertContinuationRequest({
+        id: requestId,
+        programId: program.id,
+        cycleId: cycle.id,
+        reason: facts.reason,
+        limitKind: facts.limitKind,
+        reasons: [facts.reason],
+        observedUsage: { triggers: [facts.trigger] },
+        currentLimit: facts.currentLimit,
+        recommendedExtension: facts.recommendedExtension,
+        version: 1,
+        status: "pending",
+        createdAt: now,
+      });
+    } catch (error) {
+      // 并发插入撞「同轮唯一 pending」部分唯一索引（多个 actor 同时超限）：重读复用既有
+      // pending 合并，不把第二个 actor 的挂起通知变成失败（CT-13 合并确认）。
+      existing = await deps.repository.getPendingContinuationRequest(cycle.id);
+      if (existing === null) throw error;
+    }
   }
+  if (existing !== null) {
+    // 合并（CT-13 多上限触发）：reasons 并集；观测按触发累积（同 limitKind 的重复通知以
+    // 最新数字替换）；currentLimit/recommendedExtension 按字段合并——费用与 token 上限可以
+    // 同时命中，合并后的确认必须同时携带两侧事实，不能后到者覆盖先到者。
+    const reasons = [...existing.reasons];
+    if (!reasons.includes(facts.reason)) reasons.push(facts.reason);
+    const triggers = mergeContinuationTriggers(existing.observedUsage, facts.trigger);
+    const currentLimit = {
+      ...((existing.currentLimit as Record<string, unknown> | null) ?? {}),
+      ...(facts.currentLimit as Record<string, unknown>),
+    };
+    const recommendedExtension = {
+      ...((existing.recommendedExtension as Record<string, unknown> | null) ?? {}),
+      ...(facts.recommendedExtension as Record<string, unknown>),
+    };
+    const unchanged =
+      reasons.length === existing.reasons.length &&
+      JSON.stringify(triggers) === JSON.stringify(continuationTriggersOf(existing.observedUsage)) &&
+      JSON.stringify(currentLimit) === JSON.stringify(existing.currentLimit) &&
+      JSON.stringify(recommendedExtension) === JSON.stringify(existing.recommendedExtension);
+    if (!unchanged) {
+      await deps.repository.saveContinuationRequest({
+        ...existing,
+        reason: facts.reason,
+        reasons,
+        observedUsage: { triggers },
+        currentLimit,
+        recommendedExtension,
+        version: existing.version + 1,
+      });
+    }
+  }
+  const requestId = (existing ?? (await deps.repository.getPendingContinuationRequest(cycle.id)))!
+    .id;
   if (cycle.status !== "suspended") {
     await deps.repository.saveCycle({
       ...cycle,
@@ -214,7 +253,14 @@ export function buildCycleResult(
  */
 export function budgetSuspensionReason(state: ExecutionState): "cost_limit" | "retry_limit" | null {
   const text = `${state.failureCode ?? ""} ${state.stopReason ?? ""}`;
-  const budgetCodes = ["budget_denied", "admission_closed", "ledger_unreachable"];
+  // CT-13：pricing_missing 同为「需关注」的结构化原因——挂起询问用户（修价格配置），
+  // 不计入任务失败（连续失败 3 轮会让 Program failed，掩盖配置问题）。
+  const budgetCodes = [
+    "budget_denied",
+    "admission_closed",
+    "ledger_unreachable",
+    "pricing_missing",
+  ];
   if (budgetCodes.some((code) => text.includes(code))) return "cost_limit";
   if (text.includes("retry_limit")) return "retry_limit";
   return null;

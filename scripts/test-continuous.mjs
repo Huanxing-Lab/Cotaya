@@ -64,6 +64,10 @@ const SUITES = {
       //（冻结事实→三类端口、载荷校验、能力协商、预算拒绝等待）。
       "packages/services/test/continuous/assembly.test.ts",
       "apps/zcode-cli/packages/bootstrap/test/continuous/registration.test.ts",
+      // CT-13：预算与 AskUserQuestion 的真实通信（预留传输校验、拒绝观测三分、合并确认、
+      // retry_limit 继续授权、跨日不自行扩额、旧 errored 轮结束/新开、CLI 闸门与 wire 透传）。
+      "packages/services/test/continuous/ct13-budget-communication.test.ts",
+      "apps/zcode-cli/packages/bootstrap/test/continuous/ct13-budget-communication.test.ts",
     ],
   },
   recovery: {

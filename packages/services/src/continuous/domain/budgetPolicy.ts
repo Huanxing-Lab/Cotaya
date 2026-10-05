@@ -6,12 +6,19 @@
 import type { ContinuousBudgetPolicy } from "@zcode/shared";
 import type { ContinuationGrant } from "./types.js";
 
-/** 账本汇总（一段窗口/一个 Cycle 内）：已结算按实际值、未结算（reserved/unknown）按预留值。 */
+/**
+ * 账本汇总（一段窗口/一个 Cycle 内）：已结算按实际值、未结算（reserved/unknown）按预留值。
+ * CT-13 起 unknown 单列（拒绝观测的「已用/预留/unknown 三分」）；reserved 部分 =
+ * unsettled - unknown，不另设第二份合计事实。
+ */
 export interface UsageLedgerSummary {
   settledCostMicros: number;
   unsettledCostMicros: number;
   settledTokens: number;
   unsettledTokens: number;
+  /** unknown 行按预留值计入的部分（不清零、不删除，§9）。 */
+  unknownCostMicros: number;
+  unknownTokens: number;
 }
 
 /** 准入校验用的有效上限（已并入本轮 grant 增量；dailyCostUsdMicros null = Unlimited）。 */
@@ -24,13 +31,16 @@ export interface BudgetAdmissionLimits {
 export type BudgetAdmissionDenialLimit =
   | "daily_cost"
   | "cycle_cost"
-  | "cycle_token"
+  | "cycle_tokens"
   | "unsafe_integer";
 
 /** 拒绝时的观测快照（AskUserQuestion 的 observedUsage 事实来源）。 */
 export interface BudgetAdmissionObservation {
   cycle: UsageLedgerSummary;
   daily?: UsageLedgerSummary;
+  /** 拒绝时刻的有效上限（含 grant 增量；CT-13：拒绝观测必须携带当前限额）。 */
+  limits: BudgetAdmissionLimits;
+  /** 本请求需求（预留值）。 */
   reservedCostMicros: number;
   reservedTokens: number;
 }
@@ -58,6 +68,7 @@ export function evaluateBudgetAdmission(input: {
   const observed: BudgetAdmissionObservation = {
     cycle: cycleSummary,
     ...(dailySummary === undefined ? {} : { daily: dailySummary }),
+    limits,
     reservedCostMicros,
     reservedTokens,
   };
@@ -87,7 +98,7 @@ export function evaluateBudgetAdmission(input: {
   if (!Number.isSafeInteger(cycleCostTotal)) return deny("unsafe_integer");
   const cycleTokenTotal =
     cycleSummary.settledTokens + cycleSummary.unsettledTokens + reservedTokens;
-  if (cycleTokenTotal > limits.cycleTokens) return deny("cycle_token");
+  if (cycleTokenTotal > limits.cycleTokens) return deny("cycle_tokens");
   if (!Number.isSafeInteger(cycleTokenTotal)) return deny("unsafe_integer");
   return { ok: true };
 }

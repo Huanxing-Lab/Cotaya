@@ -51,17 +51,39 @@ export type ContinuousModelBudgetRejection =
   | "retry_limit"
   | "pricing_missing"
   | "caps_invalid"
-  | "ledger_unreachable";
+  | "ledger_unreachable"
+  | "lease_lost";
+
+/**
+ * budget_denied 附带的结构化观测（wire continuousBudgetDenial 的窄类型）：真实 limitKind、
+ * 已用/预留/unknown 三分、当前限额与本请求需求——暂停通知把它原样带给 Host 组装
+ * AskUserQuestion（CT-13：拒绝不能只是一段错误文字）。
+ */
+export interface ContinuousModelBudgetDenial {
+  /** 与 wire continuousBudgetDenial.limitKind 同一词表（snake_case，不二次翻译）。 */
+  limitKind: "cycle_cost" | "cycle_tokens" | "daily_cost" | "unsafe_integer";
+  cycleSummary: Record<string, number>;
+  dailySummary?: Record<string, number>;
+  currentLimit: Record<string, number | null>;
+  request: Record<string, number>;
+}
 
 export class ContinuousModelBudgetError extends Error {
   readonly code: ContinuousModelBudgetRejection;
   /** 幂等重试是否安全：全部否——拒绝意味着需要用户确认或修正，不是可重试瞬态。 */
   readonly retryable = false;
+  /** budget_denied 的结构化观测（Host 侧账本的真实数字；CT-13）。 */
+  readonly denial?: ContinuousModelBudgetDenial;
 
-  constructor(code: ContinuousModelBudgetRejection, message: string) {
+  constructor(
+    code: ContinuousModelBudgetRejection,
+    message: string,
+    options?: { denial?: ContinuousModelBudgetDenial },
+  ) {
     super(message);
     this.name = "ContinuousModelBudgetError";
     this.code = code;
+    this.denial = options?.denial;
   }
 }
 
@@ -85,8 +107,15 @@ export interface ContinuousModelBudgetLedgerPort {
     | { ok: true; requestKey: string }
     | {
         ok: false;
-        code: "budget_denied" | "admission_closed" | "ledger_unreachable";
+        code:
+          | "budget_denied"
+          | "admission_closed"
+          | "ledger_unreachable"
+          | "lease_lost"
+          | "pricing_missing";
         message: string;
+        /** budget_denied 的结构化观测（Host 账本真实数字；CT-13）。 */
+        denial?: ContinuousModelBudgetDenial;
       }
   >;
   settle(request: {
@@ -195,12 +224,25 @@ export function createContinuousModelBudgetGate(
             if (existing) {
               existing.attempts += 1;
               if (existing.attempts > deps.maxAttemptsPerRequest) {
-                throw new ContinuousModelBudgetError(
+                // CT-13：单请求尝试上限有明确继续授权语义——装配了 suspension 时先冻结并
+                // 等待用户（释放并发座位、不再触 inner/账本），授权后同链获得新的尝试预算
+                // 继续；未装配（测试替身路径）保持结构化拒绝。
+                const error = new ContinuousModelBudgetError(
                   "retry_limit",
                   `continuous model request exceeded ${deps.maxAttemptsPerRequest} attempts for cycle ${deps.cycleId}`,
                 );
+                if (!deps.suspension) throw error;
+                await waitForContinuousContinuation(
+                  () => deps.suspension!.waitForContinuation(error, signal),
+                  signal,
+                );
+                // 用户显式继续 = 本链的新尝试预算（每次扩额都需要用户确认并经 Host 落库，
+                // 不存在无限自动重试；E-10）。
+                existing.attempts = 1;
+                chain.attempts = 1;
+              } else {
+                chain.attempts = existing.attempts;
               }
-              chain.attempts = existing.attempts;
             } else {
               chains.set(signal, chain);
             }
@@ -239,8 +281,16 @@ export function createContinuousModelBudgetGate(
                 pricingVersion: deps.pricing.pricingVersion,
                 ...reserved,
               });
-              if (!admission.ok)
+              if (!admission.ok) {
+                // budget_denied 携带 Host 账本的真实观测（limitKind/已用/预留/unknown/
+                // 当前限额/本请求需求）——暂停通知据此组装 AskUserQuestion（CT-13）。
+                if (admission.code === "budget_denied" && admission.denial !== undefined) {
+                  throw new ContinuousModelBudgetError(admission.code, admission.message, {
+                    denial: admission.denial,
+                  });
+                }
                 throw new ContinuousModelBudgetError(admission.code, admission.message);
+              }
               return makeBudgetTicket(deps, requestKey, reserved, innerTicket);
             } catch (error) {
               innerTicket?.release();

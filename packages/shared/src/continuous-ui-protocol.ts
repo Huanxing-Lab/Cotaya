@@ -209,6 +209,12 @@ export const continuousCycleViewSchema = z.strictObject({
   summary: z.string().nullable(),
   changedFiles: z.array(z.string()),
   commits: z.array(z.string()),
+  /**
+   * CT-13 additive：开放 Cycle 的执行可恢复性。false = Run 已 errored/不可恢复（旧版预算
+   * 错误的挂起轮）——UI 显示不可恢复并提供「结束旧轮、显式新开轮」；true = 可继续；
+   * null = 不适用或执行面不可达（读面不编造事实）。
+   */
+  executionRecoverable: z.boolean().nullable(),
 });
 export type ContinuousCycleView = z.infer<typeof continuousCycleViewSchema>;
 

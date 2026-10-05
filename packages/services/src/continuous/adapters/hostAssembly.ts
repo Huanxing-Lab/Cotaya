@@ -157,6 +157,8 @@ export async function assembleContinuousHost(
           admission,
           decisions,
           execution: wireExecution,
+          // 价格版本校验的事实源（CT-13：CLI 登记快照 ≠ 当前快照 → pricing_missing fail closed）。
+          pricing: deps.pricing,
           ...(deps.logger === undefined ? {} : { logger: deps.logger }),
         },
         method,

@@ -52,7 +52,10 @@ export function programViewOf(program: Program): ContinuousProgramView {
   };
 }
 
-export function cycleViewOf(cycle: Cycle): ContinuousCycleView {
+export function cycleViewOf(
+  cycle: Cycle,
+  executionRecoverable: boolean | null = null,
+): ContinuousCycleView {
   return {
     cycleId: cycle.id,
     sequence: cycle.sequence,
@@ -78,6 +81,8 @@ export function cycleViewOf(cycle: Cycle): ContinuousCycleView {
     summary: cycle.result?.summary ?? null,
     changedFiles: cycle.result?.changedFiles ?? [],
     commits: cycle.result?.commits ?? [],
+    // CT-13：默认 null（历史轮/执行面不可达不编造）；开放轮由详情组装填真实执行状态。
+    executionRecoverable,
   };
 }
 
@@ -161,6 +166,8 @@ export function usageViewOf(summary: UsageLedgerSummary): ContinuousUsageSummary
 export function assembleProgramDetail(input: {
   program: Program;
   currentCycle: Cycle | null;
+  /** 开放轮的执行可恢复性（CT-13：errored Run 的预算轮显示不可恢复；null=不可达/不适用）。 */
+  currentCycleExecutionRecoverable?: boolean | null;
   recentCycles: Cycle[];
   candidates: Candidate[];
   decisions: Decision[];
@@ -178,8 +185,10 @@ export function assembleProgramDetail(input: {
 }): ContinuousProgramDetailResult {
   return {
     program: programViewOf(input.program),
-    currentCycle: input.currentCycle ? cycleViewOf(input.currentCycle) : null,
-    recentCycles: input.recentCycles.map(cycleViewOf),
+    currentCycle: input.currentCycle
+      ? cycleViewOf(input.currentCycle, input.currentCycleExecutionRecoverable ?? null)
+      : null,
+    recentCycles: input.recentCycles.map((cycle) => cycleViewOf(cycle)),
     candidates: input.candidates.map(candidateViewOf),
     decisions: input.decisions.map(decisionViewOf),
     continuationRequest: input.continuationRequest

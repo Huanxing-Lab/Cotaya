@@ -8,6 +8,32 @@ import type {
 } from "./ports.js";
 import { ContinuousSupervisorError } from "./supervisorLifecycle.js";
 
+/**
+ * 详情读面的执行状态窄缝（CT-13）：开放 Cycle 的执行可恢复性——errored/不可恢复 stopped
+ * Run 的预算轮据实显示「不可恢复，可结束旧轮后显式新开轮」（programDetail 投影消费）。
+ * 行缺失或执行面不可达返回 null：读面不编造事实、不因读失败阻塞整个详情。
+ */
+export async function inspectCycleExecutionOf(
+  deps: {
+    repository: Pick<ContinuousRepositoryPort, "getCycle">;
+    execution: Pick<ContinuousExecutionPort, "inspect">;
+  },
+  cycleId: string,
+): Promise<ExecutionState | null> {
+  const cycle = await deps.repository.getCycle(cycleId);
+  if (!cycle) return null;
+  try {
+    return await deps.execution.inspect({
+      cycleId: cycle.id,
+      executionSessionId: cycle.executionSessionId,
+      workflowRunId: cycle.workflowRunId,
+      traceId: cycle.traceId,
+    });
+  } catch {
+    return null;
+  }
+}
+
 export async function continueCycleExecution(
   deps: {
     repository: ContinuousRepositoryPort;

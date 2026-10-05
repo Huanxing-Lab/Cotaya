@@ -606,6 +606,43 @@ Host 侧装配与登记协议的固定规则（实施记录见 tickets/records/C
    services。CLI 侧回滚位 = 未登记的 run 被守卫拒绝（fail closed）；Host 侧回滚 = 不装配/
    停发命令（`enabled` 选项字段保留给测试替身）。
 
+### 2026-10-05：CT-13 预算与继续确认的真实通信边界
+
+账本 wire 与继续确认链的固定规则（实施记录见 tickets/records/CT-13.md；协议在 CT-12 的
+`continuous-registration-protocol` 上收紧，未登记的旧 CLI 按 schema 校验失败 →
+`ledger_unreachable` fail closed，不本地扩额）：
+
+1. **传输严格校验**：`ledger/reserve` 与 `budget/suspend` 携带 `leaseEpoch` 并核对 Cycle 行
+   当前执行权版本（不符 → 结构化 `lease_lost`，旧执行者不得预留或写暂停）；reserve 的
+   `workflowRunId` 必须等于 Cycle 行执行身份；`pricingVersion` 必须等于装配注入的当前价格
+   快照（不符 → `pricing_missing`，换价后必须重新登记）。`ledger/settle` 携带归属三元组并
+   核对 requestKey 所属行；旧 epoch 的晚到 usage 仍允许幂等收尾（E-19）。同 requestKey 同
+   事实的 reserve 重发幂等复用；不同事实或已结算 → 拒绝（一张票据不能背书两次 provider
+   调用）。
+2. **拒绝观测**：budget_denied 的 denial 携带真实 limitKind（`cycle_cost`/`cycle_tokens`/
+   `daily_cost`/`unsafe_integer`——领域与 wire 同一词表）、已用/预留/unknown 三分（成本与
+   token）、当前限额（并入 grant 增量后的有效值；日额度 null=Unlimited）与本请求需求；
+   领域 limitKind 与 wire 枚举曾不一致（`cycle_token` 投影打崩 CLI 解析、被误报成
+   `ledger_unreachable`），本次以回归钉死。
+3. **合并确认**：多 actor 同时超限的并发 `budget/suspend` 通知合并进同一条 pending
+   （部分唯一索引兜底并发插入，冲突重读复用）：reasons 并集、观测按 limitKind 去重累积成
+   `observedUsage.triggers`、currentLimit/recommendedExtension 按字段合并——费用与 token 上限
+   同时命中时两侧事实都在，后到者不覆盖先到者；reason/limitKind 由**真实**触发映射
+   （token 超限 → token_limit，不再是笼统 cost_limit）。
+4. **尝试上限的继续授权语义**：CLI 闸门在尝试超限时（装配了 suspension）先冻结并等待用户
+   （不占并发座位、不发请求），通知 Host 保存 reason=`retry_limit` 的继续确认；用户显式
+   继续后同一请求链获得新的尝试预算。每次扩额都经用户确认并落库，不存在无限自动重试。
+   `pricing_missing`/`ledger_unreachable`/`lease_lost` 是结构化需关注原因：不进入继续等待、
+   不自动重试；Run 因此 errored 时监督按挂起处理（pricing_missing 同入预算挂起词表，不计
+   连续失败）。
+5. **回答幂等**：同 version 同 kind **同载荷**（grant/配置）的重放 no-op；同 version 不同
+   grant/配置的「异答」按 `version_conflict` 拒绝——不能借旧 version 换更大的扩额；恢复已
+   成功（cycle 已 running）后的同回答重放按「已继续」回执，不再发第二次 resumeSuspended、
+   不重复扩额。
+6. **旧 errored 预算轮**：programDetail 的 currentCycle 增补 `executionRecoverable`（additive）
+   ——errored/不可恢复 stopped Run 的挂起轮显示不可恢复；用户经既有 `stopCurrentCycle`
+   结束旧轮（cancelled、账本与历史保留、lease 释放），显式 resumeProgram 后 runNow 新开轮。
+
 ### 2026-10-05：发布文档 §2.1 修复边界
 
 退出使用独立 `interrupt(ref, epoch)`：冻结准入、以 interrupted 原因取消引擎、等待工具收尾；不能只冻结后等待永不结束的预算调用。已经 suspended 的轮保留确认和暂停状态，但同样终止进程内执行。恢复和继续都先核对已登记的保护；Host 先保存 running，再解除 CLI 等待。

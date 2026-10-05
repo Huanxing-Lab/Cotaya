@@ -68,6 +68,34 @@ export class ContinuousBudgetAdmission implements RequestAdmissionPort {
   constructor(private readonly deps: ContinuousBudgetAdmissionDeps) {}
 
   async reserve(request: AdmissionRequest): Promise<AdmissionTicket> {
+    // 请求键幂等（CT-13「传输严格校验……请求键」）：传输层重发同一 requestKey 且预留事实
+    // 完全一致（同 Cycle/模型/价格版本/金额）→ 复用既有预留，不落第二行也不重复计额度；
+    // 事实不一致或已按不同生命周期推进（settled）→ 大声拒绝，不能让两次 provider 调用
+    // 挂在同一张票据上。
+    const existing = await this.deps.repository.getUsageRecord(request.requestKey);
+    if (existing) {
+      const identical =
+        existing.cycleId === request.cycleId &&
+        existing.provider === request.provider &&
+        existing.model === request.model &&
+        existing.pricingVersion === request.pricingVersion &&
+        existing.reservedCostMicros === request.reservedCostMicros &&
+        existing.reservedTokens === request.reservedTokens;
+      if (!identical) {
+        throw Object.assign(
+          new Error(`usage request_key 已按不同事实存在，拒绝重放: ${request.requestKey}`),
+          { kind: "duplicate_request_key" },
+        );
+      }
+      if (existing.state === "settled") {
+        // 已结算的票据不能再为新的 provider 调用背书：结构化拒绝（调用方按需关注处理）。
+        throw Object.assign(
+          new Error(`usage request_key 已结算，不能重复预留: ${request.requestKey}`),
+          { kind: "already_settled" },
+        );
+      }
+      return { requestKey: request.requestKey };
+    }
     const cycle = await this.deps.repository.getCycle(request.cycleId);
     if (!cycle)
       throw Object.assign(new Error(`cycle 不存在: ${request.cycleId}`), { kind: "not_found" });
@@ -109,6 +137,7 @@ export class ContinuousBudgetAdmission implements RequestAdmissionPort {
           ...(admission.denial.dailySummary === undefined
             ? {}
             : { daily: admission.denial.dailySummary }),
+          limits,
           reservedCostMicros: request.reservedCostMicros,
           reservedTokens: request.reservedTokens,
         },

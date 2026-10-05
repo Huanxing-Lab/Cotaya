@@ -157,12 +157,15 @@ interface UsageSumRow {
   unsettled_cost: number | null;
   settled_tokens: number | null;
   unsettled_tokens: number | null;
+  unknown_cost: number | null;
+  unknown_tokens: number | null;
 }
 
 /**
  * 账本汇总（规格 §9 计算式）：settled 行计 estimated/actual，reserved+unknown 行计预留。
  * program 范围经 cycle JOIN 过滤（日窗口是 Program 级事实）；窗口按 occurred_at（预留时
- * 持久化的发生时间）——晚到补结算不改行归属窗口。
+ * 持久化的发生时间）——晚到补结算不改行归属窗口。CT-13：unknown 部分单列（同一查询内
+ * 拆分，不引入第二份合计事实）。
  */
 export function summarizeUsageReady(
   db: ContinuousDatabaseSync,
@@ -193,7 +196,9 @@ export function summarizeUsageReady(
          SUM(CASE WHEN u.state = 'settled' THEN u.estimated_cost_micros ELSE 0 END) AS settled_cost,
          SUM(CASE WHEN u.state != 'settled' THEN u.reserved_cost_micros ELSE 0 END) AS unsettled_cost,
          SUM(CASE WHEN u.state = 'settled' THEN u.actual_tokens ELSE 0 END) AS settled_tokens,
-         SUM(CASE WHEN u.state != 'settled' THEN u.reserved_tokens ELSE 0 END) AS unsettled_tokens
+         SUM(CASE WHEN u.state != 'settled' THEN u.reserved_tokens ELSE 0 END) AS unsettled_tokens,
+         SUM(CASE WHEN u.state = 'unknown' THEN u.reserved_cost_micros ELSE 0 END) AS unknown_cost,
+         SUM(CASE WHEN u.state = 'unknown' THEN u.reserved_tokens ELSE 0 END) AS unknown_tokens
        FROM continuous_usage u
        JOIN continuous_cycle c ON c.id = u.cycle_id
        WHERE ${conditions.join(" AND ")}`,
@@ -204,6 +209,8 @@ export function summarizeUsageReady(
     unsettledCostMicros: row?.unsettled_cost ?? 0,
     settledTokens: row?.settled_tokens ?? 0,
     unsettledTokens: row?.unsettled_tokens ?? 0,
+    unknownCostMicros: row?.unknown_cost ?? 0,
+    unknownTokens: row?.unknown_tokens ?? 0,
   };
 }
 

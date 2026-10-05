@@ -207,7 +207,7 @@ test("U-04 单轮 token/费用上限独立生效；Unlimited 只取消日额度"
       await assert.rejects(
         tokenFixture.admission.reserve(reserveInput(tokenFixture, "req-t")),
         (error: unknown) =>
-          error instanceof ContinuousBudgetDeniedError && error.limitKind === "cycle_token",
+          error instanceof ContinuousBudgetDeniedError && error.limitKind === "cycle_tokens",
       );
     } finally {
       await tokenFixture.dispose();

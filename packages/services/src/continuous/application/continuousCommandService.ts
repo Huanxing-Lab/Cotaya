@@ -300,7 +300,7 @@ export class ContinuousCommandService implements IContinuousService, IContinuous
     // 日窗口按 Program 持久化时区统计（§9）：预留时发生时间决定归属窗口，这里只框边界。
     const now = this.deps.clock.now();
     const window = dayWindowFor(now, program.timeZone);
-    const [dailyUsage, cycleUsage] = await Promise.all([
+    const [dailyUsage, cycleUsage, executionState] = await Promise.all([
       this.deps.repository.summarizeUsage({
         programId: program.id,
         windowFromMs: window.startMs,
@@ -309,10 +309,20 @@ export class ContinuousCommandService implements IContinuousService, IContinuous
       currentCycle
         ? this.deps.repository.summarizeUsage({ programId: program.id, cycleId: currentCycle.id })
         : null,
+      // CT-13：开放轮的执行可恢复性（errored Run 的旧预算轮显示不可恢复，供「结束旧轮、
+      // 显式新开轮」入口）。执行面不可达 → null（不编造，也不阻塞详情）。
+      currentCycle ? this.deps.supervisor.inspectCycleExecution(currentCycle.id) : null,
     ]);
     return assembleProgramDetail({
       program,
       currentCycle,
+      currentCycleExecutionRecoverable:
+        executionState === null
+          ? null
+          : !(
+              executionState.status === "errored" ||
+              (executionState.status === "stopped" && !executionState.resumable)
+            ),
       recentCycles,
       candidates,
       decisions,

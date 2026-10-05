@@ -129,10 +129,26 @@ export class ContinuousContinuationService {
       });
     if (request.status === "resolved") {
       // 幂等重放（E-32「重放相同回答」）：回答落库时 version 已 +1，原回答携带的是
-      // 回答前的版本（stored-1）；同 kind 且版本吻合 → 同一回答的重复提交，no-op。
+      // 回答前的版本（stored-1）；同 kind、同载荷（grant/配置调整）且版本吻合 → 同一回答
+      // 的重复提交，no-op。CT-13：同 version 但不同 grant/配置的回答是**异答**，按
+      // version_conflict 拒绝——不能借旧 version 的重放换一份更大的扩额。
       const answeredAtVersion = request.version - 1;
-      if (request.resolution?.kind === input.answer.kind && input.version === answeredAtVersion)
-        return request;
+      const samePayload =
+        request.resolution?.kind === input.answer.kind &&
+        JSON.stringify(request.resolution.grant ?? null) ===
+          JSON.stringify(
+            input.answer.kind === "continue_with_grant" ||
+              input.answer.kind === "adjust_config_and_continue"
+              ? (input.answer.grant ?? null)
+              : null,
+          ) &&
+        JSON.stringify(request.resolution.configAdjustment ?? null) ===
+          JSON.stringify(
+            input.answer.kind === "adjust_config_and_continue"
+              ? (input.answer.configAdjustment ?? null)
+              : null,
+          );
+      if (samePayload && input.version === answeredAtVersion) return request;
       throw new ContinuationVersionConflictError(input.requestId, request.version, input.version);
     }
     if (input.version !== request.version)

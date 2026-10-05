@@ -532,6 +532,16 @@ UI用accessibility和稳定test IDs定位，不靠翻译文本或像素坐标。
 
 ## 本次实际结果
 
+CT-13 增补（2026-10-05，见 tickets/records/CT-13.md）：integration suite 新增两份测试
+（services `ct13-budget-communication.test.ts` 9 用例、bootstrap `ct13-budget-communication.test.ts`
+6 用例）登记进 runner manifest；包级复跑 services 124/124、bootstrap 77/77（含既有全部
+Continuous 测试）。开发中被新测试暴露并修复的真实缺陷 3 处：①领域 limitKind `cycle_token`
+与 wire 枚举 `cycle_tokens` 不一致——token 超限的 denial 在 CLI 侧解析失败被误报成
+`ledger_unreachable`；②并发拒绝通知撞「同轮唯一 pending」索引直接失败（未合并）；③恢复成功
+后的同回答重放被 `program_not_runnable` 拒绝（重复回答应幂等回执）＋同 version 不同 grant
+的异答被当 no-op 吞掉（应 version_conflict）。未执行 e2e/mobile/regression（真实 UI 用例与
+窗口就绪预检归 CT-15）；真实 provider 定价写入仍归 CT-16。
+
 CT-12 增补（2026-10-05，见 tickets/records/CT-12.md）：integration suite 新增两份测试
 （services `assembly.test.ts` 7 用例、bootstrap `registration.test.ts` 3 用例）登记进
 runner manifest；包级复跑 services 115/115、bootstrap 71/71（含既有全部 Continuous 测试）。
@@ -539,16 +549,16 @@ runner manifest；包级复跑 services 115/115、bootstrap 71/71（含既有全
 （`continuous/pricing-snapshot.json`）在测试中经装配参数注入，真实 provider 定价写入归
 CT-13/16。
 
-| 验证                     | 结果                             | 证据范围                                                                                                                                    |
-| ------------------------ | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| unit                     | 44 passed / 0 failed             | 领域、契约与 runner 自检                                                                                                                    |
-| integration              | 116 passed / 0 failed            | 真实 SQLite、Git、文件、DWF 子进程；包括预算等待、同 Run 继续、退出 interrupted、监督时间暂停和原子健康写入；部分端口用替身，不等于完整产品 |
-| recovery                 | 17 passed / 0 failed             | 存储重开与恢复；进程 kill 多为同库新实例模拟                                                                                                |
-| platform                 | 10 passed / 0 failed             | 当前 darwin-arm64 的真实文件/进程/Git/数据库；不替代安装包或其他平台                                                                        |
-| 根类型检查、CLI 类型检查 | passed                           | CLI 27 个 task 成功；有 workspace lockfile 警告                                                                                             |
-| 根 Lint、CLI Lint        | passed，0 errors                 | 原仓库已有警告，不声称零警告                                                                                                                |
-| Electron e2e             | 30 blocked / 0 passed / 0 failed | 真实构建并启动 Electron；窗口未就绪，未完成 Automations 导航；生产测试桥的无 flag 构建半边未在该 suite 验证                                 |
-| mobile、live、安装包     | 本次未执行                       | 不能写成 passed                                                                                                                             |
+| 验证                     | 结果                             | 证据范围                                                                                                                                                                                                                               |
+| ------------------------ | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| unit                     | 44 passed / 0 failed             | 领域、契约与 runner 自检                                                                                                                                                                                                               |
+| integration              | 149 passed / 0 failed            | 真实 SQLite、Git、文件、DWF 子进程；包括预算等待、同 Run 继续、退出 interrupted、监督时间暂停和原子健康写入；CT-13 起含预留传输校验/拒绝观测三分/合并确认/retry_limit 继续授权/旧 errored 轮结束与新开；部分端口用替身，不等于完整产品 |
+| recovery                 | 17 passed / 0 failed             | 存储重开与恢复；进程 kill 多为同库新实例模拟                                                                                                                                                                                           |
+| platform                 | 10 passed / 0 failed             | 当前 darwin-arm64 的真实文件/进程/Git/数据库；不替代安装包或其他平台                                                                                                                                                                   |
+| 根类型检查、CLI 类型检查 | passed                           | CLI 27 个 task 成功；有 workspace lockfile 警告                                                                                                                                                                                        |
+| 根 Lint、CLI Lint        | passed，0 errors                 | 原仓库已有警告，不声称零警告                                                                                                                                                                                                           |
+| Electron e2e             | 30 blocked / 0 passed / 0 failed | 真实构建并启动 Electron；窗口未就绪，未完成 Automations 导航；生产测试桥的无 flag 构建半边未在该 suite 验证                                                                                                                            |
+| mobile、live、安装包     | 本次未执行                       | 不能写成 passed                                                                                                                                                                                                                        |
 
 全仓 `pnpm fmt:check` 未通过：34 个本次未修改文件存在格式问题（含用户已有 `.zcode` 计划），本次没有修改这些文件；本次改动文件单独格式检查通过。
 

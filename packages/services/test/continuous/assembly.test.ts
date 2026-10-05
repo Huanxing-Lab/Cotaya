@@ -403,6 +403,7 @@ test("CT-12：预算预留拒绝→拒绝通知保存同轮暂停与继续确认
       pricingVersion: PRICING.pricingVersion,
       reservedCostMicros: 10_000_000,
       reservedTokens: 2_000,
+      leaseEpoch: cycle.leaseEpoch,
     },
   );
   assert.ok(denied.handled);
@@ -420,6 +421,7 @@ test("CT-12：预算预留拒绝→拒绝通知保存同轮暂停与继续确认
       programId: program.id,
       cycleId: cycle.id,
       workflowRunId: cycle.workflowRunId,
+      leaseEpoch: cycle.leaseEpoch,
       code: "budget_denied",
       message: "cycle cost limit reached",
     },
@@ -533,6 +535,7 @@ test("CT-12：旧 epoch 副作用拒绝（lease_lost 上送）", async () => {
     programId: program.id,
     cycleId: cycle.id,
     workflowRunId: cycle.workflowRunId,
+    leaseEpoch: cycle.leaseEpoch,
     code: "budget_denied",
     message: "seed suspension for epoch test",
   });
@@ -630,6 +633,7 @@ test("CT-12：决策请求先持久化 Decision（归属校验拒绝跨 Program 
       pricingVersion: PRICING.pricingVersion,
       reservedCostMicros: 1,
       reservedTokens: 1,
+      leaseEpoch: cycle.leaseEpoch,
     },
   );
   assert.ok(crossProgram.handled && "error" in crossProgram, "跨 Program 请求按校验失败拒绝");

@@ -20,6 +20,7 @@ import {
   type ContinuousRegisterManagedRunCommand,
 } from "@zcode/shared/continuous-protocol";
 import type { ContinuousDecisionSink } from "./continuous-decision-adapter.js";
+import type { ContinuousModelBudgetDenial } from "./continuous-model-budget.js";
 import type {
   ContinuousAgentWireRequest,
   ContinuousRegistrationAdapterView,
@@ -59,6 +60,8 @@ export function wireLedger(deps: ContinuousWireAgentPortDeps, payload: Continuou
             cycleId: payload.cycleId,
             workflowRunId: payload.workflowRunId,
             ...request,
+            // CT-13：执行权版本随预留上送（Host 严格校验，旧 epoch → lease_lost）。
+            leaseEpoch: payload.leaseEpoch,
           }),
           continuousLedgerReserveResultSchema,
         );
@@ -79,7 +82,13 @@ export function wireLedger(deps: ContinuousWireAgentPortDeps, payload: Continuou
     }) => {
       await deps.request(
         CONTINUOUS_AGENT_REQUEST_METHODS.ledgerSettle,
-        continuousLedgerSettleParamsSchema.parse(request),
+        // CT-13：结算携带归属三元组（Host 校验 requestKey 所属行，跨 Cycle 结算拒绝）。
+        continuousLedgerSettleParamsSchema.parse({
+          programId: payload.programId,
+          cycleId: payload.cycleId,
+          workflowRunId: payload.workflowRunId,
+          ...request,
+        }),
         continuousLedgerSettleResultSchema,
       );
     },
@@ -91,7 +100,15 @@ export function wireSuspensionWait(
   deps: ContinuousWireAgentPortDeps,
   payload: ContinuousRegisterManagedRunCommand,
 ) {
-  return async (error: { code: string; message?: string }, signal?: AbortSignal): Promise<void> => {
+  return async (
+    error: {
+      code: string;
+      message?: string;
+      /** budget_denied 的结构化观测（真实 limitKind/限额/需求；CT-13 原样上送 Host）。 */
+      denial?: ContinuousModelBudgetDenial;
+    },
+    signal?: AbortSignal,
+  ): Promise<void> => {
     const adapter = deps.getAdapter();
     if (adapter === null) {
       throw new Error("continuous registration store has no execution adapter bound");
@@ -106,8 +123,15 @@ export function wireSuspensionWait(
         programId: payload.programId,
         cycleId: payload.cycleId,
         workflowRunId: payload.workflowRunId,
-        code: error.code === "admission_closed" ? "admission_closed" : "budget_denied",
-        message: error.message ?? error.code,
+        leaseEpoch: payload.leaseEpoch,
+        code:
+          error.code === "admission_closed"
+            ? "admission_closed"
+            : error.code === "retry_limit"
+              ? "retry_limit"
+              : "budget_denied",
+        message: (error.message ?? error.code).slice(0, 1024),
+        ...(error.denial === undefined ? {} : { denial: error.denial }),
       }),
       continuousBudgetSuspensionResultSchema,
     );
@@ -163,6 +187,8 @@ export function wireSuspendForChangeLimit(
           programId: payload.programId,
           cycleId: payload.cycleId,
           workflowRunId: payload.workflowRunId,
+          // CT-13：执行权版本随拒绝通知上送（Host 严格校验，旧 epoch 不写暂停）。
+          leaseEpoch: payload.leaseEpoch,
           code: "change_limit",
           limitKind: detail.kind,
           message: `变更量达到单轮上限（${detail.kind}）`,

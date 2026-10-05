@@ -73,11 +73,9 @@ export async function continueSuspendedCycle(
 ): Promise<RunNowResult> {
   const cycle = await deps.repository.getCycle(cycleId);
   if (!cycle) throw new ContinuousSupervisorError("capability_missing", `cycle 不存在: ${cycleId}`);
-  if (cycle.status !== "suspended") {
-    throw new ContinuousSupervisorError(
-      "program_not_runnable",
-      `cycle ${cycleId} 状态 ${cycle.status} 非 suspended`,
-    );
+  const program = await deps.repository.getProgram(cycle.programId);
+  if (!program) {
+    throw new ContinuousSupervisorError("capability_missing", `program 不存在: ${cycle.programId}`);
   }
   const pending = await deps.repository.getPendingContinuationRequest(cycleId);
   if (pending) {
@@ -100,10 +98,23 @@ export async function continueSuspendedCycle(
         `cycle ${cycleId} 缺少有效的继续授权（需要 continue_with_grant/adjust_config_and_continue）`,
       );
     }
+    if (cycle.status === "running") {
+      // CT-13 重复回答的幂等半边：同回答重放到达时恢复已成功（cycle 已 running）——
+      // 不再发第二次 resumeSuspended、不重复扩额（grant 只由 resolve 写一次），按
+      // 「已继续」如实回执；监督接入复用实例内单飞（startSupervision 幂等）。
+      const resumedRunning: Cycle = { ...cycle, updatedAt: deps.clock.now() };
+      await activateProgram(deps, program);
+      return {
+        cycle: resumedRunning,
+        completion: deps.attachSupervision(resumedRunning, program),
+      };
+    }
   }
-  const program = await deps.repository.getProgram(cycle.programId);
-  if (!program) {
-    throw new ContinuousSupervisorError("capability_missing", `program 不存在: ${cycle.programId}`);
+  if (cycle.status !== "suspended") {
+    throw new ContinuousSupervisorError(
+      "program_not_runnable",
+      `cycle ${cycleId} 状态 ${cycle.status} 非 suspended`,
+    );
   }
   // lease（CT-07）：suspended 保留占用——同 owner 续租；Host 重启后的过期占用按核对流程
   // 接管（同 Cycle）；他人持有则拒绝（不能新开另一轮绕过上限，E-19）。

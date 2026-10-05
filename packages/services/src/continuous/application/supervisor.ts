@@ -22,17 +22,19 @@ import type { ContinuousPlatformExecutionMode } from "@zcode/shared";
 import type { Cycle, CycleTriggerKind, Program } from "../domain/types.js";
 import { manualTriggerKey } from "../domain/cadencePolicy.js";
 import { continueSuspendedCycle, stopCurrentCycle } from "./supervisorControl.js";
+import { inspectCycleExecutionOf } from "./supervisorResume.js";
 import { watchCycle } from "./supervisorWatch.js";
 import { acquireCycleLease, type WorkspaceLeaseDeps } from "./workspaceLease.js";
 import {
-  createManagedCycleRecord,
   ContinuousSupervisorError,
   requireAutonomousPlatformExecution,
 } from "./supervisorLifecycle.js";
+import { createManagedCycleRow, ensureWorkspacePrepared } from "./supervisorPrepare.js";
 import type {
   ContinuousClockPort,
   ContinuousExecutionPort,
   ContinuousRepositoryPort,
+  ExecutionState,
   WorkspacePreparationPort,
 } from "./ports.js";
 
@@ -141,7 +143,7 @@ export class ContinuousSupervisor {
         `program ${program.id} 状态 ${program.status} 不可启动（paused/failed 需显式恢复）`,
       );
     }
-    const prepared = await this.ensureWorkspace(program);
+    const prepared = await ensureWorkspacePrepared(this.prepareDeps(), program);
     let current = program;
     if (program.executionPath === undefined) {
       current = {
@@ -180,7 +182,7 @@ export class ContinuousSupervisor {
           }),
         };
       }
-      cycle = await this.createManagedCycle(current, input, prepared.baseCommit);
+      cycle = await createManagedCycleRow(this.prepareDeps(), current, input, prepared.baseCommit);
     }
     return this.startOrResumeCycle(current, prepared.executionPath, cycle);
   }
@@ -199,7 +201,7 @@ export class ContinuousSupervisor {
         `program 不存在: ${cycle.programId}`,
       );
     }
-    const prepared = await this.ensureWorkspace(program);
+    const prepared = await ensureWorkspacePrepared(this.prepareDeps(), program);
     return this.startOrResumeCycle(program, prepared.executionPath, cycle);
   }
 
@@ -240,59 +242,25 @@ export class ContinuousSupervisor {
     );
   }
 
-  // ── 内部：Cycle 创建、lease 与 workspace ────────────────────
-
-  private async createManagedCycle(
-    program: Program,
-    input: { triggerKey: string; triggerKind: CycleTriggerKind; requestId: string },
-    baseCommit: string,
-  ): Promise<Cycle> {
-    const template = this.deps.templateSource.resolve({
-      templateId: program.templateId,
-      templateVersion: program.templateVersion,
-    });
-    // 授权绑定与快照构造在 supervisorLifecycle（模板 hash 不符 → 结构化拒绝，绝不带病启动）。
-    const result = await createManagedCycleRecord(this.deps.repository, {
-      program,
-      triggerKey: input.triggerKey,
-      triggerKind: input.triggerKind,
-      requestId: input.requestId,
-      baseCommit,
-      template,
-      now: this.deps.clock.now(),
-    });
-    if (!result.ok) throw new ContinuousSupervisorError(result.code, result.message);
-    return result.cycle;
+  /**
+   * 详情读面的执行状态窄缝（CT-13）：实现随继续/恢复判定在 supervisorResume.ts
+   * （inspectCycleExecutionOf）；errored Run 的旧预算轮据此显示「不可恢复」。
+   */
+  async inspectCycleExecution(cycleId: string): Promise<ExecutionState | null> {
+    return await inspectCycleExecutionOf(
+      { repository: this.deps.repository, execution: this.deps.execution },
+      cycleId,
+    );
   }
 
-  /**
-   * workspace 准备（幂等；CT-02 的 prepare 对已登记 worktree 复用并重新解析 HEAD——
-   * 每轮起始 commit 以 prepare 返回为准，不用缓存的 executionPath 冒充 baseCommit）。
-   */
-  private async ensureWorkspace(program: Program): Promise<{
-    executionPath: string;
-    branchName: string;
-    baseCommit: string;
-  }> {
-    const branchName = program.branchName ?? `codex/continuous-${program.id}`;
-    const prepared = await this.deps.workspace.prepare({
-      programId: program.id,
-      workspacePath: program.workspacePath,
-      baseCommit: "HEAD",
-      branchName,
-    });
-    if (program.executionPath === undefined || program.branchName === undefined) {
-      await this.deps.repository.saveProgram({
-        ...program,
-        executionPath: prepared.executionPath,
-        branchName: prepared.branchName,
-        updatedAt: this.deps.clock.now(),
-      });
-    }
+  // ── 内部：Cycle 创建、lease 与 workspace（创建/准备在 supervisorPrepare.ts）────────
+
+  private prepareDeps() {
     return {
-      executionPath: prepared.executionPath,
-      branchName: prepared.branchName,
-      baseCommit: prepared.baseCommit,
+      repository: this.deps.repository,
+      workspace: this.deps.workspace,
+      clock: this.deps.clock,
+      templateSource: this.deps.templateSource,
     };
   }
 

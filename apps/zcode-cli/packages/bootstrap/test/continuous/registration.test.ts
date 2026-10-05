@@ -255,7 +255,14 @@ test("CT-12 CLI：预算闸门经 wire 预留/结算；拒绝触发拒绝通知�
               unknownCostMicros: 0,
               settledTokens: 0,
               reservedTokens: 0,
+              unknownTokens: 0,
             },
+            currentLimit: {
+              cycleCostMicros: 100_000_000,
+              cycleTokens: 1_000_000_000,
+              dailyCostMicros: 1_000_000_000,
+            },
+            request: { reservedCostMicros: 3, reservedTokens: 2_000 },
           } },
   });
   const store = createContinuousManagedRunStore({ request: wire.request });

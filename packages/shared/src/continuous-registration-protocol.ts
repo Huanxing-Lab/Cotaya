@@ -146,7 +146,10 @@ export const CONTINUOUS_AGENT_REQUEST_METHODS = {
 export type ContinuousAgentRequestMethod =
   (typeof CONTINUOUS_AGENT_REQUEST_METHODS)[keyof typeof CONTINUOUS_AGENT_REQUEST_METHODS];
 
-/** 预留请求（CLI 铸 requestKey，Host 账本原子准入；字段与 bootstrap 账本窄端口一致）。 */
+/** 预留请求（CLI 铸 requestKey，Host 账本原子准入；字段与 bootstrap 账本窄端口一致）。
+ * CT-13：传输严格校验身份、执行权版本、价格版本和请求键——leaseEpoch 必须等于 Cycle 行
+ * 的当前执行权版本（旧 epoch → lease_lost）；pricingVersion 必须等于 Host 当前价格快照
+ * （不符 → pricing_missing，fail closed 不按旧价入账）。 */
 export const continuousLedgerReserveParamsSchema = z.strictObject({
   programId: idString,
   cycleId: idString,
@@ -157,41 +160,70 @@ export const continuousLedgerReserveParamsSchema = z.strictObject({
   pricingVersion: nonEmptyString,
   reservedCostMicros: z.number().int().nonnegative(),
   reservedTokens: z.number().int().nonnegative(),
+  leaseEpoch: epochSchema,
 });
 export type ContinuousLedgerReserveParams = z.infer<typeof continuousLedgerReserveParamsSchema>;
+
+/** 账本观测快照（单轮/日窗口同形）：已结算按实际值，预留/unknown 按预留值（§9 保守侧）。 */
+export const continuousLedgerSummarySchema = z.strictObject({
+  settledCostMicros: z.number().int().nonnegative(),
+  reservedCostMicros: z.number().int().nonnegative(),
+  unknownCostMicros: z.number().int().nonnegative(),
+  settledTokens: z.number().int().nonnegative(),
+  reservedTokens: z.number().int().nonnegative(),
+  unknownTokens: z.number().int().nonnegative(),
+});
+export type ContinuousLedgerSummary = z.infer<typeof continuousLedgerSummarySchema>;
+
+/**
+ * 预算拒绝的结构化观测（CT-13）：真实 limitKind、已用/预留/unknown 三分（成本与 token）、
+ * 当前限额（并入本轮 grant 增量后的有效值；日额度 null = Unlimited）与本请求需求——
+ * AskUserQuestion 与继续确认的事实来源，不只是一段错误文字。
+ */
+export const continuousBudgetDenialSchema = z.strictObject({
+  limitKind: z.enum(["cycle_cost", "cycle_tokens", "daily_cost", "unsafe_integer"]),
+  cycleSummary: continuousLedgerSummarySchema,
+  dailySummary: continuousLedgerSummarySchema.optional(),
+  currentLimit: z.strictObject({
+    cycleCostMicros: z.number().int().nonnegative(),
+    cycleTokens: z.number().int().nonnegative(),
+    /** null = Unlimited（只取消日额度；单轮限制仍生效，§2）。 */
+    dailyCostMicros: z.number().int().nonnegative().nullable(),
+  }),
+  request: z.strictObject({
+    reservedCostMicros: z.number().int().nonnegative(),
+    reservedTokens: z.number().int().nonnegative(),
+  }),
+});
+export type ContinuousBudgetDenial = z.infer<typeof continuousBudgetDenialSchema>;
 
 export const continuousLedgerReserveResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({ ok: z.literal(true), requestKey: nonEmptyString }),
   z.strictObject({
     ok: z.literal(false),
-    code: z.enum(["budget_denied", "admission_closed", "ledger_unreachable"]),
+    code: z.enum([
+      "budget_denied",
+      "admission_closed",
+      "ledger_unreachable",
+      "lease_lost",
+      "pricing_missing",
+    ]),
     message: nonEmptyString,
-    /** budget_denied 附带结构化观测（limitKind/已用/预留/限额），不只回错误文字（§11/CT-13 前置）。 */
-    denial: z
-      .strictObject({
-        limitKind: z.enum(["cycle_cost", "cycle_tokens", "daily_cost"]),
-        cycleSummary: z.strictObject({
-          settledCostMicros: z.number().int().nonnegative(),
-          reservedCostMicros: z.number().int().nonnegative(),
-          unknownCostMicros: z.number().int().nonnegative(),
-          settledTokens: z.number().int().nonnegative(),
-          reservedTokens: z.number().int().nonnegative(),
-        }),
-        dailySummary: z
-          .strictObject({
-            settledCostMicros: z.number().int().nonnegative(),
-            reservedCostMicros: z.number().int().nonnegative(),
-            unknownCostMicros: z.number().int().nonnegative(),
-          })
-          .optional(),
-      })
-      .optional(),
+    /** budget_denied 附带结构化观测（limitKind/已用/预留/unknown/限额/需求，CT-13）。 */
+    denial: continuousBudgetDenialSchema.optional(),
   }),
 ]);
 export type ContinuousLedgerReserveResult = z.infer<typeof continuousLedgerReserveResultSchema>;
 
-/** 结算请求（幂等；state=unknown 保留预留，§9）。 */
+/**
+ * 结算请求（幂等；state=unknown 保留预留，§9）。CT-13：携带归属三元组——Host 校验
+ * requestKey 所属行与请求身份一致才收账（跨 Cycle 结算拒绝）；旧 epoch 的晚到 usage
+ * 仍允许幂等收尾（E-19「usage 允许幂等收尾」），因此不携带 leaseEpoch。
+ */
 export const continuousLedgerSettleParamsSchema = z.strictObject({
+  programId: idString,
+  cycleId: idString,
+  workflowRunId: idString,
   requestKey: nonEmptyString,
   state: z.enum(["settled", "unknown"]),
   actualTokens: z.number().int().nonnegative().optional(),
@@ -207,16 +239,21 @@ export const continuousLedgerSettleResultSchema = z.strictObject({ accepted: z.l
  * Host 保存同轮暂停与继续确认，再等待同一所有者的显式恢复。Host 收到即走
  * suspendCycleForBudget 链（cycle suspended + program paused + 同轮唯一 pending 确认）。
  * change_limit 是变更量上限的同轮挂起（CT-11 第 6 条：继续只增加本轮额度）。
+ * CT-13：code 增补 retry_limit（单请求尝试上限的继续授权语义）；leaseEpoch 校验防旧
+ * 执行权覆盖新 epoch 状态；budget_denied 附带真实 denial 观测（Host 原样并入继续确认）。
  */
 export const continuousBudgetSuspensionParamsSchema = z.strictObject({
   programId: idString,
   cycleId: idString,
   workflowRunId: idString,
-  /** 触发暂停的拒绝码（budget_denied/admission_closed）或变更量上限（change_limit）。 */
-  code: z.enum(["budget_denied", "admission_closed", "change_limit"]),
+  leaseEpoch: epochSchema,
+  /** 触发暂停的拒绝码（budget_denied/admission_closed/retry_limit）或变更量上限（change_limit）。 */
+  code: z.enum(["budget_denied", "admission_closed", "change_limit", "retry_limit"]),
   message: z.string().min(1).max(1024),
   /** change_limit 附带上限种类与投影值（Host 映射 continuation 的 limitKind/reason）。 */
   limitKind: z.enum(["file_limit", "line_limit"]).optional(),
+  /** budget_denied 的结构化观测（与 ledger reserve 拒绝同形；Host 映射 reason/limitKind）。 */
+  denial: continuousBudgetDenialSchema.optional(),
 });
 export type ContinuousBudgetSuspensionParams = z.infer<
   typeof continuousBudgetSuspensionParamsSchema
