@@ -80,6 +80,22 @@ export interface ContinuousRegistrationAdapterView {
     ref: { cycleId: string; executionSessionId: string; workflowRunId: string; traceId: string },
     reason: string,
   ): Promise<void>;
+  /**
+   * CT-14 操作等待登记（测试/工具等实际等待）：trusted 端口经这里写入执行适配器持有的
+   * 唯一登记处（与 inspectHealth 的健康证据同一所有者）。可选——适配器未绑定时 trusted
+   * 端口不登记（等待不被承认，时间照计，fail closed）。
+   */
+  registerOperationWait?(
+    fact: {
+      runId: string;
+      ownerId: string;
+      epoch: number;
+      reason: string;
+      startedAt: number;
+      deadlineAt: number;
+    },
+    signal?: AbortSignal,
+  ): { complete(): void };
 }
 
 export interface ContinuousManagedRunStoreDeps {
@@ -215,6 +231,20 @@ export function createContinuousManagedRunStore(deps: ContinuousManagedRunStoreD
         runId: payload.workflowRunId,
         epoch: payload.leaseEpoch,
       }),
+      // CT-14 操作等待登记：经适配器视图写入执行适配器的登记处（epoch 用本轮 leaseEpoch；
+      // 适配器按自身 epoch 高水位过滤旧登记）。适配器未绑定 → 接缝缺席 → 不登记。
+      registerOperationWait: (input) =>
+        adapter?.registerOperationWait?.(
+          {
+            runId: payload.workflowRunId,
+            ownerId: input.ownerId,
+            epoch: payload.leaseEpoch,
+            reason: input.reason,
+            startedAt: input.startedAt,
+            deadlineAt: input.deadlineAt,
+          },
+          input.signal,
+        ) ?? { complete: () => {} },
       baseCommit: () => payload.baseCommit,
       evidence,
       testRunner,
@@ -330,10 +360,24 @@ export function continuousManagedCyclesOptionFor(
 /** 登记命令需要的执行端口窄视图（create-app 绑定适配器用）。 */
 export function registrationAdapterViewOf(port: ContinuousExecutionPort & {
   waitForAdmission(ref: { cycleId: string }, signal?: AbortSignal): Promise<void>;
+  registerOperationWait?(
+    fact: {
+      runId: string;
+      ownerId: string;
+      epoch: number;
+      reason: string;
+      startedAt: number;
+      deadlineAt: number;
+    },
+    signal?: AbortSignal,
+  ): { complete(): void };
 }): ContinuousRegistrationAdapterView {
   return {
     waitForAdmission: (ref, signal) => port.waitForAdmission(ref, signal),
     inspectHealth: (ref) => port.inspectHealth(ref),
     suspendAtSafeBoundary: (ref, reason) => port.suspendAtSafeBoundary(ref, reason),
+    ...(port.registerOperationWait === undefined
+      ? {}
+      : { registerOperationWait: (fact, signal) => port.registerOperationWait!(fact, signal) }),
   };
 }

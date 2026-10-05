@@ -5,7 +5,8 @@
 // 至多一条循环），本文件不做去重。
 
 import { ContinuousHealthMonitor, CONTINUOUS_PROBE_INTERVAL_MS } from "./healthMonitor.js";
-import { applyHealthAssessment } from "./supervisorHealth.js";
+import { applyHealthAssessment, freezeCycleForUnreachableExecution } from "./supervisorHealth.js";
+import { ContinuousSupervisorError } from "./supervisorLifecycle.js";
 import type { Cycle, Program } from "../domain/types.js";
 import { isTerminalCycleStatus } from "../domain/types.js";
 import { ContinuousReportIngestion } from "./reportIngestion.js";
@@ -47,6 +48,15 @@ export interface CycleWatchDeps {
 /** Run 终态判定（pending/running 继续轮询）。 */
 export function isTerminalExecution(status: ExecutionState["status"]): boolean {
   return status === "completed" || status === "errored" || status === "stopped";
+}
+
+/**
+ * CT-14：读操作（报告/快照）的通信失联——保存 interrupted 与证据、Program paused 后
+ * 退出监督循环，交恢复核对。不能把异常抛给上层后丢下无人监督的 running 轮，也不能在
+ * 断链上继续轮询（每次 RPC 都要重新等满期限，循环空转）。
+ */
+function isCommunicationFailure(error: unknown): boolean {
+  return error instanceof ContinuousSupervisorError && error.code === "execution_unreachable";
 }
 
 const defaultSchedule = (callback: () => void, delayMs: number): (() => void) => {
@@ -124,11 +134,34 @@ export async function watchCycle(
         };
       }
     }
-    const batch = await deps.execution.readReports(ref, current.reportCursor);
+    // CT-14：读取报告/执行快照的通信失联 → 冻结并退出（不抛异常、不空转、不覆盖暂停）。
+    let batch;
+    let state: ExecutionState;
+    try {
+      batch = await deps.execution.readReports(ref, current.reportCursor);
+      state = await deps.execution.inspect(ref);
+    } catch (error) {
+      if (isCommunicationFailure(error)) {
+        await freezeCycleForUnreachableExecution(deps, ref, {
+          reason: "执行进程不可达（监督循环读取失败）",
+          expectedEpoch: current.leaseEpoch,
+          observed: {
+            message: error instanceof Error ? error.message : String(error),
+          },
+        });
+        return {
+          cycleId: cycle.id,
+          cycleStatus: "interrupted",
+          programStatus: ((await deps.repository.getProgram(program.id)) ?? program).status,
+          reportRejections: accumulator.rejections,
+        };
+      }
+      throw error;
+    }
     if (batch.items.length > 0) {
       await ingest(deps, cycle, program, batch.items, batch.nextCursor, accumulator);
     }
-    lastState = await deps.execution.inspect(ref);
+    lastState = state;
     if (isTerminalExecution(lastState.status)) break;
     if (
       lastProbeAt === undefined ||

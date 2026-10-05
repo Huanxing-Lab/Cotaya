@@ -154,7 +154,26 @@ export class ContinuousHealthMonitor {
       return null;
     const probeEpoch = cycle.leaseEpoch;
     const now = this.deps.clock.now();
-    const snapshot = await this.deps.execution.inspectHealth(ref);
+    let snapshot: HealthSnapshot;
+    try {
+      snapshot = await this.deps.execution.inspectHealth(ref);
+    } catch (error) {
+      // CT-14：探活 RPC 失败（通信期限超时/传输失败）= 不可达——不能抛给监督循环后丢下
+      // running 轮不管，也不冒充健康或正常等待。诊断进日志（可核对），分类走 unreachable
+      //（冻结新操作、保存 interrupted 与证据由 applyHealthAssessment/监督循环落库）。
+      this.deps.logger?.warn?.("Continuous health probe RPC failed", {
+        event: "continuous.health.probe_unreachable",
+        module: "services.continuous",
+        cycleId: ref.cycleId,
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
+      snapshot = {
+        runId: ref.workflowRunId,
+        actorIds: [],
+        ownerEpoch: probeEpoch,
+        reachable: false,
+      };
+    }
 
     // 读快照可能跨越暂停/报告写入，必须重读；不能用过期整行覆盖新状态和游标。
     cycle = await this.deps.repository.getCycle(ref.cycleId);

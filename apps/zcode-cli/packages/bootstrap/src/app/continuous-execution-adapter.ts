@@ -11,6 +11,11 @@ export { executionStatusOf } from "./continuous-execution-observation.js";
 import { createContinuousAdmissionWaiters } from "./continuous-admission-waiters.js";
 import { createHash } from "node:crypto";
 import { createContinuousHealthEvidence } from "./continuous-health-evidence.js";
+import {
+  createContinuousOperationWaitRegistry,
+  type ContinuousOperationWaitFact,
+  type ContinuousOperationWaitHandle,
+} from "./continuous-operation-waits.js";
 import type {
   DynamicWorkflowRunCancelInitiator,
   DynamicWorkflowRunResumeResult,
@@ -118,9 +123,22 @@ export function createContinuousExecutionAdapter(
 ): ContinuousExecutionPort & {
   /** CLI 内部接缝：预算与文件端口共享本适配器准入；不新增 Host wire 命令。 */
   waitForAdmission(ref: ExecutionReference, signal?: AbortSignal): Promise<void>;
+  /**
+   * CT-14 操作等待登记（测试/工具等实际等待）：trusted 端口写入、inspectHealth 聚合读取
+   *（同一所有者；登记是探活证据不是业务状态）。不新增 Host wire 命令。
+   */
+  registerOperationWait(
+    fact: ContinuousOperationWaitFact,
+    signal?: AbortSignal,
+  ): ContinuousOperationWaitHandle;
 } {
   const admissions = new Map<string, CycleAdmissionState>();
-  const evidenceOf = createContinuousHealthEvidence(deps.journal);
+  /** CT-14 操作等待登记的唯一实例：trusted 端口写入、健康快照读取（同一所有者）。 */
+  const operationWaits = createContinuousOperationWaitRegistry();
+  const evidenceOf = createContinuousHealthEvidence(deps.journal, {
+    operationWaits,
+    now: () => Date.now(),
+  });
   const pageSize = () => deps.reportPageSize ?? DEFAULT_REPORT_PAGE_SIZE;
 
   const admissionOf = (cycleId: string): CycleAdmissionState => {
@@ -168,6 +186,15 @@ export function createContinuousExecutionAdapter(
 
   return {
     waitForAdmission: (ref, signal) => waiters.wait(ref.cycleId, signal),
+    /**
+     * CT-14 操作等待登记（测试/工具等实际等待）：trusted 端口经登记处的适配器视图调用；
+     * 快照聚合按本适配器的 epoch 高水位过滤旧登记。不新增 Host wire 命令——登记是
+     * CLI 进程内的探活证据，不是业务状态。
+     */
+    registerOperationWait: (
+      fact: ContinuousOperationWaitFact,
+      signal?: AbortSignal,
+    ): ContinuousOperationWaitHandle => operationWaits.register(fact, signal),
     async submitOnce(input: ManagedCycleInput): Promise<ExecutionReference> {
       // 绑定自洽先于提交：Host 持久化的 scriptHash 必须就是 scriptText 的 sha256
       // （compileOnce 用同一算法落 journal）。对不上说明绑定记录被改写或上游构造被绕过——
@@ -361,7 +388,8 @@ export function createContinuousExecutionAdapter(
         ownerEpoch: state.epoch,
         reachable,
         admissionState: state.admission,
-        ...evidenceOf(ref.workflowRunId),
+        // epoch 高水位随调用传入：旧执行权登记的操作等待不作数（CT-14）。
+        ...evidenceOf(ref.workflowRunId, state.epoch),
       };
     },
   };

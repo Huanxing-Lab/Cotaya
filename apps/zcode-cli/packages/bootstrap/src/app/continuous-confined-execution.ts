@@ -26,7 +26,9 @@ import { join } from "node:path";
 import type { ContinuousIsolationProvider } from "./continuous-isolation.js";
 
 const SIGTERM_GRACE_MS = 1_500;
-const DEFAULT_TIMEOUT_MS = 300_000;
+/** 受控执行默认超时（导出供 trusted 端口登记同期限的操作等待，CT-14）。 */
+export const CONTINUOUS_CONFINED_DEFAULT_TIMEOUT_MS = 300_000;
+const DEFAULT_TIMEOUT_MS = CONTINUOUS_CONFINED_DEFAULT_TIMEOUT_MS;
 /** stdout/stderr 各自的捕获上限：超限停止捕获并标记 truncated（证据有界，§11）。 */
 const STREAM_CAPTURE_BYTES = 256 * 1024;
 

@@ -521,7 +521,7 @@ submitOnce 对非终态的既有行按同身份幂等复用（不铸第二个引
 
 专用执行接口提供 suspendAtSafeBoundary、resumeSuspended、inspectHealth 与 interrupt；interrupt 只用于退出中断，其他资源暂停不取消 Run，明确不等同 stop；挂起请求/工具准入与旧执行确认是同一所有者链。单轮计时不使用会直接 abort Run 的固定墙钟 timeout。
 
-结构化错误至少包括：authorization_stale、scope_denied、budget_denied、usage_unknown、lease_lost、execution_not_quiescent、execution_identity_mismatch、template_mismatch、remote_execution_not_supported、validation_unavailable；CT-08 起 additive 追加 version_conflict（resolve/dismiss/继续确认的旧 version 或异答重放拒绝）、program_not_runnable（paused/failed/completed Program 的启动/恢复类命令拒绝）与 open_cycle_exists（幂等竞态吸收后的明确回执）；CT-10 起 additive 追加 platform_execution_not_supported（未验证平台的自主实施拒绝，见 §13）——四者都是服务层既有语义上送 wire，不改变原有错误。
+结构化错误至少包括：authorization_stale、scope_denied、budget_denied、usage_unknown、lease_lost、execution_not_quiescent、execution_identity_mismatch、template_mismatch、remote_execution_not_supported、validation_unavailable；CT-08 起 additive 追加 version_conflict（resolve/dismiss/继续确认的旧 version 或异答重放拒绝）、program_not_runnable（paused/failed/completed Program 的启动/恢复类命令拒绝）与 open_cycle_exists（幂等竞态吸收后的明确回执）；CT-10 起 additive 追加 platform_execution_not_supported（未验证平台的自主实施拒绝，见 §13）；CT-14 起 additive 追加 execution_unreachable（读取执行快照/报告的通信期限超时或传输失败，消息携带期限事实；监督循环据此按 unreachable 冻结，不把通信故障误当执行未静止）——均为服务层既有语义上送 wire，不改变原有错误。
 
 ### 11.1 UI 命令面（CT-08 additive，协议小版本 1）
 
@@ -642,6 +642,37 @@ Host 侧装配与登记协议的固定规则（实施记录见 tickets/records/C
 6. **旧 errored 预算轮**：programDetail 的 currentCycle 增补 `executionRecoverable`（additive）
    ——errored/不可恢复 stopped Run 的挂起轮显示不可恢复；用户经既有 `stopCurrentCycle`
    结束旧轮（cancelled、账本与历史保留、lease 释放），显式 resumeProgram 后 runNow 新开轮。
+
+### 2026-10-06：CT-14 完整主动探活与正常阻塞边界
+
+探活证据链与通信期限的固定规则（实施记录见 tickets/records/CT-14.md）：
+
+1. **操作等待登记**：测试、工具等实际长等待由 CLI 侧登记处登记——每条带 owner/run/epoch、
+   原因、开始时刻与**真实期限**（声明测试 = 受控执行超时；浏览器验证 = 通信期限，默认 5
+   分钟），完成/取消/超时都是移除通知（AbortSignal 联动）。登记处是执行适配器内的唯一
+   实例（探活证据，不是业务状态，不经 wire）；trusted 端口（continuous-test/-browser）在
+   实际执行开始时写入。过期或低于执行权高水位的登记**永久移除**——失效等待不能再豁免
+   任何后续计时（等待失效后重新计时）。
+2. **聚合规则**：健康快照的 normal_wait 证据 = journal backoff 等待 ∪ 操作登记等待，按
+   运行节点计数覆盖——只有**全部**正在执行的节点都被有效等待覆盖才承认整轮 normal_wait
+   （多登记取最早期限上送 waitingFor）；任一 actor 仍在工作（未被覆盖）则照计有效时间。
+   登记等待按 run 汇总、以计数方式对齐节点（登记处无节点身份）：一条登记至多覆盖一个
+   运行节点。
+3. **读操作通信期限**：Host 侧 wire 执行端口的 inspect/inspectHealth/readReports 有可诊
+   断的通信期限（默认 30 秒，可注入）：超时与传输失败都折算结构化
+   `execution_unreachable`（消息携带期限与上下文）——监督循环不能永远卡在一次 RPC 上；
+   期限远小于 180 秒 hang 阈值。写操作（提交/恢复/停止类）不加期限：ACK 语义下超时不
+   能安全重试。
+4. **失联冻结**：探活 RPC 失败按 unreachable 分类（不冒充健康或正常等待、不计时不判
+   hang）；unreachable 冻结**不发 wire 挂起**（同一断链上只会同样卡住）——直接保存
+   cycle interrupted + `cycle.execution_unreachable` 证据事件 + Program paused，交恢复
+   流程核对；冻结只写同 epoch 的 running 行，执行权已改变的轮不被旧观察覆盖（报告游标
+   与确认指针不触碰）。监督循环的 readReports/inspect 失联同样退出循环并冻结，不抛异
+   常后丢下无人监督的 running 轮。
+5. **既有不变量**（本 ticket 未改）：15 秒 probeOnce 由 supervisorWatch 同一监督循环串行
+   驱动；真实 journal 动作时刻（sequence/timeCreated）是进展证据，查询/heartbeat 不刷
+   新；健康写入只更新同 epoch 的 running 行（updateCycleHealth）；实例内计时基线保证重
+   启不累计离线时间；模型重试 backoff 等待沿用既有落库事件。
 
 ### 2026-10-05：发布文档 §2.1 修复边界
 

@@ -207,6 +207,16 @@ test("U-01 结构化错误形状稳定且覆盖规格 §11 错误清单", () => 
   }
   // capability_missing 是旧 CLI 拒绝的独立错误码
   assert.ok((CONTINUOUS_ERROR_CODES as readonly string[]).includes("capability_missing"));
+  // CT-14 additive：读操作通信期限超时/传输失败的独立错误码（消息携带期限事实）
+  assert.ok((CONTINUOUS_ERROR_CODES as readonly string[]).includes("execution_unreachable"));
+  assert.equal(
+    continuousErrorSchema.parse({
+      code: "execution_unreachable",
+      message: "continuous wire inspectHealth 通信超时（30000ms 期限，CT-14 §10.1）",
+      retryable: false,
+    }).code,
+    "execution_unreachable",
+  );
   assert.equal(isContinuousError({ code: "budget_denied", message: "x", retryable: false }), true);
   assert.equal(isContinuousError({ code: "budget_denied", message: "x" }), false);
   assert.equal(

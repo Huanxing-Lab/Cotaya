@@ -15,9 +15,7 @@
 // 仍在 application 层服务里。
 
 import {
-  CONTINUOUS_REGISTER_MANAGED_RUN_REJECTED_FAULT_PREFIX,
   supportsContinuousCliManagedOperations,
-  type ContinuousErrorCode,
   type ContinuousManagedCycleCommand,
   type ContinuousPriceSnapshot,
   type ContinuousRegisterManagedRunCommand,
@@ -25,10 +23,8 @@ import {
   type ContinuousRequestCaps,
 } from "@zcode/shared/continuous-protocol";
 import { ContinuousSupervisorError } from "../application/supervisorLifecycle.js";
-import type {
-  ContinuousAgentTransport,
-  ContinuousAgentCommandAck,
-} from "../application/agentTransport.js";
+import type { ContinuousAgentTransport } from "../application/agentTransport.js";
+import { createWireCommandChannel } from "./wireCommandChannel.js";
 import type { ContinuousRepositoryPort, ContinuousClockPort } from "../application/ports.js";
 import type {
   ExecutionReference,
@@ -50,18 +46,12 @@ export interface WireExecutionPortDeps {
   logger?: { warn?: (message: string, meta?: unknown) => void };
   /** 登记前确保执行会话存在（缺省每次登记前调用 transport.ensureExecutionSession）。 */
   ensureSession?: boolean;
-}
-
-/** ACK 拒绝 reason → supervisor 结构化错误码（词表见 shared continuousExecutionRejectionReason）。 */
-function rejectionCodeOf(reasonCode: string | undefined): string {
-  if (reasonCode === undefined) return "execution_not_quiescent";
-  if (reasonCode.startsWith(CONTINUOUS_REGISTER_MANAGED_RUN_REJECTED_FAULT_PREFIX)) {
-    return reasonCode.slice(CONTINUOUS_REGISTER_MANAGED_RUN_REJECTED_FAULT_PREFIX.length);
-  }
-  // v4 fault.command.continuousManagedCycleRejected.<reason>
-  const managedPrefix = "fault.command.continuousManagedCycleRejected.";
-  if (reasonCode.startsWith(managedPrefix)) return reasonCode.slice(managedPrefix.length);
-  return reasonCode;
+  /**
+   * CT-14 读操作（inspect/inspectHealth/readReports）的通信期限（缺省 30 秒）：超时按
+   * 结构化 execution_unreachable 上送（消息携带期限事实）——监督循环不能永远卡在一次
+   * RPC 上；期限须小于 180 秒 hang 阈值，失联按 unreachable 分类交恢复核对。
+   */
+  readDeadlineMs?: number;
 }
 
 export function createWireContinuousExecutionPort(deps: WireExecutionPortDeps) {
@@ -83,43 +73,13 @@ export function createWireContinuousExecutionPort(deps: WireExecutionPortDeps) {
     ...extra,
   });
 
-  const send = async (
-    sessionId: string,
-    type: string,
-    payload: unknown,
-    context: string,
-  ): Promise<ContinuousAgentCommandAck> => {
-    try {
-      const workspace = sessionWorkspaces.get(sessionId);
-      return await deps.transport.sendCommand({
-        sessionId,
-        type,
-        payload,
-        ...(workspace === undefined ? {} : workspace),
-      });
-    } catch (error) {
-      // 传输故障 = 执行面不可达（§10 恢复流程按 unreachable 处理，不静默重试）。
-      throw new ContinuousSupervisorError(
-        "execution_not_quiescent",
-        `continuous wire ${context} 传输失败: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-  };
-
-  const requireAccepted = (ack: ContinuousAgentCommandAck, context: string): unknown => {
-    if (ack.status === "accepted" || ack.status === "duplicate") return ack.result;
-    const code = rejectionCodeOf(ack.reasonCode);
-    // 旧 CLI/未装配：能力不支持 → capability_missing（不给自主实施，ticket CT-12）。
-    // 其余 fault 后缀沿用 wire 词表（continuousManagedCycleRejected.<reason> 与登记拒绝
-    // 词表都落在 ContinuousErrorCode 词表内；未知 fault 原样上送供诊断）。
-    const mapped = (
-      ack.reasonCode === "fault.command.capabilityUnsupported" ? "capability_missing" : code
-    ) as ContinuousErrorCode;
-    throw new ContinuousSupervisorError(
-      mapped,
-      `continuous wire ${context} 拒绝: ${ack.reasonCode ?? ack.status}${ack.message ? ` (${ack.message})` : ""}`,
-    );
-  };
+  // CT-14：发送/回执投影/读期限集中在 wireCommandChannel（max-file-lines 拆分，非边界变化）。
+  const { send, sendRead, requireAccepted } = createWireCommandChannel({
+    transport: deps.transport,
+    workspaceOf: (sessionId) => sessionWorkspaces.get(sessionId),
+    ...(deps.readDeadlineMs === undefined ? {} : { readDeadlineMs: deps.readDeadlineMs }),
+    ...(deps.logger === undefined ? {} : { logger: deps.logger }),
+  });
 
   /** 从持久化快照重建登记（提交/恢复/继续/退出中断前调用；幂等重发安全）。 */
   const registerRun = async (ref: ExecutionReference, executionPath: string): Promise<void> => {
@@ -245,7 +205,7 @@ export function createWireContinuousExecutionPort(deps: WireExecutionPortDeps) {
     },
 
     async inspect(ref: ExecutionReference): Promise<ExecutionState> {
-      const ack = await send(
+      const ack = await sendRead(
         ref.executionSessionId,
         "continuousManagedCycle",
         commandOf("inspect", ref),
@@ -304,7 +264,7 @@ export function createWireContinuousExecutionPort(deps: WireExecutionPortDeps) {
     },
 
     async readReports(ref: ExecutionReference, afterSequence: number): Promise<ReportBatch> {
-      const ack = await send(
+      const ack = await sendRead(
         ref.executionSessionId,
         "continuousManagedCycle",
         commandOf("readReports", ref, { afterSequence }),
@@ -339,7 +299,7 @@ export function createWireContinuousExecutionPort(deps: WireExecutionPortDeps) {
     },
 
     async inspectHealth(ref: ExecutionReference): Promise<HealthSnapshot> {
-      const ack = await send(
+      const ack = await sendRead(
         ref.executionSessionId,
         "continuousManagedCycle",
         commandOf("inspectHealth", ref),

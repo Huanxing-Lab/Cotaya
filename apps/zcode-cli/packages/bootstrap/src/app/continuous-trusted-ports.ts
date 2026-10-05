@@ -18,7 +18,10 @@
 
 import type { ExecutionResult } from "@zcode/contracts";
 import type { ContinuousActorIoPolicy } from "./continuous-io-guards.js";
-import type { ContinuousConfinedTestRunner } from "./continuous-confined-execution.js";
+import {
+  CONTINUOUS_CONFINED_DEFAULT_TIMEOUT_MS,
+  type ContinuousConfinedTestRunner,
+} from "./continuous-confined-execution.js";
 import type { ContinuousEvidenceRegistry } from "./continuous-evidence.js";
 import {
   continuousPathPrefixCovers,
@@ -36,6 +39,13 @@ export const CONTINUOUS_TRUSTED_COMMANDS = [
   "continuous-browser",
   "continuous-commit",
 ] as const;
+
+/**
+ * CT-14 浏览器验证的通信期限（默认 5 分钟）：验证提供方必须在该期限内返回证据；超时只
+ * 能如实 unverified，不伪造通过/失败。期限同时是操作等待登记的真实期限（normal_wait
+ * 证据的到期事实，docs/specs/continuous.md §10.1「长命令必须有声明的操作期限」）。
+ */
+export const CONTINUOUS_BROWSER_CHECK_DEADLINE_MS = 300_000;
 
 export type ContinuousTrustedCommand = (typeof CONTINUOUS_TRUSTED_COMMANDS)[number];
 
@@ -72,6 +82,20 @@ export interface ContinuousTrustedPortsDeps {
   }): Promise<void>;
   /** 输出根（受控执行的输出目录父级；浏览器 artifacts 建议同根）。 */
   outputRoot: string;
+  /**
+   * CT-14 操作等待登记：声明测试/浏览器验证等实际长操作开始时登记（owner/原因/开始
+   * 时刻/真实期限），完成/取消后移除——normal_wait 证据的唯一登记路径。缺省不登记：
+   * 等待不被承认，时间照计（fail closed，不能凭工具在跑豁免计时）。
+   */
+  registerOperationWait?(input: {
+    ownerId: string;
+    reason: string;
+    startedAt: number;
+    deadlineAt: number;
+    signal?: AbortSignal;
+  }): { complete(): void };
+  /** 浏览器验证通信期限（缺省 5 分钟；超时如实 unverified）。 */
+  browserDeadlineMs?: number;
   logger?: {
     warn?: (message: string, meta?: unknown) => void;
     info?: (message: string, meta?: unknown) => void;
@@ -128,7 +152,22 @@ export function createContinuousTrustedPorts(
       return { status: "unavailable" as const, reason: "confined_execution_not_supported" };
     }
     const argv = config.declaredTestCommands[index]!.argv;
-    const result = await deps.testRunner.run(argv, { signal });
+    // CT-14 操作等待登记：受控执行有真实超时（runner 杀整棵进程树），期限即该超时；
+    // 完成/取消/超时（finally）都是移除通知。缺登记接缝时fail closed——等待不被承认。
+    const startedAt = Date.now();
+    const wait = deps.registerOperationWait?.({
+      ownerId: `test:${candidateKey}:${index}`,
+      reason: `declared test: ${argv.join(" ")}`,
+      startedAt,
+      deadlineAt: startedAt + CONTINUOUS_CONFINED_DEFAULT_TIMEOUT_MS,
+      ...(signal === undefined ? {} : { signal }),
+    });
+    let result;
+    try {
+      result = await deps.testRunner.run(argv, { signal });
+    } finally {
+      wait?.complete();
+    }
     const identity = deps.identity();
     deps.evidence.recordTest({
       ...identity,
@@ -247,11 +286,56 @@ export function createContinuousTrustedPorts(
         ...deps.identity(),
       };
     }
-    const checked = await deps.browser.check({
-      candidateKey,
-      widths,
-      executionPath: config.executionPath,
+    // CT-14：浏览器验证必须有可诊断的通信期限——超时不能永远占住节点，也不能伪造通过/
+    // 失败；期限同时是操作等待登记的真实期限（§10.1「长命令必须有声明的操作期限」）。
+    const deadlineMs = deps.browserDeadlineMs ?? CONTINUOUS_BROWSER_CHECK_DEADLINE_MS;
+    const startedAt = Date.now();
+    const wait = deps.registerOperationWait?.({
+      ownerId: `browser:${candidateKey}`,
+      reason: "browser validation",
+      startedAt,
+      deadlineAt: startedAt + deadlineMs,
     });
+    let checked;
+    try {
+      const check = deps.browser.check({ candidateKey, widths, executionPath: config.executionPath });
+      // 期限竞速落败后，提供方晚到的失败不算未处理拒绝（证据已按 unverified 落档）。
+      check.catch(() => {});
+      checked = await Promise.race([
+        check,
+        new Promise<never>((_, reject) => {
+          const timer = setTimeout(() => {
+            reject(new Error(`browser_check_deadline_exceeded:${deadlineMs}ms`));
+          }, deadlineMs);
+          timer.unref?.();
+        }),
+      ]);
+    } catch (error) {
+      // 期限超时（或提供方故障）：如实 unverified 并落证据，不伪造通过/失败。
+      const reason =
+        error instanceof Error ? error.message : "browser check failed without deadline";
+      const identity = deps.identity();
+      deps.evidence.recordBrowser({
+        ...identity,
+        candidateKey,
+        outcome: "unverified",
+        widths,
+        assertions: [],
+        reason,
+        artifacts: [],
+      });
+      return {
+        status: "ok" as const,
+        outcome: "unverified" as const,
+        widths,
+        assertions: [],
+        reason,
+        artifacts: [],
+        ...identity,
+      };
+    } finally {
+      wait?.complete();
+    }
     const identity = deps.identity();
     const artifacts = checked.artifacts ?? [];
     deps.evidence.recordBrowser({

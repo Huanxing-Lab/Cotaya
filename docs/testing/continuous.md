@@ -532,6 +532,20 @@ UI用accessibility和稳定test IDs定位，不靠翻译文本或像素坐标。
 
 ## 本次实际结果
 
+CT-14 增补（2026-10-06，见 tickets/records/CT-14.md）：integration suite 新增两份测试
+（services `ct14-probe-communication.test.ts` 6 用例、bootstrap `ct14-probe-waits.test.ts`
+6 用例）登记进 runner manifest（integration 161/161）。覆盖：读操作通信期限（超时/传输
+失败 → 结构化 execution_unreachable 且消息携带期限事实）、探活 RPC 失败按 unreachable
+冻结（不发 wire 挂起、保存 interrupted + `cycle.execution_unreachable` 证据、Program
+paused）、监督循环读报告失联退出并冻结（不抛异常不空转）、失联冻结不覆盖执行权已改变
+的轮（epoch/游标原样）、两小时登记等待跨一小时墙钟仍继续且等待失效后重新计时、操作等待
+登记生命周期（完成/取消/过期/旧 epoch 移除、runId 隔离）、journal backoff 与登记等待的
+整轮覆盖聚合（任一 actor 工作不豁免）、trusted 端口声明测试的真实期限登记与浏览器验证
+通信期限（超时如实 unverified 不伪造证据）、适配器 inspectHealth 快照聚合与 epoch 高水位
+过滤。既有 U-08/E-29/E-30/E-31/R-12 与「发布 2.1」健康写入守卫全量复跑通过（健康工作一
+小时暂停询问、180 秒 + 3 次失败探测 hang 确认、中途暂停/执行权改变不被旧快照覆盖、重启
+不累计离线时间）。未执行 e2e/mobile/regression（真实 UI 场景归 CT-15）。
+
 CT-13 增补（2026-10-05，见 tickets/records/CT-13.md）：integration suite 新增两份测试
 （services `ct13-budget-communication.test.ts` 9 用例、bootstrap `ct13-budget-communication.test.ts`
 6 用例）登记进 runner manifest；包级复跑 services 124/124、bootstrap 77/77（含既有全部

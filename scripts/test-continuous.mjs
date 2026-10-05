@@ -68,6 +68,10 @@ const SUITES = {
       // retry_limit 继续授权、跨日不自行扩额、旧 errored 轮结束/新开、CLI 闸门与 wire 透传）。
       "packages/services/test/continuous/ct13-budget-communication.test.ts",
       "apps/zcode-cli/packages/bootstrap/test/continuous/ct13-budget-communication.test.ts",
+      // CT-14：完整主动探活和正常阻塞（读操作通信期限/失联冻结 interrupted+证据/不覆盖
+      // 新 epoch；操作等待登记与聚合、trusted 端口真实期限、快照 epoch 过滤）。
+      "packages/services/test/continuous/ct14-probe-communication.test.ts",
+      "apps/zcode-cli/packages/bootstrap/test/continuous/ct14-probe-waits.test.ts",
     ],
   },
   recovery: {

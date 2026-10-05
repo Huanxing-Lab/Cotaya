@@ -247,6 +247,10 @@ export type ContinuousResolveContinuationParams = z.infer<
 // CT-10 起 additive 追加（规格 §13 平台能力固定规则）：
 //   platform_execution_not_supported —— 未验证（observe_only）平台的自主实施启动/恢复拒绝；
 //   观察读面（snapshot/programDetail/队列/历史）不受影响，UI 经 capability.platform 解释。
+// CT-14 起 additive 追加（规格 §10.1 主动探活）：
+//   execution_unreachable —— 读取执行快照/报告的通信期限超时或传输失败（错误携带期限
+//   事实）；监督循环据此按 unreachable 冻结新操作、保存 interrupted 与证据，交恢复核对，
+//   不能把通信故障误当执行未静止或永远卡在一次 RPC 上。
 export const CONTINUOUS_ERROR_CODES = [
   "capability_missing",
   "authorization_stale",
@@ -255,6 +259,7 @@ export const CONTINUOUS_ERROR_CODES = [
   "usage_unknown",
   "lease_lost",
   "execution_not_quiescent",
+  "execution_unreachable",
   "execution_identity_mismatch",
   "template_mismatch",
   "remote_execution_not_supported",
