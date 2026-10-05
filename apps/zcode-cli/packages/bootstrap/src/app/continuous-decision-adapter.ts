@@ -76,6 +76,12 @@ export interface ContinuousCandidateGrantHolder {
   authorize(input: ContinuousCandidateGrant): { ok: true } | { ok: false; reason: string };
   /** 撤销当前授权候选（决策 defer 时调用）；无授权候选时返回 null。 */
   revokeActive(reason: string): ContinuousCandidateGrant | null;
+  /**
+   * 非撤销释放：候选已到达终局（提交完成或被拒）后让出占用，允许授权下一个候选。
+   * 与 revokeActive 的区别：不进入撤销集——defer 是终局（本轮不得再实施），而正常
+   * 完成只是占用结束（CT-11：可信提交端口在每次提交尝试收尾时调用）。
+   */
+  releaseActive(): ContinuousCandidateGrant | null;
   /** 当前授权（policy config 的 activeCandidate 来源；撤销后为 null → 写入 candidate_inactive）。 */
   activeGrant(): ContinuousCandidateGrant | null;
   isRevoked(candidateId: string): boolean;
@@ -107,6 +113,11 @@ export function createContinuousCandidateGrantHolder(): ContinuousCandidateGrant
       active = null;
       revoked.add(revokedGrant.candidateId);
       return revokedGrant;
+    },
+    releaseActive() {
+      const released = active;
+      active = null;
+      return released;
     },
     activeGrant() {
       return active === null ? null : { ...active };

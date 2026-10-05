@@ -4,7 +4,6 @@ import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createNodeFileSystemAdapter } from "@zcode/adapters/fs";
 import { InMemoryJournalStore } from "@zcode/dynamic-workflow";
 import {
   guardContinuousActorIo,
@@ -35,29 +34,21 @@ test("发布2.1：实际文件端口执行只读、候选授权和 symlink 检�
     caseInsensitiveFs: false,
     platformExecutionMode: "autonomous",
   };
-  let processes = 0;
-  const ports = {
-    fileSystemPort: createNodeFileSystemAdapter(),
-    executionPort: {
-      run: async (): Promise<never> => {
-        processes++;
-        throw new Error("不应启动");
-      },
-    },
-  };
-  const observer = guardContinuousActorIo(
-    { role: "observer", config: () => config, waitForAdmission: async () => {} },
-    ports,
-  );
+  const observer = guardContinuousActorIo({
+    role: "observer",
+    config: () => config,
+    waitForAdmission: async () => {},
+  });
   await assert.rejects(
     observer.fileSystemPort.writeTextFile({ path: file, content: "bad" }),
     /role_read_only/,
   );
   assert.equal(await readFile(file, "utf8"), "original");
-  const builder = guardContinuousActorIo(
-    { role: "builder", config: () => config, waitForAdmission: async () => {} },
-    ports,
-  );
+  const builder = guardContinuousActorIo({
+    role: "builder",
+    config: () => config,
+    waitForAdmission: async () => {},
+  });
   await builder.fileSystemPort.writeTextFile({ path: "src/view.tsx", content: "allowed" });
   assert.equal(await readFile(file, "utf8"), "allowed");
   await assert.rejects(
@@ -82,11 +73,10 @@ test("发布2.1：实际文件端口执行只读、候选授权和 symlink 检�
     }),
     /confined_execution_not_supported/,
   );
-  assert.equal(processes, 0, "请求宣称 enabled 不能证明已装配真实沙箱");
-  assert.equal(continuousActorToolAllowlist("builder").includes("Bash"), false);
-  await assert.rejects(
-    builder.fileSystemPort.searchText({ path: join(worktree, "src"), pattern: "secret" }),
-    /recursive_read_not_supported/,
+  assert.equal(
+    continuousActorToolAllowlist("builder").includes("Bash"),
+    false,
+    "actor 工具面不含任意命令执行",
   );
 });
 

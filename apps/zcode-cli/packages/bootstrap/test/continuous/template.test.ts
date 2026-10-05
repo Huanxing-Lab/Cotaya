@@ -4,9 +4,11 @@
 //
 // 脚本化 provider：createActorRuntime 的替身按 actor 名 + ask 指令分发预设 typed 结果，
 // 经真实 submitPort 桥接回引擎裁决（typed 校验是真实的——形状不符会被引擎拒绝并触发
-// nudge/repair，所以替身结果必须符合模板接口声明的合成 schema）。world.run("git", ...) 与
-// git.* 走真实 argv spawn（提交落在临时 fixture 仓库）；这一层证明模板编排与报告词表，
-// 不证明真实模型的改进质量（live 归 CT-09）。
+// nudge/repair，所以替身结果必须符合模板接口声明的合成 schema）。CT-11 起 v2 模板：
+// 测试执行/浏览器验证/Git diff/本地提交走可信工具端口（world.run 保留命令，经真实
+// worldPortsFor 守卫分派；confined runner 真实 spawn、真实 git 提交落在临时 fixture 仓库；
+// 隔离提供方为 test composition 的 passthrough——OS 级隔离证明在 ct11-security.test.ts）。
+// 这一层证明模板编排与报告词表，不证明真实模型的改进质量（live 归 CT-09）。
 //
 // 运行入口：node scripts/test-continuous.mjs --suite integration（tsx + node.test）。
 
@@ -16,7 +18,7 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { createSqliteSessionStore } from "@zcode/adapters/storage";
 import type { DwfSequencedReportQueries } from "@zcode/adapters/storage";
 import { createNodeFileSystemAdapter } from "@zcode/adapters/fs";
@@ -33,6 +35,13 @@ import {
   createContinuousExecutionAdapter,
   type ManagedCycleInput,
 } from "../../src/app/continuous-execution-adapter.js";
+import { guardContinuousActorIo } from "../../src/app/continuous-io-guards.js";
+import type { ContinuousExecutionPolicyConfig } from "../../src/app/continuous-execution-policy.js";
+import { createContinuousConfinedTestRunner } from "../../src/app/continuous-confined-execution.js";
+import { createContinuousEvidenceRegistry } from "../../src/app/continuous-evidence.js";
+import { createContinuousTrustedPorts } from "../../src/app/continuous-trusted-ports.js";
+import { createContinuousCandidateGrantHolder } from "../../src/app/continuous-decision-adapter.js";
+import { createPassthroughIsolationProvider } from "../../src/app/continuous-isolation.js";
 import {
   CONTINUOUS_TEMPLATE_UI_UX_V1_ID,
   CONTINUOUS_TEMPLATE_UI_UX_V1_SCRIPT,
@@ -52,7 +61,10 @@ test("模板定义：版本化注册表、稳定 hash、只经本文件暴露（
   assert.equal(template.scriptHash, uiUxV1Template().scriptHash);
   assert.equal(CONTINUOUS_TEMPLATES.length, 1);
   assert.equal(
-    resolveContinuousTemplate({ templateId: "ui-ux-v1", templateVersion: "1" })?.scriptHash,
+    resolveContinuousTemplate({
+      templateId: "ui-ux-v1",
+      templateVersion: CONTINUOUS_TEMPLATE_UI_UX_V1_VERSION,
+    })?.scriptHash,
     template.scriptHash,
   );
   assert.equal(resolveContinuousTemplate({ templateId: "ui-ux-v1", templateVersion: "9" }), null);
@@ -68,8 +80,9 @@ test("编译/schema 合成/降低全绿（模板不可用必须明确失败，�
     [],
     "typed ask 的 schema 合成必须成功",
   );
-  // typed ask 站点：observation + 每候选 impl/tests/browser/review。
-  assert.ok(Object.keys(synthesis.schemas).length >= 5);
+  // typed ask 站点（CT-11 v2）：observation + 每候选 impl/review（tests/browser 已改为
+  // 可信工具端口的 world.run，不再是 typed ask）。
+  assert.ok(Object.keys(synthesis.schemas).length >= 3);
   const lowered = lowerWorkflowScript(CONTINUOUS_TEMPLATE_UI_UX_V1_SCRIPT);
   assert.ok(lowered.ok, `lower failed: ${JSON.stringify(lowered.diagnostics)}`);
 });
@@ -89,6 +102,10 @@ interface ProviderHarness {
   adapter: ReturnType<typeof createContinuousExecutionAdapter>;
   /** actor 会话创建记录（I-09：新轮 actor ID 不复用；parent 从不建 runtime）。 */
   createdSessions: Array<{ actorName: string; sessionId: string; instructions?: string }>;
+  /** 浏览器证据提供方的脚本化状态（candidateKey → outcome）。 */
+  setBrowserOutcome(candidateKey: string, outcome: "passed" | "failed" | "unverified"): void;
+  /** 候选写入许可（builder 实施 ask 时授权——与产品装配同一顺序）。 */
+  authorizeCandidate(candidateId: string, targetPaths: string[]): void;
   dispose(): void;
 }
 
@@ -126,17 +143,32 @@ function runArgv(cwd: string, file: string, args: string[]): ScriptedExecutionRe
   }
 }
 
-function makeProviderHarness(actorsForRoot: (root: string) => ScriptedActor[]): ProviderHarness {
+/** fixture 控制面：脚本化 actor 在实施 ask 时驱动（授权/浏览器证据/期望退出码）。 */
+interface FixtureControl {
+  authorizeCandidate(candidateId: string, targetPaths: string[]): void;
+  setBrowserOutcome(candidateKey: string, outcome: "passed" | "failed" | "unverified"): void;
+  setTestExitCode(code: number): void;
+}
+
+function makeProviderHarness(
+  actorsForRoot: (root: string, control: FixtureControl) => ScriptedActor[],
+): ProviderHarness {
   const root = mkdtempSync(join(tmpdir(), "continuous-ct05-template-"));
-  // 真实 git fixture：world.run("git", add/commit) 与 git.* 读取都落到真仓库。
+  // 真实 git fixture：可信 diff/提交端口与 git 事实都落在真仓库。
   execFileSync("git", ["init", "-q"], { cwd: root });
   execFileSync("git", ["config", "user.email", "continuous@test"], { cwd: root });
   execFileSync("git", ["config", "user.name", "continuous test"], { cwd: root });
   writeFileSync(join(root, "README.md"), "# fixture\n");
-  execFileSync("git", ["add", "README.md"], { cwd: root });
+  // fixture 助手文件（声明测试探针/退出码）不进入 diff 口径：gitignore 进基线提交。
+  writeFileSync(join(root, ".gitignore"), "ct11-exit-code.js\nct11-test-exit.json\n");
+  execFileSync("git", ["add", "README.md", ".gitignore"], { cwd: root });
   execFileSync("git", ["commit", "-q", "-m", "fixture base"], { cwd: root });
 
-  const store = createSqliteSessionStore({ dbPath: join(root, "sessions.sqlite") });
+  // 生产布局同构：session store 与受控输出都在 worktree 之外（且不在仓库目录树内——
+  // 它们会以 untracked 形式进入 diff/变更量口径）。
+  const outsideRoot = join(dirname(root), `${basename(root)}-outside`);
+  mkdirSync(join(outsideRoot, "outputs"), { recursive: true });
+  const store = createSqliteSessionStore({ dbPath: join(outsideRoot, "sessions.sqlite") });
   const journal = store.workflowJournalStore() as JournalStorePort & DwfSequencedReportQueries;
   const fileSystemPort = createNodeFileSystemAdapter();
   const executionPort = {
@@ -147,14 +179,95 @@ function makeProviderHarness(actorsForRoot: (root: string) => ScriptedActor[]): 
       runArgv(request.cwd, request.command.file, request.command.args),
   };
   const createdSessions: ProviderHarness["createdSessions"] = [];
-  const actors = actorsForRoot(root);
   let turnCounter = 0;
+
+  // ── CT-11 可信工具端口装配（worldPortsFor；隔离为 test-passthrough，见文件头）──
+  const grants = createContinuousCandidateGrantHolder();
+  const evidence = createContinuousEvidenceRegistry();
+  // baseCommit 在 fixture targets 提交后再定格（actorsForRoot 内完成 targets 提交）。
+  let baseCommit = execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: root,
+    encoding: "utf8",
+  }).trim();
+  // 声明测试命令：真实 node 进程读取 fixture 写入的期望退出码。
+  writeFileSync(
+    join(root, "ct11-exit-code.js"),
+    "const fs = require('fs');\ntry { process.exit(JSON.parse(fs.readFileSync('ct11-test-exit.json', 'utf8')).code); } catch { process.exit(0); }\n",
+  );
+  writeFileSync(join(root, "ct11-test-exit.json"), JSON.stringify({ code: 0 }));
+  const policyConfig: ContinuousExecutionPolicyConfig = {
+    executionPath: root,
+    workspacePath: root,
+    scope: { allowedPaths: ["src"], forbiddenPaths: [], forbiddenCapabilities: ["push", "merge"] },
+    declaredTestCommands: [{ argv: ["node", "ct11-exit-code.js"] }],
+    activeCandidate: null,
+    pathStyle: "posix",
+    caseInsensitiveFs: false,
+    platformExecutionMode: "autonomous",
+  };
+  const policy = {
+    role: "builder" as const,
+    config: (): ContinuousExecutionPolicyConfig => ({
+      ...policyConfig,
+      activeCandidate: grants.activeGrant(),
+    }),
+    waitForAdmission: async () => {},
+  };
+  const outputRoot = join(outsideRoot, "outputs");
+  const testRunner = createContinuousConfinedTestRunner({
+    executionPath: root,
+    outputRoot,
+    isolation: createPassthroughIsolationProvider(),
+  });
+  const browserStates = new Map<string, "passed" | "failed" | "unverified">();
+  const trusted = createContinuousTrustedPorts({
+    policy,
+    identity: () => ({ programId: "p", cycleId: "c", runId: "run-ct05", epoch: 1 }),
+    baseCommit: () => baseCommit,
+    evidence,
+    testRunner,
+    browser: {
+      check: async (input) => {
+        const outcome = browserStates.get(input.candidateKey) ?? "unverified";
+        return {
+          outcome,
+          assertions: [{ kind: "browser", detail: `fixture ${input.widths.join("x")}` }],
+          reason:
+            outcome === "passed"
+              ? "fixture 通过"
+              : outcome === "failed"
+                ? "fixture 断言失败"
+                : "fixture 浏览器不可用",
+        };
+      },
+    },
+    grants,
+    changeLimits: () => ({ maxFiles: 10, maxChangedLines: 400 }),
+    suspendForChangeLimit: async () => {},
+    outputRoot,
+  });
+  const worldPorts = guardContinuousActorIo(policy, { trusted, testRunner });
+
+  const control: FixtureControl = {
+    // 产品 Host（CT-12 装配）在候选终局后释放占用、再授权下一个；fixture 在实施
+    // ask 时镜像同一顺序（release → authorize），builder 严格串行所以无并发窗口。
+    authorizeCandidate: (candidateId, targetPaths) => {
+      grants.releaseActive();
+      grants.authorize({ candidateId, targetPaths });
+    },
+    setBrowserOutcome: (candidateKey, outcome) => browserStates.set(candidateKey, outcome),
+    setTestExitCode: (code) =>
+      writeFileSync(join(root, "ct11-test-exit.json"), JSON.stringify({ code })),
+  };
+  const actors = actorsForRoot(root, control);
+  baseCommit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
 
   const service = createDynamicWorkflowRunService({
     journal,
     parentSessionId: `app-${randomUUID()}`,
     fileSystemPort,
     executionPort: executionPort as never,
+    worldPortsFor: () => worldPorts,
     createActorRuntime: ({ actor, persona, sessionId, submitPort }) => {
       // actor 的有效名在 persona.name（ActorRef 只有 siteId/ordinal）。
       const actorName = persona.name ?? `anonymous-${actor.siteId}`;
@@ -210,7 +323,17 @@ function makeProviderHarness(actorsForRoot: (root: string) => ScriptedActor[]): 
     service,
     adapter,
     createdSessions,
-    dispose: () => rmSync(root, { recursive: true, force: true }),
+    setBrowserOutcome: (candidateKey, outcome) => browserStates.set(candidateKey, outcome),
+    // 产品 Host（CT-12 装配）在候选终局后释放占用、再授权下一个；fixture 在实施
+    // ask 时镜像同一顺序（release → authorize），builder 严格串行所以无并发窗口。
+    authorizeCandidate: (candidateId, targetPaths) => {
+      grants.releaseActive();
+      grants.authorize({ candidateId, targetPaths });
+    },
+    dispose: () => {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outsideRoot, { recursive: true, force: true });
+    },
   };
 }
 
@@ -282,7 +405,11 @@ interface ScenarioConfig {
 
 const OBSERVATION_EVIDENCE = [{ kind: "observation", detail: "fixture 观察" }];
 
-function scriptedActorsFor(scenario: ScenarioConfig, root: string): ScriptedActor[] {
+function scriptedActorsFor(
+  scenario: ScenarioConfig,
+  root: string,
+  control: FixtureControl,
+): ScriptedActor[] {
   const candidates = scenario.candidates;
   const forKey = (instructions: string): CandidateScript | undefined =>
     candidates.find((candidate) => instructions.includes(candidate.itemKey));
@@ -327,23 +454,21 @@ function scriptedActorsFor(scenario: ScenarioConfig, root: string): ScriptedActo
       respond: (instructions) => {
         const candidate = forKey(instructions);
         if (!candidate) throw new Error(`builder: 无法识别候选: ${instructions.slice(0, 120)}`);
-        if (instructions.includes("运行声明的测试命令")) {
+        if (instructions.includes("实施候选")) {
+          // 实施 ask：授权该候选（与产品装配同一顺序：授权先于实施），真实写入目标
+          // 文件（可信 diff/提交端口据此看到真实改动），并布置本候选的验证结局。
+          control.authorizeCandidate(candidate.itemKey, [candidate.targetFile]);
+          control.setTestExitCode(candidate.testsExitCode);
+          control.setBrowserOutcome(candidate.itemKey, candidate.browserOutcome);
+          if (candidate.implement) {
+            writeFileSync(join(root, candidate.targetFile), `${candidate.itemKey} improved\n`);
+          }
           return {
             candidateKey: candidate.itemKey,
-            argv: ["node", "--version"],
-            exitCode: candidate.testsExitCode,
-            outputTail: candidate.testsExitCode === 0 ? "ok" : "fixture 测试失败",
+            notes: "fixture 实施",
           };
         }
-        // 实施 ask：真实写入目标文件（git add/commit 是真命令，需要真实 diff）。
-        if (candidate.implement) {
-          writeFileSync(join(root, candidate.targetFile), `${candidate.itemKey} improved\n`);
-        }
-        return {
-          candidateKey: candidate.itemKey,
-          changedFiles: candidate.implement ? [candidate.targetFile] : [],
-          notes: "fixture 实施",
-        };
+        throw new Error(`builder: 未预期的指令: ${instructions.slice(0, 120)}`);
       },
     },
     {
@@ -351,19 +476,7 @@ function scriptedActorsFor(scenario: ScenarioConfig, root: string): ScriptedActo
       respond: (instructions) => {
         const candidate = forKey(instructions);
         if (!candidate) throw new Error(`reviewer: 无法识别候选: ${instructions.slice(0, 120)}`);
-        if (instructions.includes("浏览器/视觉验证")) {
-          return {
-            candidateKey: candidate.itemKey,
-            outcome: candidate.browserOutcome,
-            assertions: [{ kind: "browser", detail: "fixture 浏览器断言" }],
-            reason:
-              candidate.browserOutcome === "unverified"
-                ? "浏览器不可用（fixture 注入）"
-                : candidate.browserOutcome === "passed"
-                  ? "通过"
-                  : "视觉断言失败",
-          };
-        }
+        // CT-11 v2：浏览器证据来自可信端口；reviewer 只承担独立 Review（否决面）。
         return {
           candidateKey: candidate.itemKey,
           outcome: candidate.reviewPassed ? "passed" : "failed",
@@ -382,8 +495,10 @@ function writeScenarioTargets(root: string, scenario: ScenarioConfig): void {
   for (const candidate of scenario.candidates) {
     writeFileSync(join(root, candidate.targetFile), `${candidate.itemKey} baseline\n`);
   }
-  execFileSync("git", ["add", "."], { cwd: root });
-  execFileSync("git", ["commit", "-q", "-m", "fixture targets"], { cwd: root });
+  if (scenario.candidates.length > 0) {
+    execFileSync("git", ["add", "."], { cwd: root });
+    execFileSync("git", ["commit", "-q", "-m", "fixture targets"], { cwd: root });
+  }
 }
 
 function gitCommitCount(root: string): number {
@@ -400,9 +515,9 @@ interface ScenarioRun {
 
 /** 跑一个完整模板场景到 run 终态并拉全量 V1 报告。 */
 async function runTemplateScenario(scenario: ScenarioConfig): Promise<ScenarioRun> {
-  const harness = makeProviderHarness((root) => {
+  const harness = makeProviderHarness((root, control) => {
     writeScenarioTargets(root, scenario);
-    return scriptedActorsFor(scenario, root);
+    return scriptedActorsFor(scenario, root, control);
   });
   const input = templateInput({ executionPath: harness.root });
   const ref = await harness.adapter.submitOnce(input);
@@ -476,7 +591,6 @@ test("I-09/E-03: 三个独立候选逐项实施+三验证全过才提交；单 b
   const run = await runTemplateScenario(scenario);
   t.after(() => run.harness.dispose());
   const { reports, harness } = run;
-
   // 全部条目都是合法 V1（读侧不丢行；模板词表与导入 schema 对齐）。
   for (const report of reports) {
     assert.ok(
@@ -596,7 +710,7 @@ test("E-15: 空候选一轮 outcome=no_changes，不实施不提交，cycle_resu
   assert.ok(cycle);
   assert.equal(cycle!.outcome, "no_changes");
   assert.deepEqual(cycle!.commits, []);
-  assert.equal(gitCommitCount(harness.root), 2); // base + targets（无候选文件时不加提交）
+  assert.equal(gitCommitCount(harness.root), 1); // 仅 fixture base（无候选文件时不加 targets 提交）
   // 没有 candidate_result / validation（无候选可实施）。
   const kinds = reports.map((report) => (report.item.ok ? report.item.item.kind : undefined));
   assert.equal(kinds.filter((kind) => kind === "candidate_result").length, 0);

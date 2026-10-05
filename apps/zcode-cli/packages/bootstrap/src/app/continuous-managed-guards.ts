@@ -2,6 +2,8 @@ import { resolve } from "node:path";
 import type { ContinuousModelBudgetGate } from "./continuous-model-budget.js";
 import type { ContinuousDecisionGate } from "./continuous-decision-adapter.js";
 import type { ContinuousActorIoPolicy } from "./continuous-io-guards.js";
+import type { ContinuousTrustedDispatch } from "./continuous-trusted-ports.js";
+import type { ContinuousConfinedTestRunner } from "./continuous-confined-execution.js";
 import {
   ContinuousExecutionError,
   type ManagedCycleInput,
@@ -12,6 +14,16 @@ export interface ContinuousManagedIoRegistration {
   /** 从受信模板的角色名取授权，不能根据模型输出决定角色。 */
   actorPolicyFor(name: string | undefined): ContinuousActorIoPolicy;
   worldPolicy: ContinuousActorIoPolicy;
+  /**
+   * CT-11 可信工具端口（continuous-test/-diff/-browser/-commit）：只进入 world 端口
+   * （模板骨架面），测试/浏览器/Git diff 证据与受控本地提交的唯一产生点。
+   */
+  trusted?: ContinuousTrustedDispatch;
+  /**
+   * CT-11 受控测试执行 runner（固定 cwd/环境/超时/输出/取消 + 已自证隔离）。
+   * 缺席或隔离未自证时，声明测试命令按 confined_execution_not_supported 拒绝。
+   */
+  testRunner?: ContinuousConfinedTestRunner;
 }
 
 export interface ContinuousManagedGuardRegistry {

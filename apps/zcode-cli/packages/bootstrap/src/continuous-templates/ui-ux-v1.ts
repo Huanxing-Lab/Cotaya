@@ -5,9 +5,12 @@
 // N 项自主候选 → 单 builder 逐项实施 → 可执行测试 → 浏览器/视觉验证 → 只读独立 Review →
 // 每项本地提交 → 最终报告。
 //
-// 硬约束（docs/tickets/continuous.md CT-05）：
-// - 只用现有 facade 能力：typed ask（接口声明 + ask<T>）、report()、artifact/world.run/git.*
-//   读取；不扩 compiler/lowering（本脚本是普通 Dynamic Workflow 脚本，经同一编译器编译）。
+// 硬约束（docs/tickets/continuous.md CT-05；CT-11 修订）：
+// - 只用现有 facade 能力：typed ask（接口声明 + ask<T>）、report()、world.run（保留命令
+//   continuous-test/-diff/-browser/-commit——由 io-guards 分派到可信工具端口）；不扩
+//   compiler/lowering（本脚本是普通 Dynamic Workflow 脚本，经同一编译器编译）。
+// - CT-11：测试执行、浏览器验证、Git diff 与本地提交的证据全部来自可信工具端口；
+//   模板不再有 world.run("git", add/commit) 直接路径——actor 无任意 Git 写能力。
 // - 不覆盖用户 saved workflow：模板只经本文件注册表暴露，Host（CT-05+ 装配）以
 //   templateId@version + hash 绑定 Program 授权；saved-workflows store 完全不涉。
 // - 不跨 Cycle imported cache：每个 Cycle 都是新 submitOnce（非 amend），命名 actor 的
@@ -24,9 +27,9 @@
 import { createHash } from "node:crypto";
 import { CONTINUOUS_TEMPLATE_UI_UX_V1_SCRIPT } from "./ui-ux-v1-script.js";
 
-/** 模板身份（Program.templateId/templateVersion 的 v1 值）。 */
+/** 模板身份（Program.templateId/templateVersion 的值）。CT-11 起版本为 "2"（可信工具端口版）。 */
 export const CONTINUOUS_TEMPLATE_UI_UX_V1_ID = "ui-ux-v1";
-export const CONTINUOUS_TEMPLATE_UI_UX_V1_VERSION = "1";
+export const CONTINUOUS_TEMPLATE_UI_UX_V1_VERSION = "2";
 
 /**
  * 模板脚本文本（实现在 ./ui-ux-v1-script.ts——架构 max-file-lines 拆分，非边界变化）。

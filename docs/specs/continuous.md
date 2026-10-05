@@ -563,6 +563,16 @@ Program 详情必须包含：Status、Goal、Scope、Budget、Cadence、Health/�
 
 ## 14. 当前验证状态
 
+### 2026-10-05：CT-11 安全操作与可信验证边界
+
+受管执行面的五条新边界（实施记录见 tickets/records/CT-11.md）：
+
+1. **受限递归搜索**：actor 文件端口的 listDirectory/searchFiles/searchText 由守卫提供受限实现——目录下行是导航（不要求目录本身在 allowedPaths 内），每个实际目标在进入结果或被读内容前都过完整的 Scope/forbidden/protected/角色/链接目标判定（与单文件读同一条判定路径）；不跟随目录符号链接；有界（访问与结果双重上限）。不允许「先收集全目录再按文件名过滤」。
+2. **symlink 竞态收敛（如实声明，不宣称完整沙箱）**：文件读写不再「检查 realpath 后按路径委托底层端口」。检查后以 O_NOFOLLOW 打开目标取得 fd，fstat(fd) 与 lstat(路径) 及检查期身份三方 (dev,ino) 一致才执行 IO，全部 IO 发生在 fd 上；新建用 O_CREAT|O_EXCL 并复核落点目录。准入等待窗口内换链的攻击被实际拒绝（回归：ct11-security.test.ts）。残余边界（动态文件系统、换走再换回同 inode）由第 3 条的隔离提供方承担。
+3. **受控 argv 测试执行**：声明测试命令经 confined runner 执行——cwd 恒为 worktree、环境白名单（HOME/TMPDIR 重定向进受控输出目录）、超时、输出落盘、取消/超时杀整棵进程组（SIGTERM→SIGKILL，等待退出）。文件/网络副作用由**构造期自证**的隔离提供方限制（darwin：seatbelt，金丝雀=允许目录内写成功+目录外写被 OS 拒+出网被拒且对照组可连通；自证不通过即 fail closed 回 confined_execution_not_supported）。request.sandbox.enabled 等请求侧声称不构成证明。`git add` 加入 mutating git 纵深拒绝集：actor 无任意 Git 写能力（含 staging）。
+4. **工具端口证据与提交门**：测试退出码/输出、Git diff/文件/行数、浏览器 390/1280 证据由可信工具端口产生并关联 candidate/run/epoch（CLI 侧 evidence registry 唯一所有者；旧 epoch 证据不参与门判定；每阶段取最新结果）。模型返回 exitCode 0/passed 只算报告——提交门只采信 producedBy=confined-test/browser-port/git-port 的事实加 review 否决面，缺任一阶段拒绝。本地提交只经可信提交端口（受管模板 v2 移除 world.run git add/commit 直接路径）：提交只含候选授权路径内改动，其余改动保留不清理；提交落在 Program 分支（原仓库 HEAD 与工作树不变）。
+5. **变更量上限与同轮挂起**：可信 diff 端口按「相对单轮起始 commit 的累计口径」核对文件/行数上限；达到即触发同轮挂起回调（装配方冻结准入并让 Host 保存继续确认——继续只增加本轮额度，恢复保留已消耗量）。候选被 Decision 推迟仍由 grant holder 立即撤销写许可（终局语义）；候选正常完成/被拒由**非撤销释放**（releaseActive）让出占用，不与 defer 撤销混淆。
+
 ### 2026-10-05：发布文档 §2.1 修复边界
 
 退出使用独立 `interrupt(ref, epoch)`：冻结准入、以 interrupted 原因取消引擎、等待工具收尾；不能只冻结后等待永不结束的预算调用。已经 suspended 的轮保留确认和暂停状态，但同样终止进程内执行。恢复和继续都先核对已登记的保护；Host 先保存 running，再解除 CLI 等待。

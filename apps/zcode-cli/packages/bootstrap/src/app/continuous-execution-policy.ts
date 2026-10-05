@@ -261,8 +261,10 @@ export function continuousActorCapabilities(role: ContinuousActorRole): {
   return { canReadFiles: true, canWriteFiles: false, canRunDeclaredTests: false, canCommit: false };
 }
 
-/** 声明式测试命令配置校验：声明阶段就拒绝 mutating git / push / 部署类 argv。 */
+/** 声明式测试命令配置校验：声明阶段就拒绝 mutating git / push / 部署类 argv。
+ * CT-11 起 "add" 一并列入：actor 无任意 Git 写能力（含 staging），暂存属于提交端口职责。 */
 const MUTATING_GIT_SUBCOMMANDS = new Set([
+  "add",
   "push",
   "pull",
   "merge",

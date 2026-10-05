@@ -639,8 +639,15 @@ export async function createZCodeApp(options: ZCodeAppOptions): Promise<ZCodeApp
             }) => {
               const registration = options.continuousManagedCycles?.executionPolicyFor?.(runId);
               const policy = registration?.actorPolicyFor(persona.name);
+              // CT-11：受检文件/命令执行由守卫自身完成（fd 绑定 + 受限搜索 + 受控命令），
+              // 不再包底层端口；actor 端口不注入可信命令面——actor 无 Git 写能力。
               const ports = policy
-                ? guardContinuousActorIo(policy, { fileSystemPort, executionPort })
+                ? guardContinuousActorIo(
+                    policy,
+                    registration?.testRunner === undefined
+                      ? {}
+                      : { testRunner: registration.testRunner },
+                  )
                 : { fileSystemPort, executionPort };
               return createScriptWorkflowAgentRuntime({
                 childSessionId: actorSessionId,
@@ -731,8 +738,14 @@ export async function createZCodeApp(options: ZCodeAppOptions): Promise<ZCodeApp
               const registration = options.continuousManagedCycles?.executionPolicyFor?.(runId);
               return registration
                 ? guardContinuousActorIo(registration.worldPolicy, {
-                    fileSystemPort,
-                    executionPort,
+                    // 可信工具命令（continuous-test/-diff/-browser/-commit）只进入
+                    // world 端口（模板骨架面）；actor 端口拿不到提交能力。
+                    ...(registration.trusted === undefined
+                      ? {}
+                      : { trusted: registration.trusted }),
+                    ...(registration.testRunner === undefined
+                      ? {}
+                      : { testRunner: registration.testRunner }),
                   })
                 : undefined;
             },

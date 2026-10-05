@@ -55,6 +55,8 @@ const SUITES = {
       "packages/services/test/continuous/commands.test.ts",
       "apps/zcode-cli/packages/bootstrap/test/continuous/execution.test.ts",
       "apps/zcode-cli/packages/bootstrap/test/continuous/release-gaps.test.ts",
+      // CT-11：安全操作与可信验证（受限搜索/symlink 竞态/受控执行/证据门/提交端口）。
+      "apps/zcode-cli/packages/bootstrap/test/continuous/ct11-security.test.ts",
       "apps/zcode-cli/packages/bootstrap/test/continuous/budget-runtime.test.ts",
       "apps/zcode-cli/packages/bootstrap/test/continuous/template.test.ts",
       "apps/zcode-cli/packages/bootstrap/test/continuous/decision-runtime.test.ts",
