@@ -532,6 +532,13 @@ UI用accessibility和稳定test IDs定位，不靠翻译文本或像素坐标。
 
 ## 本次实际结果
 
+CT-12 增补（2026-10-05，见 tickets/records/CT-12.md）：integration suite 新增两份测试
+（services `assembly.test.ts` 7 用例、bootstrap `registration.test.ts` 3 用例）登记进
+runner manifest；包级复跑 services 115/115、bootstrap 71/71（含既有全部 Continuous 测试）。
+未执行 e2e/mobile/regression（窗口就绪预检与真实 UI 用例实现归 CT-15）；价格快照注入面
+（`continuous/pricing-snapshot.json`）在测试中经装配参数注入，真实 provider 定价写入归
+CT-13/16。
+
 | 验证                     | 结果                             | 证据范围                                                                                                                                    |
 | ------------------------ | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | unit                     | 44 passed / 0 failed             | 领域、契约与 runner 自检                                                                                                                    |

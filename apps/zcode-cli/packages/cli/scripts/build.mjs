@@ -203,6 +203,12 @@ export const resolveBuildAliases = ({
     rootDirectory,
     "../../packages/shared/src/continuous-protocol.ts",
   ),
+  // CT-12：模板注册表下沉到 shared 子路径（Host/CLI 共用同一份 hash 绑定）；与
+  // continuous-protocol 同一打包约束——漏声明会被通用前缀改写导致 Desktop agent 构建失败。
+  "@zcode/shared/continuous-templates": resolve(
+    rootDirectory,
+    "../../packages/shared/src/continuous-templates/ui-ux-v1.ts",
+  ),
   "@zcode/shared/node": resolve(rootDirectory, "../../packages/shared/src/node.ts"),
   "@zcode/shared": resolve(rootDirectory, "../../packages/shared/src/index.ts"),
   "@zcode/core": resolve(cliDirectory, "../core/dist/index.js"),

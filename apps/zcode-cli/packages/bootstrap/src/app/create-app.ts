@@ -93,6 +93,10 @@ import {
   requireContinuousManagedGuards,
   requireContinuousRunRegistration,
 } from "./continuous-managed-guards.js";
+import {
+  ContinuousRegistrationError,
+  registrationAdapterViewOf,
+} from "./continuous-registration.js";
 import { createScriptWorkflowAgentRuntime } from "./script-workflow-child-runtime.js";
 import {
   WorkflowActorPersonaModelError,
@@ -838,6 +842,14 @@ export async function createZCodeApp(options: ZCodeAppOptions): Promise<ZCodeApp
       fileSystemPort,
       logger,
     });
+    // CT-12：登记处绑定执行适配器——预算闸门/IO 守卫/挂起等待共享适配器的同一本地准入
+    //（模型预算与 IO 绑定同一执行准入，ticket CT-12）。登记命令经 app 方法进入 store。
+    const continuousManagedRunStore = options.continuousManagedCycles?.store;
+    if (continuousManagedCyclePort !== undefined && continuousManagedRunStore !== undefined) {
+      continuousManagedRunStore.bindExecutionAdapter(
+        registrationAdapterViewOf(continuousManagedCyclePort),
+      );
+    }
     // 模型目录：工具层把用户说的模型名解析成 workflow run 的子代理选型（model-catalog-port.ts）。
     const modelCatalogPort = createModelCatalogPort({
       registry: options.providerRegistry,
@@ -1393,6 +1405,28 @@ export async function createZCodeApp(options: ZCodeAppOptions): Promise<ZCodeApp
             continuousManagedCycleExecution: (
               command: Parameters<NonNullable<ZCodeApp["continuousManagedCycleExecution"]>>[0],
             ) => dispatchContinuousManagedCycleCommand(continuousManagedCyclePort, command),
+          }),
+      // CT-12：登记命令面。store 缺席（宿主未装配反向请求面/功能关闭）时不注册——
+      // v4 命令回能力不支持，Host 不给自主实施 capability（fail closed）。
+      ...(continuousManagedRunStore === undefined || continuousManagedCyclePort === undefined
+        ? {}
+        : {
+            continuousManagedRunRegistration: async (
+              payload: Parameters<NonNullable<ZCodeApp["continuousManagedRunRegistration"]>>[0],
+            ) => {
+              try {
+                return {
+                  ok: true as const,
+                  result: await continuousManagedRunStore.applyRegistration(payload),
+                };
+              } catch (error) {
+                if (error instanceof ContinuousRegistrationError) {
+                  return { ok: false as const, reason: error.reason, message: error.message };
+                }
+                // 非结构化异常按接线故障原样上抛（不折叠成业务拒绝）。
+                throw error;
+              }
+            },
           }),
       ...createPluginFacadeForApp({ configResult, options, workingDirectory }),
       getPluginReferenceCatalog: () => pluginReferenceCatalog,

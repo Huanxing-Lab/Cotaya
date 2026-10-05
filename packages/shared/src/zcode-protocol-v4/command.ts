@@ -21,6 +21,12 @@ import {
   continuousManagedCycleCommandSchema,
   continuousManagedCycleResultSchema,
 } from "../continuous-protocol.js";
+// CT-12：提交前的专用登记命令（冻结配置/价格快照/请求上限/角色/执行权版本）与 CLI 能力
+// 协商回音；wire schema 唯一来源在 continuous-registration-protocol.ts。
+import {
+  continuousRegisterManagedRunCommandSchema,
+  continuousRegisterManagedRunResultSchema,
+} from "../continuous-registration-protocol.js";
 import {
   workspaceHookReviewCommandTargetSchema,
   workspaceHookReviewDecisionSchema,
@@ -254,6 +260,12 @@ export const commandPayloadSchemas = {
   // 假 CAS 失败只会误伤）。能力缺席（未装配/功能关闭）→ V4CapabilityUnsupportedError；业务
   // 拒绝以 fault.command.continuousManagedCycleRejected.<reason> 回 ACK。词表见 continuous-protocol.ts。
   continuousManagedCycle: continuousManagedCycleCommandSchema,
+  // continuousRegisterManagedRun（CT-12）：managed run 的提交前登记——冻结配置、价格快照、
+  // 请求输入/输出上限、角色授权、执行权版本（leaseEpoch）与真实工作目录一次下发，CLI 在本
+  // 进程构造预算/决策/IO 端口并按 Run ID 登记。结果回音 CLI 支持的操作词表（能力协商）；
+  // 缺 interrupt 即 CLI 太旧，Host 不给自主实施 capability。拒绝以
+  // fault.command.continuousRegisterManagedRunRejected.<reason> 回 ACK。
+  continuousRegisterManagedRun: continuousRegisterManagedRunCommandSchema,
   renameSession: z.object({ title: z.string() }),
   deleteSession: z.object({}),
   discardSharedContext: z.object({ contextId: z.string().trim().min(1) }).strict(),
@@ -425,6 +437,8 @@ export const commandResultSchema = z.discriminatedUnion("type", [
   // continuousManagedCycle 的按 op 判别结果（submitOnce 引用 / inspect 状态 / readReports
   // 批次 / inspectHealth 快照；void 操作只回 op）。
   continuousManagedCycleResultSchema,
+  // continuousRegisterManagedRun（CT-12）：登记结果 = CLI 支持的操作词表（能力协商回音）。
+  continuousRegisterManagedRunResultSchema,
   z.object({
     // messageId 只在 TurnStarted 后作为旁路归因补齐；Core admission ACK 不等待
     // projection commit，不能把 messageId 作为输入 accepted 的必要条件。

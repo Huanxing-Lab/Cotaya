@@ -304,3 +304,9 @@ export * from "./continuous-ui-protocol.js";
 // 已验证平台登记表与评估函数放 continuous-platform-protocol.ts（规格 §13 固定能力规则的
 // 单一实现；Host 装配与 CLI 执行策略共用）。同样从这里再导出，公开路径不变。
 export * from "./continuous-platform-protocol.js";
+
+// ── 受管 run 登记协议（CT-12）──
+// Host→CLI 的专用登记命令与 CLI→Host 的预算/结算/拒绝通知/决策请求 wire 契约放
+// continuous-registration-protocol.ts（见那边文件头：Host 不导入 Runtime、不跨 stdio 传
+// 函数，只传冻结数据）。同样从这里再导出，公开路径保持 continuous-protocol 一个。
+export * from "./continuous-registration-protocol.js";

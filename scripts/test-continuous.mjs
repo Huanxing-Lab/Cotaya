@@ -60,6 +60,10 @@ const SUITES = {
       "apps/zcode-cli/packages/bootstrap/test/continuous/budget-runtime.test.ts",
       "apps/zcode-cli/packages/bootstrap/test/continuous/template.test.ts",
       "apps/zcode-cli/packages/bootstrap/test/continuous/decision-runtime.test.ts",
+      // CT-12：Host 装配（wire 执行端口/登记/重建/退出/旧 epoch）与 CLI 登记处
+      //（冻结事实→三类端口、载荷校验、能力协商、预算拒绝等待）。
+      "packages/services/test/continuous/assembly.test.ts",
+      "apps/zcode-cli/packages/bootstrap/test/continuous/registration.test.ts",
     ],
   },
   recovery: {

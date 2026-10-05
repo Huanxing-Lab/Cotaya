@@ -16,7 +16,10 @@ import {
   WORKFLOW_RUN_RESUME_REJECTED_FAULT_PREFIX,
   WORKFLOW_RUN_SETTINGS_REJECTED_FAULT_PREFIX,
 } from "@zcode/shared/zcode-protocol-v4";
-import { CONTINUOUS_MANAGED_CYCLE_REJECTED_FAULT_PREFIX } from "@zcode/shared/continuous-protocol";
+import {
+  CONTINUOUS_MANAGED_CYCLE_REJECTED_FAULT_PREFIX,
+  CONTINUOUS_REGISTER_MANAGED_RUN_REJECTED_FAULT_PREFIX,
+} from "@zcode/shared/continuous-protocol";
 import { requireRecord } from "../record-access.js";
 import type { V4CommandCoreHost } from "../types.js";
 
@@ -345,6 +348,41 @@ async function continuousManagedCycle(
   return outcome.result;
 }
 
+/**
+ * continuousRegisterManagedRun（CT-12）：managed run 的提交前登记——冻结配置、价格快照、
+ * 请求输入/输出上限、角色授权、leaseEpoch 与真实工作目录一次下发。能力缺席（store 未
+ * 装配）→ V4CapabilityUnsupportedError（Host 不给自主实施 capability）；登记拒绝以
+ * fault.command.continuousRegisterManagedRunRejected.<reason> 回 ACK；成功回能力协商词表
+ * （operations 含 interrupt——旧 CLI 缺新操作即协商不完整，Host 拒绝自主实施）。
+ */
+class V4ContinuousRegisterManagedRunRejectedError extends Error {
+  readonly reasonCode: string;
+  constructor(reason: string, message?: string) {
+    super(message ?? `continuous managed run registration rejected: ${reason}`);
+    this.name = "V4ContinuousRegisterManagedRunRejectedError";
+    this.reasonCode = `${CONTINUOUS_REGISTER_MANAGED_RUN_REJECTED_FAULT_PREFIX}${reason}`;
+  }
+}
+
+async function continuousRegisterManagedRun(
+  host: V4CommandCoreHost,
+  envelope: CommandEnvelope,
+): Promise<CommandResult | undefined> {
+  const payload = envelope.payload as CommandPayloadMap["continuousRegisterManagedRun"];
+  const record = requireRecord(host, envelope.sessionId);
+  if (!record.app.continuousManagedRunRegistration) {
+    throw new V4CapabilityUnsupportedError(
+      "continuousManagedRunRegistration",
+      record.app.sessionId,
+    );
+  }
+  const outcome = await record.app.continuousManagedRunRegistration(payload);
+  if (!outcome.ok) {
+    throw new V4ContinuousRegisterManagedRunRejectedError(outcome.reason, outcome.message);
+  }
+  return outcome.result;
+}
+
 export const interactionBackgroundHandlers = {
   resolveInteraction,
   respondWorkspaceHookReview,
@@ -357,4 +395,5 @@ export const interactionBackgroundHandlers = {
   startSavedWorkflow,
   amendWorkflowRunSettings,
   continuousManagedCycle,
+  continuousRegisterManagedRun,
 };

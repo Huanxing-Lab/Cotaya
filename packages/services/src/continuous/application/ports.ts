@@ -30,6 +30,11 @@ export interface ContinuousRepositoryPort {
   /** 全量替换保存；并发写由 Program.revision 乐观校验拒绝（CT-01 落地）。 */
   saveProgram(program: Program): Promise<void>;
   listPrograms(workspaceKey: string): Promise<Program[]>;
+  /**
+   * 全部未归档 Program 的 workspace key 去重列表（CT-12 退出收口用：Host 关闭时对每个
+   * workspace 执行 interrupt；只读投影，不携带 Program 行）。
+   */
+  listWorkspaceKeys(): Promise<string[]>;
   insertCycle(cycle: Cycle): Promise<void>;
   saveCycle(cycle: Cycle): Promise<void>;
   /** 仅同 epoch 的 running 轮更新健康字段；不改业务状态、报告游标或确认指针。 */
@@ -168,6 +173,13 @@ export interface ManagedCycleInput {
   scriptText: string;
   scriptHash: string;
   configurationSnapshot: unknown;
+  /**
+   * 取得执行权后的 lease epoch（CT-12）：登记命令把它下发给 CLI（执行权版本一并校验，
+   * 旧 epoch 的登记/操作拒绝）。缺省 0 保持旧装配兼容；wire 执行端口按它构造登记。
+   */
+  leaseEpoch?: number;
+  /** 模板实参（与 bootstrap 侧镜像一致；身份核对的真实输入路径，规格 §10）。 */
+  args?: Record<string, unknown>;
 }
 
 export interface ExecutionReference {

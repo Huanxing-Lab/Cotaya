@@ -573,6 +573,39 @@ Program 详情必须包含：Status、Goal、Scope、Budget、Cadence、Health/�
 4. **工具端口证据与提交门**：测试退出码/输出、Git diff/文件/行数、浏览器 390/1280 证据由可信工具端口产生并关联 candidate/run/epoch（CLI 侧 evidence registry 唯一所有者；旧 epoch 证据不参与门判定；每阶段取最新结果）。模型返回 exitCode 0/passed 只算报告——提交门只采信 producedBy=confined-test/browser-port/git-port 的事实加 review 否决面，缺任一阶段拒绝。本地提交只经可信提交端口（受管模板 v2 移除 world.run git add/commit 直接路径）：提交只含候选授权路径内改动，其余改动保留不清理；提交落在 Program 分支（原仓库 HEAD 与工作树不变）。
 5. **变更量上限与同轮挂起**：可信 diff 端口按「相对单轮起始 commit 的累计口径」核对文件/行数上限；达到即触发同轮挂起回调（装配方冻结准入并让 Host 保存继续确认——继续只增加本轮额度，恢复保留已消耗量）。候选被 Decision 推迟仍由 grant holder 立即撤销写许可（终局语义）；候选正常完成/被拒由**非撤销释放**（releaseActive）让出占用，不与 defer 撤销混淆。
 
+### 2026-10-05：CT-12 window-scoped Local Host 装配边界
+
+Host 侧装配与登记协议的固定规则（实施记录见 tickets/records/CT-12.md）：
+
+1. **装配与开关**：桌面 Local Host 以 `ZCODE_CONTINUOUS_HOST_ENABLED=1` 显式开启（默认关闭
+   = channel 未注册 = renderer capability 挂起 = tab 隐藏）。装配构造 repository（tasks-index
+   同库，先经 TaskIndexRepo 幂等迁移）、预算准入、继续确认、supervisor、recovery、模板来源
+   （shared `continuous-templates` 版本化注册表，Host/CLI 共用同一份 templateId@version+hash
+   绑定），注册 `ServiceChannels.Continuous` 与 wake handler；装配失败保持关闭。价格快照经
+   产品数据目录 `continuous/pricing-snapshot.json` 注入（schema 校验；缺席 → managed run 结构化
+   拒绝自动执行并显示原因，§9 fail closed，不静默零价）。
+2. **登记协议**（shared `continuous-registration-protocol`，全部 strict schema）：Host→CLI 专用
+   v4 命令 `continuousRegisterManagedRun` 一次下发冻结事实（Scope/角色/变更量/声明测试命令/
+   价格快照/请求输入输出上限/尝试上限/leaseEpoch/真实工作目录/并发上限）；CLI 在本进程构造
+   预算/决策/IO 端口并按 Run ID 登记（Host 不导入 Runtime、不跨 stdio 传函数）。CLI→Host
+   反向请求四个：`continuous/ledger/reserve|settle`（账本）、`continuous/budget/suspend`
+   （拒绝通知：CLI 先本地冻结准入再通知，Host 走与监督挂起同一条落库链）、
+   `continuous/decision/escalate`（先持久化 Decision，§8）。
+3. **启动顺序与重建**：supervisor 顺序不变（保存执行身份 → 取得执行权 → submitOnce）；
+   wire 执行端口在 submitOnce/resume/resumeSuspended/interrupt 的传输前先发登记命令——
+   恢复与继续因此「从持久化快照重建全部登记」（登记载荷由 Program+Cycle 行组装，
+   不读实时可变配置）。重发同触发键由 supervisor 幂等复用同 Cycle/Run。
+4. **能力协商**：登记结果回音 CLI 支持的操作词表；Host 逐一核对（缺 `interrupt` 即 CLI 太旧）
+   → `capability_missing`，不给自主实施 capability；capabilityUnsupported fault 同映射。旧
+   epoch 的登记/操作拒绝 `lease_lost`。
+5. **同一准入**：CLI 侧登记处把预算闸门（admissionProbe/waitForContinuation）、IO 守卫
+   （waitForAdmission）与挂起等待全部绑定执行适配器的本地准许状态；并发上限取冻结配置的
+   budget.maxConcurrentActors（默认 10）传入登记载荷，不退回 CPU 默认值。
+6. **退出**：Host shutdown 先取装配引用 → stop（新 wake 抛错回执）→ `interruptForShutdown`
+   （全部 workspace：保存 interrupted、suspended 确认保留、interrupt 并等待收尾）→ 才 dispose
+   services。CLI 侧回滚位 = 未登记的 run 被守卫拒绝（fail closed）；Host 侧回滚 = 不装配/
+   停发命令（`enabled` 选项字段保留给测试替身）。
+
 ### 2026-10-05：发布文档 §2.1 修复边界
 
 退出使用独立 `interrupt(ref, epoch)`：冻结准入、以 interrupted 原因取消引擎、等待工具收尾；不能只冻结后等待永不结束的预算调用。已经 suspended 的轮保留确认和暂停状态，但同样终止进程内执行。恢复和继续都先核对已登记的保护；Host 先保存 running，再解除 CLI 等待。

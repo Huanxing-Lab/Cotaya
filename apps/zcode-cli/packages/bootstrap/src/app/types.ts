@@ -208,6 +208,13 @@ export interface ZCodeAppOptions {
     decisionGateFor?: (
       runId: string,
     ) => import("./continuous-decision-adapter.js").ContinuousDecisionGate | undefined;
+    /**
+     * CT-12 登记处实例：协议宿主（workspace-model-runtime）创建并注入——它持有 CLI→Host
+     * 反向请求面（context.requestClient）。在场且 enabled 时 app 暴露
+     * continuousManagedRunRegistration（v4 登记命令的收件人），并把执行适配器绑给它
+     * （模型预算/IO/挂起等待共享同一本地准入）。登记在 submitOnce 前到达，恢复/继续前重建。
+     */
+    store?: import("./continuous-registration.js").ContinuousManagedRunStore;
   };
   /** 首次真实用户执行或 cold-resume fallback 时解析一次，之后由 app 生命周期缓存。 */
   resolveInitialBashShellSelection?: () => Promise<ExecutionShellSelection | undefined>;
@@ -493,6 +500,40 @@ export interface ZCodeApp {
     input?: import("@zcode/shared/continuous-protocol").ContinuousManagedCycleInput;
   }): Promise<
     | { ok: true; result: import("@zcode/shared/continuous-protocol").ContinuousManagedCycleResult }
+    | { ok: false; reason: string; message: string }
+  >;
+  /**
+   * Continuous managed run 的登记命令面（CT-12；v4 命令 continuousRegisterManagedRun 的
+   * 收件人）。可选能力：continuousManagedCycles.store 缺席（未装配/功能关闭/stub 宿主）时
+   * 不注册——网关回结构化的能力不支持，Host 不给自主实施 capability。成功回能力协商词表
+   * （含 interrupt）；登记失败以结构化 reason 拒绝（registration_invalid 等）。载荷字段与
+   * shared continuousRegisterManagedRunCommandSchema 一一对应（wire 层已 strict 校验）。
+   */
+  continuousManagedRunRegistration?(payload: {
+    programId: string;
+    cycleId: string;
+    executionSessionId: string;
+    workflowRunId: string;
+    traceId: string;
+    executionPath: string;
+    workspacePath: string;
+    leaseEpoch: number;
+    scope: import("@zcode/shared/continuous-protocol").ContinuousScopePolicy;
+    roles: Record<string, import("@zcode/shared/continuous-protocol").ContinuousActorRoleWire>;
+    builderRole?: string;
+    declaredTestCommands: Array<{ argv: string[] }>;
+    changeLimits: { maxFiles: number; maxChangedLines: number };
+    pricing: import("@zcode/shared/continuous-protocol").ContinuousPriceSnapshot;
+    requestCaps: import("@zcode/shared/continuous-protocol").ContinuousRequestCaps;
+    maxAttemptsPerRequest: number;
+    maxConcurrentActors: number;
+    baseCommit: string;
+    outputRoot?: string;
+  }): Promise<
+    | {
+        ok: true;
+        result: import("@zcode/shared/continuous-protocol").ContinuousRegisterManagedRunResult;
+      }
     | { ok: false; reason: string; message: string }
   >;
   /**

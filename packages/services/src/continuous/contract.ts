@@ -231,6 +231,34 @@ export type { ContinuousCommandServiceDeps } from "./application/continuousComma
 export { ContinuousCommandService } from "./application/continuousCommandService.js";
 export { ContinuousCommandError } from "./application/continuousCommandErrors.js";
 export { CONTINUOUS_DETAIL_RECENT_CYCLES } from "./application/continuousViews.js";
+// CT-12：Host 装配（ServiceChannels.Continuous + wake handler + CLI→Host 请求处理）。
+// assembleContinuousHost 只做构造与接线：repository/预算准入/继续确认/supervisor/recovery
+// 全部是既有服务；wire 执行端口经注入的 ContinuousAgentTransport 发 v4 命令（services 不
+// import zcode-agent 实现——分层边界），模板来源是 shared 的版本化注册表。
+export type {
+  AssembledContinuousHost,
+  AssembleContinuousHostDeps,
+} from "./adapters/hostAssembly.js";
+export { assembleContinuousHost } from "./adapters/hostAssembly.js";
+export type {
+  ContinuousAgentTransport,
+  ContinuousAgentCommandAck,
+} from "./application/agentTransport.js";
+export { CONTINUOUS_AGENT_CAPABILITY_FAULT } from "./application/agentTransport.js";
+export type {
+  ContinuousAgentRequestHandlerDeps,
+  ContinuousAgentRequestOutcome,
+} from "./application/agentRequests.js";
+export { handleContinuousAgentRequest } from "./application/agentRequests.js";
+export type { WireExecutionPortDeps } from "./adapters/wireExecutionPort.js";
+export {
+  createWireContinuousExecutionPort,
+  type WireContinuousExecutionPort,
+} from "./adapters/wireExecutionPort.js";
+export {
+  buildManagedRunRegistration,
+  ContinuousRegistrationPayloadError,
+} from "./application/registrationPayload.js";
 
 // ── CT-08：接口本体与 RPC 描述符在 contract-interfaces.ts（叶子文件，避免 contract ↔
 // 实现的 import 环；命令面 10+1 方法与查询面 2 方法分接口是 max-public-methods 拆分）。

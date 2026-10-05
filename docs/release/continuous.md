@@ -42,17 +42,20 @@ observe_only 平台的行为（规格 §13，服务与执行策略两层强制�
    探测驱动）；scheduler 对缺表旧库返回空查询、Host 唤醒处理器缺席时
    wake 回执失败并重发（无业务副作用）；CLI 侧 `continuousManagedCycles.enabled` 未开时
    `continuousManagedCycleExecution` 不暴露，v4 命令面回答能力不支持。
-2. 开启前置（装配清单，CT-08/09 记录的已知边界——尚未实施）：
+2. 开启前置（装配清单，CT-08/09 记录的已知边界——CT-12 已实施 Host 侧装配）：
    - Host 侧构造 Continuous 栈：tasks-index 存储上的 repository、supervisor/recovery/
-     预算账本/健康监控、模板来源（bootstrap `continuous-templates` 注册表）；
+     预算账本/健康监控、模板来源（shared `continuous-templates` 注册表）——**已实施**
+     （`ZCODE_CONTINUOUS_HOST_ENABLED=1` 开启，默认关闭）；
    - Host 注册 `ContinuousCommandService` 到 `ServiceChannels.Continuous`（命令面 + 查询面
-     单实现类），并注册 `continuousWakeRouter` 处理器接 scheduler 唤醒；
+     单实现类），并注册 `continuousWakeRouter` 处理器接 scheduler 唤醒——**已实施**；
    - CLI 侧执行端口经 v4 `continuousManagedCycle` 桥接（`continuousManagedCycles.enabled`
-     开 + Host 按 runId 登记预算/决策闸门）；
+     开 + Host 按 runId 登记预算/决策闸门）——**已实施**（登记经专用命令
+     `continuousRegisterManagedRun`，CLI 侧对未登记 run fail closed）；
    - 装配时经 `assessContinuousPlatformExecution({platform, arch})` 评估平台模式并注入
-     supervisor 启动门与执行策略（本表第 1 节的登记表为唯一事实源）；
+     supervisor 启动门与执行策略（本表第 1 节的登记表为唯一事实源）——既有（CT-10）；
    - capability/programDetail 读面走通后，按 CT-09 runner 的 capability 预检从真实 UI 驱动
-     E-01…E-20/E-29…E-34（当前全部 blocked 的原因即此装配缺席，见 CT-09 记录）。
+     E-01…E-20/E-29…E-34（当前全部 blocked 的原因即此装配缺席，见 CT-09 记录）——待 CT-15
+     （真实 E2E 用例实现与窗口就绪预检修复）。
 3. 开启条件（测试文档 §4 步骤 G release gate）：核心 U/I/R/E 真实通过、普通功能回归通过、
    发布平台证据齐全（本表）、live 验收单独完成（无测试身份凭据时 blocked，不能模拟通过）、
    生产 build 无测试故障接口（E-28）。核心失败或必需 live blocked 时，自主实施 flag 保持
@@ -69,7 +72,7 @@ observe_only 平台的行为（规格 §13，服务与执行策略两层强制�
 | CT-02 策略没有实际执行点               | 受管 actor 的实际文件/执行端口和模板 `world` 端口均包装；角色、候选路径、符号链接及命令检查进入 IO 调用路径；child runtime 不再用原始端口覆盖检查端口。未支持的递归搜索、后台工具、任意 shell/MCP 和未证明隔离的命令明确拒绝。                                                                                        | CT-11 已落地（2026-10-05，见 tickets/records/CT-11.md）：受限递归搜索、fd 级 symlink 竞态收敛、受控 argv 测试执行（darwin seatbelt 自证隔离）、工具端口证据与可信提交端口（模板 v2 移除 world.run git add/commit）、变更量上限同轮挂起。完整产品装配与真实 E2E 仍待 CT-12…16。 |
 | 预算拒绝使 Run errored，继续后循环确认 | 配置暂停端口的预算闸门释放并发席位并等待；用户授权后同一 acquire 重新预留，不增加 provider 尝试次数。真实 SQLite + DWF 引擎测试证明 Run 保持 running，并由同一 actor 完成。停止信号可以取消等待。旧 errored Run 明确拒绝继续；已完成 Run 只结算。Host 先保存 running，再唤醒 CLI。                                    | CT-12/13：Host 预算预留、拒绝原因、确认持久化、授权结果经真实通信装配；旧失败轮提供结束并显式新开轮的产品入口。                                                                                                                                                                |
 | 探活没有调用者，也没有真实证据         | supervisor 的同一监督循环每 15 秒探测；CLI 从 journal 的 sequence/timeCreated 读真实动作时间，不刷新查询时间。全部运行节点都具有落库 backoff 原因与期限才承认正常等待。有效时间/卡死触发同轮继续确认，不调用 stop；失联保存 interrupted。健康字段采用 running + leaseEpoch 条件原子更新，不能覆盖取消状态或报告游标。 | CT-14：覆盖声明测试、工具和其他真实长等待的可取消操作登记；失联探测有界响应；真实 UI 的一小时与 hang 场景。                                                                                                                                                                    |
-| 预算登记与本地准入没有装配             | 产品 submit/resume/continue 在预算（含暂停与本地探针）、决策、IO 登记缺失或 worktree 不符时拒绝；预算和 IO 可使用执行适配器同一 `waitForAdmission`。新增独立 interrupt 命令，退出取消引擎并等待收尾，保留 interrupted 恢复语义；已暂停轮也会结束进程内执行并保留确认。                                                | CT-12/13：window-scoped Local Host 的真实登记和启动/恢复/退出装配；登记检查不能替代这项工作。                                                                                                                                                                                  |
+| 预算登记与本地准入没有装配             | 产品 submit/resume/continue 在预算（含暂停与本地探针）、决策、IO 登记缺失或 worktree 不符时拒绝；预算和 IO 可使用执行适配器同一 `waitForAdmission`。新增独立 interrupt 命令，退出取消引擎并等待收尾，保留 interrupted 恢复语义；已暂停轮也会结束进程内执行并保留确认。                                                | CT-12 已落地（2026-10-05，见 tickets/records/CT-12.md）：Host 装配（env 门）+ 专用登记命令 + CLI→Host 预留/结算/拒绝通知/决策请求 + 能力协商（含 interrupt）+ 退出/恢复重建登记。CT-13：真实预算通信的拒绝观测细节与旧 errored 轮产品入口。                                    |
 
 本次验证使用 Node 25.8.0；仓库要求 Node 24.14.0，当前机器没有 mise 与对应安装。
 因此下面结果不替代固定 Node 版本或打包平台验收：

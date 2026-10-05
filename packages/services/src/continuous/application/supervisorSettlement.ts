@@ -3,7 +3,7 @@
 // 过门 done）、预算/重试类失败 → 挂起原因的映射。全部纯依赖注入，无自有状态。
 
 import { randomUUID } from "node:crypto";
-import type { Cycle, CycleResult, Program } from "../domain/types.js";
+import type { ContinuationRequestReason, Cycle, CycleResult, Program } from "../domain/types.js";
 import type {
   ContinuousClockPort,
   ContinuousExecutionPort,
@@ -32,6 +32,76 @@ function referenceOf(cycle: Cycle): ExecutionReference {
     workflowRunId: cycle.workflowRunId,
     traceId: cycle.traceId,
   };
+}
+
+/**
+ * CT-12 CLI 拒绝通知路径的挂起：与 suspendCycleForBudget 同一条落库链（先冻结执行侧准许、
+ * 同轮唯一 pending 确认合并、program paused），但原因来自 CLI 侧准入所有者的结构化通知
+ * （budget_denied/admission_closed/change_limit——§2.1 修复边界「CLI 通知 Host 保存暂停和
+ * 继续确认」），不是 Run 终态的文本映射。重复通知幂等（existing pending 复用）。
+ */
+export async function suspendCycleForAgentNotification(
+  deps: SuspendWriteDeps,
+  input: {
+    cycle: Cycle;
+    program: Program;
+    code: "budget_denied" | "admission_closed" | "change_limit";
+    limitKind?: "file_limit" | "line_limit";
+    message: string;
+  },
+): Promise<string> {
+  const { cycle, program, code, limitKind, message } = input;
+  const reason: ContinuationRequestReason = code === "change_limit" ? "change_limit" : "cost_limit";
+  const now = deps.clock.now();
+  await deps.execution.suspendAtSafeBoundary(referenceOf(cycle), `${code}:${message}`);
+  const existing = await deps.repository.getPendingContinuationRequest(cycle.id);
+  let requestId = existing?.id;
+  if (requestId === undefined) {
+    requestId = randomUUID();
+    await deps.repository.insertContinuationRequest({
+      id: requestId,
+      programId: program.id,
+      cycleId: cycle.id,
+      reason,
+      limitKind: code === "change_limit" ? "change" : "cost",
+      reasons: [reason],
+      observedUsage: { code, ...(limitKind === undefined ? {} : { limitKind }) },
+      currentLimit:
+        code === "change_limit"
+          ? {
+              perCycleMaxFiles: program.budget.perCycleMaxFiles,
+              perCycleMaxChangedLines: program.budget.perCycleMaxChangedLines,
+            }
+          : { perCycleCostUsdMicros: program.budget.perCycleCostUsdMicros },
+      recommendedExtension:
+        code === "change_limit"
+          ? {
+              maxFiles: program.budget.perCycleMaxFiles,
+              maxChangedLines: program.budget.perCycleMaxChangedLines,
+            }
+          : { costMicros: program.budget.perCycleCostUsdMicros },
+      version: 1,
+      status: "pending",
+      createdAt: now,
+    });
+  }
+  if (cycle.status !== "suspended") {
+    await deps.repository.saveCycle({
+      ...cycle,
+      status: "suspended",
+      pendingContinuationRequestId: requestId,
+      updatedAt: now,
+    });
+  }
+  if (program.status !== "paused") {
+    await deps.repository.saveProgram({
+      ...program,
+      status: "paused",
+      statusReason: `资源上限（${code}）待继续确认`,
+      updatedAt: now,
+    });
+  }
+  return requestId;
 }
 
 /** 资源上限挂起：cycle suspended + program paused + 同轮唯一 pending 继续确认（§6.1/§5）。 */

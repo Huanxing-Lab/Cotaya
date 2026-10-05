@@ -339,6 +339,9 @@ export class ContinuousSupervisor {
       scriptText: cycle.scriptText,
       scriptHash: cycle.scriptHash,
       configurationSnapshot: cycle.configurationSnapshot,
+      // CT-12：执行权版本随提交下发——wire 执行端口据此先登记（leaseEpoch 贯穿预算/写入/
+      // 提交，规格 §10），旧 epoch 的登记在 CLI 侧被拒。
+      leaseEpoch: cycle.leaseEpoch,
     });
     const now = this.deps.clock.now();
     cycle = { ...cycle, status: "running", startedAt: cycle.startedAt ?? now, updatedAt: now };

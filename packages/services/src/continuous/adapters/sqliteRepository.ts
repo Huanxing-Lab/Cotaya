@@ -1,9 +1,8 @@
 // Continuous 长期状态 sqlite 仓库（CT-01）：tasks-index 新表的唯一 SQL 写入方。
-// 职责拆分：行编解码在 sqliteCodecs；连接/事务在 sqliteConnection；
-// 队列/报告导入在 sqliteQueueStore；终态结算/租约在 sqliteLifecycleStore；
-// 使用账本在 sqliteUsageStore；决策合并/resolve 在 sqliteDecisionStore（CT-06）。
-// 唯一性、同 Program 复合 FK、一个 Program 一条未结束 Cycle 全部由数据库约束保证，
-// 不依赖内存锁（I-02/I-03）。
+// 职责拆分：行编解码 sqliteCodecs；连接/事务 sqliteConnection；队列/报告导入
+// sqliteQueueStore；终态结算/租约 sqliteLifecycleStore；账本 sqliteUsageStore；决策
+// sqliteDecisionStore（CT-06）。唯一性、复合 FK、一个 Program 一条未结束 Cycle 由
+// 数据库约束保证，不依赖内存锁（I-02/I-03）。
 
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
@@ -95,12 +94,10 @@ export class SqliteContinuousRepository implements ContinuousRepositoryPort {
   ) {}
 
   async ensureReady(): Promise<void> {
-    if (!this.initializePromise) {
-      this.initializePromise = this.initialize().catch((error) => {
-        this.close();
-        throw error;
-      });
-    }
+    this.initializePromise ??= this.initialize().catch((error) => {
+      this.close();
+      throw error;
+    });
     await this.initializePromise;
   }
 
@@ -171,6 +168,13 @@ export class SqliteContinuousRepository implements ContinuousRepositoryPort {
       )
       .all(workspaceKey);
     return rows.map((row) => decodeProgram(row as unknown as ProgramRow));
+  }
+  async listWorkspaceKeys(): Promise<string[]> {
+    await this.ensureReady();
+    const rows = this.database()
+      .prepare("SELECT DISTINCT workspace_key FROM continuous_program WHERE archived_at IS NULL")
+      .all() as Array<{ workspace_key: string }>;
+    return rows.map((row) => row.workspace_key);
   }
   // ── Cycle ──
 
