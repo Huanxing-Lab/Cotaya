@@ -4,7 +4,10 @@
 // 规则：
 // - suite 使用显式 manifest 枚举（仓库相对路径），argv spawn，不依赖 shell glob/平台分隔符。
 // - suite 空目录、无测试文件或 runner/entry 缺失：非零退出并标 `missing`，绝不打印通过。
-// - 不吞子进程 exit code；任何 suite 非 passed 时整体非零。
+// - 不吞子进程 exit code；failed/missing 的 suite 让整体非零。
+// - blocked 不是失败（测试文档 §10）：script runner 健康完成（exit 0）但报告标 blocked 时，
+//   suite 状态传播 blocked、退出码保持 0，由 release gate 消费 blocked；live 未显式 opt-in
+//   的拒绝启动（无子进程退出码）仍整体非零，避免误跑被当成成功。
 // - live suite 必须显式 `--allow-live` 才能启动；`all` 恒排除 live，避免无意消费。
 // - 结果状态只有 passed/failed/missing/blocked（用例级 planned/… 由各 suite runner 输出）。
 
@@ -264,11 +267,20 @@ async function runScriptSuite(name, definition, timeoutMs, allowLive, parentRunI
       failureReason: `无法启动 runner: ${result.spawnError}`,
     };
   }
+  // 修复依据（测试文档 §10 退出码语义）：runner 健康完成（exit 0）但 entryReport 标
+  // blocked（capability/平台/凭据不可用的如实状态）时，suite 状态传播 blocked 而非
+  // 记 passed——退出码仍由子进程决定（0），报告层不丢失「未验收通过」的事实。
+  const runnerHealthyBlocked = result.exitCode === 0 && entryReport?.status === "blocked";
+  const failureReason = runnerHealthyBlocked
+    ? "runner 如实完成但存在 blocked 用例（release gate 消费：自主实施 flag 保持关闭）"
+    : result.exitCode === 0
+      ? null
+      : `runner 退出码 ${result.exitCode}`;
   return {
     ...base,
-    status: result.exitCode === 0 ? "passed" : "failed",
+    status: result.exitCode === 0 ? (runnerHealthyBlocked ? "blocked" : "passed") : "failed",
     exitCode: result.exitCode,
-    failureReason: result.exitCode === 0 ? null : `runner 退出码 ${result.exitCode}`,
+    failureReason,
     ...(entryReport ? { entryReport } : {}),
   };
 }
@@ -333,7 +345,16 @@ async function main() {
   };
   console.log(`\n[continuous] 标准报告 (testRunId=${testRunId})`);
   console.log(JSON.stringify(report, null, 2));
-  const allPassed = summary.passed === results.length && results.length > 0;
+  // 退出码判定（测试文档 §10）：failed/missing 必须非零；blocked 只有在 runner 健康完成
+  // （exitCode === 0，如 e2e/mobile 的 capability blocked）时不阻塞退出码，blocked 事实保留在
+  // 报告里由 release gate 消费；live 未 opt-in 的拒绝启动没有子进程退出码（null），仍非零。
+  const gateBlocking = results.filter(
+    (item) =>
+      item.status === "failed" ||
+      item.status === "missing" ||
+      (item.status === "blocked" && item.exitCode !== 0),
+  );
+  const allPassed = gateBlocking.length === 0 && results.length > 0;
   const childFailureCode = results.length === 1 ? (results[0].exitCode ?? 0) : 0;
   process.exit(allPassed ? 0 : childFailureCode > 0 ? childFailureCode : 1);
 }

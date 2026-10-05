@@ -227,10 +227,27 @@ test("E-28: production build（无 bridge flag）——测试桥不可用、测�
     // Continuous tab 缺席 = 默认关闭在真实 production build 上的产品行为（E-27 同源证据）。
     // 评审修复：先真实导航到 Automations 页面再扫描——tab 只在该页面挂载，直接扫全新窗口
     // 时「不命中」无法区分「被门隐藏」与「页面未打开」（空转 canary，验收证据不成立）。
+    // 欢迎页阻挡（修复依据）：每次 testRun 用全新 electron-user-data，凭据必然缺席（测试
+    // 文档 §4 步骤 E 禁止输入个人凭据），产品首屏为登录/欢迎页——侧栏与 automations 入口
+    // 不渲染，导航必然超时。此时「tab 缺席」证据不可得（≠ tab 被门隐藏），按 §10 如实
+    // 标 blocked（bridge/bundle 断言不受影响，仍真实执行），不放水成 passed 也不误判 failed。
     let tabPresent = false;
     let navigated = false;
+    let welcomeBlocked = false;
     for (const candidate of app.electron.windows()) {
       try {
+        try {
+          await candidate
+            .locator(
+              '[data-testid^="oauth-login-button"], [data-testid="login-use-api-key-button"]',
+            )
+            .first()
+            .waitFor({ state: "attached", timeout: 5_000 });
+          welcomeBlocked = true;
+          break;
+        } catch {
+          // 欢迎页未出现（可能已有凭据）：继续真实导航。
+        }
         await candidate
           .locator('[data-testid="automations-open"]')
           .first()
@@ -253,7 +270,29 @@ test("E-28: production build（无 bridge flag）——测试桥不可用、测�
     await evidence.record("continuous-tab-probe.json", {
       tabPresent,
       navigated,
+      welcomeBlocked,
     });
+    if (welcomeBlocked) {
+      run.recordCheck("production-continuous-default-off", false, {
+        detail:
+          "欢迎/登录页阻挡（隔离环境无凭据，禁止输入个人凭据）：无法到达 Automations 页，tab 缺席证据不可得（blocked）",
+      });
+      recordCase(run, {
+        caseId: "E-28",
+        status: "blocked",
+        sourceCommit,
+        command: "node scripts/test-continuous.mjs --suite regression",
+        assertions: [
+          "VITE_ZCODE_E2E_STORE_BRIDGE=0 的 production build：ZCODE_ENV=test 无双重测试标识 → bridge 不暴露（真实 Electron 探针，已执行）",
+          "测试专用符号（barrier/controllable clock/scripted provider）不出现在 main/host/preload/renderer bundle（已执行）",
+        ],
+        evidence: evidence.list(),
+        failureReason:
+          "tab 缺席 canary 证据不可得：欢迎/登录页阻挡（无凭据隔离环境）无法打开 Automations 页；bridge 不暴露与符号不进产物两断言已真实通过",
+      });
+      t.skip("blocked: 欢迎页阻挡，tab 缺席证据不可得（§10）");
+      return;
+    }
     run.recordCheck("production-continuous-default-off", !tabPresent && navigated, {
       detail: tabPresent
         ? "tab 出现（默认关闭被破坏）"
@@ -318,7 +357,9 @@ test("E-27: 关闭与回滚——停止链语义重跑 + 回滚顺序文档在�
     command: "node scripts/test-continuous.mjs --suite regression",
     assertions: [
       "recovery suite 重跑通过（正常退出保存 interrupted、立即停止撤销→取消→等待停止、用户取消不自动恢复）",
-      "production build 上 Continuous 默认关闭（checks.production-continuous-default-off）",
+      // 修复依据：「production build 上 Continuous 默认关闭」的证据由 E-28 的
+      // checks.production-continuous-default-off 独家记录（导航成功才有 tab 缺席证据；
+      // 欢迎页阻挡时该 check 为 false，E-27 不得在未取到证据时随 E-26 一并声称通过）。
       "docs/release/continuous.md 含有序回滚步骤与「保留 DB/worktree/历史」规则",
     ],
     evidence: evidence.list(),
@@ -327,12 +368,18 @@ test("E-27: 关闭与回滚——停止链语义重跑 + 回滚顺序文档在�
   });
 });
 
-test("regression suite 汇总：failed/blocked 必须为 0", () => {
+test("regression suite 汇总：failed 必须为 0（blocked 如实记录，§10 退出码语义）", () => {
   const summary = caseSummary(run);
   console.log(`[regression] case summary: ${JSON.stringify(summary)}`);
+  // 修复依据：blocked 是证据不可得的如实状态（如 E-28 tab canary 受欢迎页阻挡），
+  // 不是 runner 失败（§10 退出码语义）；把 blocked 编码成非零退出会让无凭据隔离环境
+  // 的 regression 永远无法通过门禁。blocked 经 writeReport 写入报告由 release gate 消费。
   assert.equal(summary.failed, 0, `failed 用例: ${summary.failed}`);
-  assert.equal(summary.blocked, 0, `blocked 用例: ${summary.blocked}`);
-  assert.ok(summary.passed > 0, "没有任何用例通过时 suite 不能通过");
+  assert.equal(summary.planned, 0, `planned 用例: ${summary.planned}（用例没有结论）`);
+  assert.ok(
+    summary.blocked + summary.passed > 0,
+    "没有任何用例结论时 suite 不能通过（runner 空转不是验收）",
+  );
 });
 
 after(async () => {

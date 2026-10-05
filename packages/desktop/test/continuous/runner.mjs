@@ -152,14 +152,14 @@ export async function sha256File(file) {
  * stage-agent-bundle.mjs 暂存到 packages/desktop/bundled-agents/<platform>/glm/zcode.cjs——
  * dev 态 Host 解析 agent 二进制的候选只有 bundled-agents/，不存在误用旧 cli/dist 的路径。
  */
-export async function buildAgentCli(run, { log = console.log } = {}) {
+export async function buildAgentCli(run, { log = console.log, quiet = false } = {}) {
   const startedAt = Date.now();
   const result = await spawnCaptured(
     run,
     "build-cli",
     process.execPath,
     ["scripts/build-desktop-agent-cli.mjs"],
-    { cwd: REPO_ROOT },
+    { cwd: REPO_ROOT, quiet },
   );
   if (result.exitCode !== 0) {
     throw new Error(`[runner] CLI 构建失败 exit=${result.exitCode}（日志: ${result.logFile}）`);

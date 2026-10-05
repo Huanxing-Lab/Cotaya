@@ -154,9 +154,11 @@ runner 必须完成：
 7. 从 UI 创建 Program、点击命令；观察真实协议、数据库、Run、工具和目标页面。
 8. 每个 E 用例收集 UI + 服务/存储 + 文件/执行三层断言。
 9. 按需重启实际进程，保留同一测试数据根核对恢复。
-10. 完成后停止测试所有进程树并输出报告；任何失败返回非零。
+10. 完成后停止测试所有进程树并输出报告；任何失败返回非零（blocked 的退出码语义见 §10）。
 
 构建与 runtime path 以当前 desktop 脚本为准。runner readiness 必须包括实际加载的 CLI build fingerprint，不把成功编译等同于已加载新版本。
+
+CLI/desktop 构建与 Electron 进程输出默认写入 `artifacts/logs/<label>.log`，控制台只保留结论行（批量构建子进程动辄 300KB+ 输出，编排层存在 stdout 上限的门禁环境会整条命令拒收）；失败时错误消息必须指向对应日志文件。
 
 ### 步骤 E：手机控制和两种交付语义
 
@@ -190,7 +192,7 @@ rtk proxy node scripts/test-continuous.mjs --suite all
 rtk proxy pnpm verify:pre-push
 ```
 
-CT-10 起 regression suite 入口存在（`packages/desktop/test/continuous/regression.test.mjs`，普通 production build 即无 bridge flag 构建）：E-26（bootstrap 既有测试真实重跑 + 权限 mode 枚举 canary + Continuous 不引入并行 Goal 链的 grep 事实）、E-27（production build 默认关闭探针 + recovery 停止链重跑 + 回滚顺序文档在场）、E-28（production build 测试桥不可用 + 测试符号不进产物 bundle）。UI 级普通 Workflow Run 回归与手机 replayable 链路不由 regression 声称（归 e2e/mobile，其 blocked 状态见各自 artifacts/results.json）。
+CT-10 起 regression suite 入口存在（`packages/desktop/test/continuous/regression.test.mjs`，普通 production build 即无 bridge flag 构建）：E-26（bootstrap 既有测试真实重跑 + 权限 mode 枚举 canary + Continuous 不引入并行 Goal 链的 grep 事实）、E-27（recovery 停止链重跑 + 回滚顺序文档在场；「默认关闭探针」的证据归 E-28 独家记录）、E-28（production build 测试桥不可用 + 测试符号不进产物 bundle + Continuous tab 缺席 canary——隔离环境无凭据时首屏为欢迎/登录页、无法打开 Automations 页，tab 缺席证据不可得，该半边如实标 blocked 而非 passed/failed）。UI 级普通 Workflow Run 回归与手机 replayable 链路不由 regression 声称（归 e2e/mobile，其 blocked 状态见各自 artifacts/results.json）。
 
 all = unit/integration/recovery/e2e/mobile/platform/regression，当前机器不能运行的 OS 单独标 unavailable，不伪造结果。多 OS 发布汇总合并各自结果。
 
@@ -500,6 +502,8 @@ UI用accessibility和稳定test IDs定位，不靠翻译文本或像素坐标。
 ## 10. 报告与完成标准
 
 结果状态只有 planned/passed/failed/blocked/skipped。核心用例不允许以skipped发布。runner启动失败、测试数量为零、未找到配置或fixture均不是passed。
+
+退出码语义（runner 与编排入口 `scripts/test-continuous.mjs` 一致）：failed 用例、runner 启动/预检失败、suite missing、live 未显式 opt-in 均返回非零；blocked 不是失败——capability/平台/浏览器/凭据不可用时 runner 如实把用例与 suite 状态记为 blocked（报告 JSON 与编排层 summary 均保留），退出码为 0，由 release gate（步骤 G）消费 blocked 并保持自主实施 flag 关闭。把 blocked 编码成非零退出码会让默认关闭阶段（Host 装配属开启前置，见 docs/release/continuous.md §2）的 e2e/mobile 永远无法通过自身门禁，也与「blocked 状态见各自 artifacts/results.json」的发布语义冲突。
 
 每个case记录：
 
