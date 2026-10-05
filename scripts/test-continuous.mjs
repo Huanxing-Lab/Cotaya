@@ -54,6 +54,7 @@ const SUITES = {
       "packages/services/test/continuous/scheduler.test.ts",
       "packages/services/test/continuous/commands.test.ts",
       "apps/zcode-cli/packages/bootstrap/test/continuous/execution.test.ts",
+      "apps/zcode-cli/packages/bootstrap/test/continuous/release-gaps.test.ts",
       "apps/zcode-cli/packages/bootstrap/test/continuous/budget-runtime.test.ts",
       "apps/zcode-cli/packages/bootstrap/test/continuous/template.test.ts",
       "apps/zcode-cli/packages/bootstrap/test/continuous/decision-runtime.test.ts",

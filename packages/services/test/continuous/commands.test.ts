@@ -137,6 +137,11 @@ class FakeExecutionPort implements ContinuousExecutionPort {
     return Promise.resolve({ items: [], nextCursor: afterSequence });
   }
 
+  interrupt(): Promise<void> {
+    this.calls.push("interrupt");
+    return Promise.resolve();
+  }
+
   suspendAtSafeBoundary(): Promise<void> {
     this.calls.push("suspendAtSafeBoundary");
     return Promise.resolve();
@@ -147,8 +152,14 @@ class FakeExecutionPort implements ContinuousExecutionPort {
     return Promise.resolve();
   }
 
-  inspectHealth(): Promise<never> {
-    throw new Error("commands.test 不驱动探活");
+  inspectHealth() {
+    this.calls.push("inspectHealth");
+    return Promise.resolve({
+      runId: this.state.runId,
+      actorIds: [],
+      ownerEpoch: 1,
+      reachable: true,
+    });
   }
 
   finish(status: ExecutionState["status"], extra: Partial<ExecutionState> = {}): void {
@@ -551,7 +562,11 @@ test("resolveContinuation：grant 同 Cycle/Run 继续；stay_paused 保持；�
   });
   assert.equal(result.resolutionKind, "continue_with_grant");
   assert.equal(result.resumedCycleId, cycle.id);
-  assert.ok(execution.calls.includes("resumeSuspended"));
+  assert.equal(
+    execution.calls.includes("resumeSuspended"),
+    false,
+    "已完成的 Run 只收尾，不再恢复执行",
+  );
   assert.equal(execution.submitted.length, 1);
   await waitFor(async () => (await repository.getCycle(cycle.id))!.status === "completed");
 

@@ -207,6 +207,10 @@ export interface DynamicWorkflowRunServiceDeps {
   fileSystemPort: FileSystemPort;
   /** git.* world-read 落到的子进程执行端口（cwd = run 的工作区）。 */
   executionPort: ExecutionPort;
+  /** 受管 Run 的 world IO；普通 Run 缺省沿用原端口。 */
+  worldPortsFor?: (
+    runId: string,
+  ) => { fileSystemPort: FileSystemPort; executionPort: ExecutionPort } | undefined;
   /**
    * 用户面产物（`artifact.file` / `artifact.markdown`）的字节落点，原样转交 driver。⚠ 这里的 artifact 指**交付给用户看的
    * 产出**，不是引擎内部那个顶层返回值。

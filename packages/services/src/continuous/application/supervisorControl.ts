@@ -15,6 +15,7 @@ import type { Cycle, Program } from "../domain/types.js";
 import { isTerminalCycleStatus, requiresProgramReauthorization } from "../domain/types.js";
 import type { ContinuousConfigChangeKind } from "../domain/types.js";
 import { nextCycleAtFor } from "../domain/cadencePolicy.js";
+import { continueCycleExecution } from "./supervisorResume.js";
 import { ContinuousReportIngestion } from "./reportIngestion.js";
 import { acquireCycleLease, requireLeaseEpoch } from "./workspaceLease.js";
 import {
@@ -123,18 +124,10 @@ export async function continueSuspendedCycle(
   }
   const ref = referenceOf(current);
   const state = await deps.execution.inspect(ref);
-  if (state.status === "stopped" && state.resumable) {
-    await deps.execution.resume(ref, current.leaseEpoch);
-  } else {
-    await deps.execution.resumeSuspended(ref, current.leaseEpoch);
-  }
-  const now = deps.clock.now();
-  const resumed: Cycle = { ...current, status: "running", updatedAt: now };
-  await deps.repository.saveCycle(resumed);
+  const resumed = await continueCycleExecution(deps, current, ref, state);
   await activateProgram(deps, program);
   return { cycle: resumed, completion: deps.attachSupervision(resumed, program) };
 }
-
 /** Pause（本轮结束后）：立即禁止新 Cycle；不取消正在执行的候选（E-11 与立即停止分开）。 */
 export async function pauseProgram(
   deps: Pick<CycleControlDeps, "repository" | "clock">,
@@ -157,7 +150,6 @@ export async function pauseProgram(
   await deps.repository.saveProgram(updated);
   return updated;
 }
-
 /** 显式恢复（paused/failed → active）；suspended 资源暂停必须走继续确认，不走本命令。 */
 export async function resumeProgram(
   deps: Pick<CycleControlDeps, "repository" | "clock">,
@@ -271,7 +263,7 @@ export async function stopCurrentCycle(
 
 /**
  * 正常退出（§10「正常退出撤销许可、取消并保存 interrupted」）：对执行中的 Cycle 在安全边界
- * 挂起并保存 interrupted——刻意不用 stop（stop 的 revoked 语义会封死 resume，与「下次按原
+ * 中断并保存 interrupted——刻意不用 stop（stop 的 revoked 语义会封死 resume，与「下次按原
  * 身份恢复」冲突）；lease 保留（持久化占用 + 恢复流程接管）。suspended 保持原状（继续确认
  * 跨重启保留）。返回被保存为 interrupted 的 cycle id 列表。
  */
@@ -284,25 +276,25 @@ export async function interruptCyclesForShutdown(
   for (const program of programs) {
     const open = await deps.repository.getOpenCycle(program.id);
     if (!open) continue;
-    if (open.status === "suspended" || open.status === "interrupted") continue;
     const ref = referenceOf(open);
+    // 先停止监督写入，再中断执行；资源暂停的确认和状态跨退出保持。
+    if (open.status !== "suspended" && open.status !== "interrupted") {
+      await deps.repository.saveCycle({
+        ...open,
+        status: "interrupted",
+        updatedAt: deps.clock.now(),
+      });
+      interrupted.push(open.id);
+    }
     try {
-      await deps.execution.suspendAtSafeBoundary(ref, "app_exit");
-      await deps.execution.waitForQuiescence(ref);
+      await deps.execution.interrupt(ref, open.leaseEpoch);
     } catch (error) {
-      // 退出路径尽力而为：挂起失败也要保存 interrupted，强制退出语义由恢复流程兜底。
-      deps.logger?.warn?.("Continuous shutdown suspend failed", {
-        event: "continuous.shutdown.suspend_failed",
+      deps.logger?.warn?.("Continuous shutdown interrupt failed", {
+        event: "continuous.shutdown.interrupt_failed",
         cycleId: open.id,
         errorMessage: error instanceof Error ? error.message : String(error),
       });
     }
-    await deps.repository.saveCycle({
-      ...open,
-      status: "interrupted",
-      updatedAt: deps.clock.now(),
-    });
-    interrupted.push(open.id);
   }
   return interrupted;
 }

@@ -54,6 +54,7 @@ export const continuousManagedCycleOpSchema = z.enum([
   "inspect",
   "resume",
   "stop",
+  "interrupt",
   "waitForQuiescence",
   "readReports",
   "suspendAtSafeBoundary",
@@ -96,6 +97,7 @@ export const continuousManagedCycleCommandSchema = z
         break;
       case "resume":
       case "resumeSuspended":
+      case "interrupt":
         requireField(command.epoch !== undefined, "epoch", `${command.op} requires epoch`);
         break;
       case "stop":
@@ -179,7 +181,14 @@ export const continuousManagedCycleResultSchema = z.discriminatedUnion("op", [
   }),
   z.strictObject({
     type: z.literal("continuousManagedCycle"),
-    op: z.enum(["resume", "stop", "waitForQuiescence", "suspendAtSafeBoundary", "resumeSuspended"]),
+    op: z.enum([
+      "resume",
+      "stop",
+      "interrupt",
+      "waitForQuiescence",
+      "suspendAtSafeBoundary",
+      "resumeSuspended",
+    ]),
   }),
   z.strictObject({
     type: z.literal("continuousManagedCycle"),

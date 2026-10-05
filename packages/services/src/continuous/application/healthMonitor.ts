@@ -17,11 +17,7 @@
 // normal_wait 推迟触发（§10.1），等待结束恢复计时后再触发。全部 actor 等待才算 normal_wait
 // ——快照聚合归 supervisor（CT-05）：任一 actor 有进展时 snapshot.lastProgressAt 前进。
 //
-// 已知边界（评审确认，如实声明）：本监控当前**没有产品调用者**（supervisor/watchCycle 不
-// 启动探活循环）；且 CLI 适配器的 inspectHealth 刻意不提供 lastProgressAt/waitingFor——
-// 证据源缺席时本分类对所有可达执行恒判「无进展」（progressed/waitValid 恒 false，180 秒
-// 后 suspected_hang）。启用探活前必须先落地真实进展证据源（journal sequence 推进/actor
-// 转录更新等），否则接线即误报（见 docs/release/continuous.md §2.1 已知边界）。
+// 产品由 supervisorWatch 的同一监督循环调用 probeOnce，不另起业务写入循环。
 
 import type { Cycle } from "../domain/types.js";
 import type {
@@ -73,6 +69,8 @@ export interface ContinuousHealthMonitorDeps {
   /** 只用 inspectHealth（探活只读，不触碰 submit/resume/stop）。 */
   execution: Pick<ContinuousExecutionPort, "inspectHealth">;
   logger?: { warn?: (message: string, meta?: unknown) => void };
+  /** 监督者取得的执行权版本；不能从后来的 Cycle 行借用新版本。 */
+  ownerEpoch?: number;
   probeIntervalMs?: number;
   hangThresholdMs?: number;
   hangProbeConfirmations?: number;
@@ -112,6 +110,7 @@ export class ContinuousHealthMonitor {
     if (this.stopProbing) return this.stopProbing;
     let stopped = false;
     const schedule = this.deps.clock.schedule ?? defaultSchedule;
+    let cancelScheduled: (() => void) | undefined;
     const tick = (): void => {
       if (stopped) return;
       void this.probeOnce(ref)
@@ -127,15 +126,16 @@ export class ContinuousHealthMonitor {
           });
         })
         .finally(() => {
-          if (!stopped) this.stopProbing = schedule(tick, this.probeIntervalMs);
+          if (!stopped) cancelScheduled = schedule(tick, this.probeIntervalMs);
         });
     };
-    this.stopProbing = schedule(tick, this.probeIntervalMs);
-    return () => {
+    this.stopProbing = () => {
       stopped = true;
-      this.stopProbing?.();
+      cancelScheduled?.();
       this.stopProbing = undefined;
     };
+    cancelScheduled = schedule(tick, this.probeIntervalMs);
+    return this.stopProbing;
   }
 
   stop(): void {
@@ -145,11 +145,20 @@ export class ContinuousHealthMonitor {
 
   /** 一次探活：读快照 → 分类 → 累计区间 → 持久化 cycle 健康字段 → 返回结论。 */
   async probeOnce(ref: ExecutionReference): Promise<HealthAssessment | null> {
-    const cycle = await this.deps.repository.getCycle(ref.cycleId);
-    if (!cycle) return null;
+    let cycle = await this.deps.repository.getCycle(ref.cycleId);
+    if (
+      !cycle ||
+      cycle.status !== "running" ||
+      (this.deps.ownerEpoch !== undefined && cycle.leaseEpoch !== this.deps.ownerEpoch)
+    )
+      return null;
+    const probeEpoch = cycle.leaseEpoch;
     const now = this.deps.clock.now();
     const snapshot = await this.deps.execution.inspectHealth(ref);
 
+    // 读快照可能跨越暂停/报告写入，必须重读；不能用过期整行覆盖新状态和游标。
+    cycle = await this.deps.repository.getCycle(ref.cycleId);
+    if (!cycle || cycle.status !== "running" || cycle.leaseEpoch !== probeEpoch) return null;
     const previousProgressAt = cycle.lastProgressAt;
     const progressed =
       snapshot.lastProgressAt !== undefined &&
@@ -201,8 +210,10 @@ export class ContinuousHealthMonitor {
       ? mergeContinuationGrants(program.budget, grants).activeExecutionLimitMs
       : cycle.activeDurationMs;
 
+    const latest = await this.deps.repository.getCycle(ref.cycleId);
+    if (!latest || latest.status !== "running" || latest.leaseEpoch !== probeEpoch) return null;
     const updated: Cycle = {
-      ...cycle,
+      ...latest,
       activeDurationMs,
       normalBlockedDurationMs,
       lastProbeAt: now,
@@ -210,7 +221,7 @@ export class ContinuousHealthMonitor {
       ...(snapshot.lastProgressAt === undefined ? {} : { lastProgressAt: snapshot.lastProgressAt }),
       updatedAt: now,
     };
-    await this.deps.repository.saveCycle(updated);
+    if (!(await this.deps.repository.updateCycleHealth(updated))) return null;
 
     let action: HealthAssessment["action"] = { kind: "none" };
     if (

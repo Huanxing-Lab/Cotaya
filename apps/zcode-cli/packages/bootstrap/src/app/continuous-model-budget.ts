@@ -12,7 +12,7 @@
 //
 // 包装顺序（载荷性）：先过 inner（座位闸门 + 进程治理器），**再**向 Host 账本原子预留——
 // 预留必须紧贴 provider 调用，不在等座位时占用额度。预算拒绝时释放已取得的 inner 票据，
-// acquire 以结构化错误 reject（runner 归类为 connect 阶段失败，请求不发给 provider）。
+// 受管装配提供 suspension 时等待用户继续；未装配的闸门仍结构化拒绝，不发 provider 请求。
 //
 // 刻意不提供 tryAcquire 快路径：预留必须走异步账本，而 hasFastPath=true 且未命中会让 runner
 // 发 model_request_queued/admitted 事件——预算闸门不制造这种观测噪声（acquire 内部仍先试
@@ -29,6 +29,7 @@
 // 包一层不能把它饿瞎。
 
 import { randomUUID } from "node:crypto";
+import { waitForContinuousContinuation } from "./continuous-suspension.js";
 import type {
   ModelNetworkStatusEvent,
   ModelRequestAdmission,
@@ -99,6 +100,7 @@ export interface ContinuousModelBudgetLedgerPort {
 
 /** 闸门实例：wrap 对一个 actor 的准入端口包预算边界（create-app/types 的登记类型）。 */
 export interface ContinuousModelBudgetGate {
+  readonly supportsSuspension: boolean;
   wrap(inner?: ModelRequestAdmission): ModelRequestAdmission;
 }
 
@@ -125,6 +127,10 @@ export interface ContinuousModelBudgetGateDeps {
   admissionProbe?: (ref: { cycleId: string }) => Promise<{
     admissionState: "open" | "suspended" | "revoked";
   }>;
+  /** Host 持久化暂停和继续确认；仅在用户授权且同轮准入重开后 resolve。 */
+  suspension?: {
+    waitForContinuation(error: ContinuousModelBudgetError, signal?: AbortSignal): Promise<void>;
+  };
   logger?: { warn?: (message: string, meta?: unknown) => void };
 }
 
@@ -178,21 +184,11 @@ export function createContinuousModelBudgetGate(
   };
 
   return {
+    supportsSuspension: deps.suspension !== undefined && deps.admissionProbe !== undefined,
     wrap(inner) {
       return {
         // 刻意无 tryAcquire（文件头）：runner 直接 await acquire。
         acquire: async ({ model, signal }) => {
-          // 准许冻结优先于一切（评审修复）：挂起（suspendAtSafeBoundary）/用户停止（stop）
-          // 之后的新请求在占用座位与额度之前就被拒绝——不能等到 Host 账本行推进才拦。
-          if (deps.admissionProbe !== undefined) {
-            const probe = await deps.admissionProbe({ cycleId: deps.cycleId });
-            if (probe.admissionState !== "open") {
-              throw new ContinuousModelBudgetError(
-                "admission_closed",
-                `continuous cycle ${deps.cycleId} admission is ${probe.admissionState}; new model requests are frozen (§6.1)`,
-              );
-            }
-          }
           const chain: ChainAttempts = { attempts: 1 };
           if (signal !== undefined) {
             const existing = chains.get(signal);
@@ -209,34 +205,58 @@ export function createContinuousModelBudgetGate(
               chains.set(signal, chain);
             }
           }
-          const innerTicket =
-            inner === undefined ? undefined : await inner.acquire({ model, signal });
-          let requestKey: string;
-          let reserved: { reservedCostMicros: number; reservedTokens: number };
-          try {
-            requestKey = `ct-${deps.cycleId}-${chain.attempts}-${randomUUID()}`;
-            reserved = reserveOf(model.providerId, model.modelId);
-            const admission = await deps.ledger.reserve({
-              programId: deps.programId,
-              cycleId: deps.cycleId,
-              requestKey,
-              provider: model.providerId,
-              model: model.modelId,
-              pricingVersion: deps.pricing.pricingVersion,
-              reservedCostMicros: reserved.reservedCostMicros,
-              reservedTokens: reserved.reservedTokens,
-            });
-            if (!admission.ok) {
-              throw new ContinuousModelBudgetError(
-                admission.code,
-                `continuous ledger refused model request for cycle ${deps.cycleId}: ${admission.message}`,
+          // 预算拒绝不能成为 Run 的 errored 终态。暂停期间释放座位，同一调用继续预留，
+          // 不重复计入 provider 尝试次数；退出/用户停止由 signal 取消原等待。
+          while (true) {
+            signal?.throwIfAborted();
+            let innerTicket: ModelRequestAdmissionTicket | undefined;
+            try {
+              const requireOpen = async () => {
+                const probe = await deps.admissionProbe?.({ cycleId: deps.cycleId });
+                if (probe && probe.admissionState !== "open") {
+                  const error = new ContinuousModelBudgetError(
+                    "admission_closed",
+                    probe.admissionState,
+                  );
+                  if (probe.admissionState === "revoked")
+                    throw Object.assign(error, { revoked: true });
+                  throw error;
+                }
+              };
+              await requireOpen();
+              innerTicket = await inner?.acquire({ model, signal });
+              // 等座位时可能已经暂停，取得座位后再次检查，避免穿过冻结窗口。
+              await requireOpen();
+              signal?.throwIfAborted();
+              const requestKey = `ct-${deps.cycleId}-${chain.attempts}-${randomUUID()}`;
+              const reserved = reserveOf(model.providerId, model.modelId);
+              const admission = await deps.ledger.reserve({
+                programId: deps.programId,
+                cycleId: deps.cycleId,
+                requestKey,
+                provider: model.providerId,
+                model: model.modelId,
+                pricingVersion: deps.pricing.pricingVersion,
+                ...reserved,
+              });
+              if (!admission.ok)
+                throw new ContinuousModelBudgetError(admission.code, admission.message);
+              return makeBudgetTicket(deps, requestKey, reserved, innerTicket);
+            } catch (error) {
+              innerTicket?.release();
+              if (
+                !(error instanceof ContinuousModelBudgetError) ||
+                !deps.suspension ||
+                "revoked" in error ||
+                (error.code !== "budget_denied" && error.code !== "admission_closed")
+              )
+                throw error;
+              await waitForContinuousContinuation(
+                () => deps.suspension!.waitForContinuation(error, signal),
+                signal,
               );
             }
-          } catch (error) {
-            innerTicket?.release();
-            throw error;
           }
-          return makeBudgetTicket(deps, requestKey, reserved, innerTicket);
         },
       };
     },

@@ -157,6 +157,7 @@ export function launchDynamicWorkflowRun(
     toolCallId,
   } = input;
   const childSpawn = dynamicWorkflowChildSpawn();
+  const worldPorts = deps.worldPortsFor?.(runId);
   // 本 run 自己上界的**第二个**执行点：调度器管「还能不能再派一个 ask」，闸门管「已经在跑的那些下一次请求能不能发出去」。
   // 起点就是这次启动的 caps（submit 是钳过的请求值，resume 是 journal 行里的那一份），所以一个
   // 从未被 retune 过的 run 永远走闸门的快路径——不发事件、不持票、与从前逐字相同。
@@ -218,8 +219,8 @@ export function launchDynamicWorkflowRun(
         });
       }
     },
-    executionPort: deps.executionPort,
-    fileSystemPort: deps.fileSystemPort,
+    executionPort: worldPorts?.executionPort ?? deps.executionPort,
+    fileSystemPort: worldPorts?.fileSystemPort ?? deps.fileSystemPort,
     escalationRegistry,
     cwd,
     // 用户面产物的落点。会话作用域取**本服务

@@ -321,6 +321,11 @@ class RecordingExecutionPort implements ContinuousExecutionPort {
   readReports(): Promise<{ items: []; nextCursor: number }> {
     return Promise.resolve({ items: [], nextCursor: 0 });
   }
+  interrupt(): Promise<void> {
+    this.calls.push("interrupt");
+    return Promise.resolve();
+  }
+
   suspendAtSafeBoundary(): Promise<void> {
     this.calls.push("suspendAtSafeBoundary");
     return Promise.resolve();

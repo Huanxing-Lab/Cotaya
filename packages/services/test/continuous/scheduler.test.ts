@@ -164,6 +164,11 @@ class FakeExecutionPort implements ContinuousExecutionPort {
     });
   }
 
+  interrupt(): Promise<void> {
+    this.calls.push("interrupt");
+    return Promise.resolve();
+  }
+
   suspendAtSafeBoundary(): Promise<void> {
     this.calls.push("suspendAtSafeBoundary");
     return Promise.resolve();

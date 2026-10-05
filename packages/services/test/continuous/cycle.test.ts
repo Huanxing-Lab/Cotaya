@@ -148,6 +148,11 @@ class FakeExecutionPort implements ContinuousExecutionPort {
     });
   }
 
+  interrupt(): Promise<void> {
+    this.calls.push("interrupt");
+    return Promise.resolve();
+  }
+
   suspendAtSafeBoundary(): Promise<void> {
     this.calls.push("suspendAtSafeBoundary");
     return Promise.resolve();
@@ -158,8 +163,14 @@ class FakeExecutionPort implements ContinuousExecutionPort {
     return Promise.resolve();
   }
 
-  inspectHealth(): Promise<never> {
-    throw new Error("cycle.test 不驱动探活（health.test 覆盖）");
+  inspectHealth() {
+    this.calls.push("inspectHealth");
+    return Promise.resolve({
+      runId: this.state.runId,
+      actorIds: [],
+      ownerEpoch: 1,
+      reachable: true,
+    });
   }
 
   /** 追加一条报告（sequence 单调递增）。 */
@@ -708,7 +719,7 @@ test("重复 Run now 同 requestId 命中同一 Cycle；不同 requestId 在开�
 
 // ── 预算挂起 → 用户授权 → 同 Cycle 同 Run 继续（E-08/E-30 服务侧）──
 
-test("预算类失败挂起（suspended+paused+pending 确认）；grant 后同 Cycle/Run 继续完成", async (t) => {
+test("旧预算 errored 记录保留暂停与确认，但授权不能伪装成可恢复 Run", async (t) => {
   const repository = await freshRepository();
   t.after(() => void repository.close());
   const program = makeProgram();
@@ -754,16 +765,9 @@ test("预算类失败挂起（suspended+paused+pending 确认）；grant 后同 
       grant: { costMicros: 100_000_000 },
     },
   });
-  execution.finish("completed");
-  execution.emit("cycle_result", "cycle-result", cycleResultPayload("no_changes"));
-  const resumed = await supervisor.continueSuspendedCycle(cycle.id);
-  assert.equal(resumed.cycle.id, cycle.id);
-  const resumedOutcome = await resumed.completion;
-  assert.equal(resumedOutcome.cycleStatus, "completed");
-  assert.equal(resumedOutcome.programStatus, "sleeping");
-  // 同 Run：submitOnce 只发生过一次（resume 走 resumeSuspended，不铸第二个 Run）。
-  assert.equal(execution.submitted.length, 1);
-  assert.ok(execution.calls.includes("resumeSuspended"));
+  await assert.rejects(supervisor.continueSuspendedCycle(cycle.id), /已不可恢复/);
+  assert.equal(execution.submitted.length, 1, "不能铸新 Run 绕过旧预算记录");
+  assert.equal(execution.calls.includes("resumeSuspended"), false, "errored 不能只开内存闸门");
 });
 
 // ── 授权/模板边界 ────────────────────────────────────────────
@@ -855,4 +859,47 @@ test("candidatePolicy: forbidden/Scope 外排除、pending Decision 局部推迟
   assert.equal(deferred.get("c4"), "blocked_by_pending_decision");
   assert.match(selection.rationale, /已选 2\/6/);
   assert.match(selection.rationale, /推迟 3/);
+});
+
+test("发布2.1：真实监督循环触发有效时间上限，保存暂停和同轮继续确认", async (t) => {
+  const repository = await freshRepository();
+  t.after(() => repository.close());
+  const program = makeProgram();
+  program.budget.activeExecutionLimitMs = 30_000;
+  await repository.insertProgram(program);
+  const execution = new FakeExecutionPort();
+  let now = 10_000;
+  execution.inspectHealth = () =>
+    Promise.resolve({
+      runId: execution.state.runId,
+      actorIds: [],
+      ownerEpoch: 1,
+      reachable: true,
+      lastProgressAt: now,
+    });
+  const supervisor = new ContinuousSupervisor({
+    ...makeSupervisorDeps(repository, execution),
+    clock: {
+      now: () => now,
+      timeZone: () => "Asia/Shanghai",
+      schedule: (callback) => {
+        const timer = setTimeout(() => {
+          now += 15_000;
+          callback();
+        }, 1);
+        return () => clearTimeout(timer);
+      },
+    },
+  });
+  const { cycle, completion } = await supervisor.runNow({
+    programId: program.id,
+    requestId: "health-watch",
+  });
+  const result = await completion;
+  assert.equal(result.cycleStatus, "suspended");
+  assert.equal(result.programStatus, "paused");
+  assert.equal((await repository.getCycle(cycle.id))?.activeDurationMs, 30_000);
+  assert.equal((await repository.getPendingContinuationRequest(cycle.id))?.reason, "time_limit");
+  assert.ok(execution.calls.includes("suspendAtSafeBoundary"));
+  assert.equal(execution.calls.includes("stop"), false, "达到上限不能取消 Run");
 });

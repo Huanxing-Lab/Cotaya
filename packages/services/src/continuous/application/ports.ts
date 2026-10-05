@@ -32,6 +32,8 @@ export interface ContinuousRepositoryPort {
   listPrograms(workspaceKey: string): Promise<Program[]>;
   insertCycle(cycle: Cycle): Promise<void>;
   saveCycle(cycle: Cycle): Promise<void>;
+  /** 仅同 epoch 的 running 轮更新健康字段；不改业务状态、报告游标或确认指针。 */
+  updateCycleHealth(cycle: Cycle): Promise<boolean>;
   getCycle(cycleId: string): Promise<Cycle | null>;
   /** 同一 Program 最多一个未结束 Cycle（部分唯一索引保证，不靠内存 mutex）。 */
   getOpenCycle(programId: string): Promise<Cycle | null>;
@@ -213,6 +215,8 @@ export interface ContinuousExecutionPort {
   inspect(ref: ExecutionReference): Promise<ExecutionState>;
   resume(ref: ExecutionReference, epoch: number): Promise<void>;
   stop(ref: ExecutionReference, reason: string): Promise<void>;
+  /** 退出中断：冻结后取消执行，保持同 Run 可恢复。 */
+  interrupt(ref: ExecutionReference, epoch: number): Promise<void>;
   waitForQuiescence(ref: ExecutionReference): Promise<void>;
   readReports(ref: ExecutionReference, afterSequence: number): Promise<ReportBatch>;
   /** 资源上限挂起（§6.1/§11）：不等同 stop；不能借 stop 把整轮永久 cancelled。 */

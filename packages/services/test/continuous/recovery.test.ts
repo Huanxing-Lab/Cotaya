@@ -166,6 +166,11 @@ class FakeExecutionPort implements ContinuousExecutionPort {
     });
   }
 
+  interrupt(): Promise<void> {
+    this.calls.push("interrupt");
+    return Promise.resolve();
+  }
+
   suspendAtSafeBoundary(): Promise<void> {
     this.calls.push("suspendAtSafeBoundary");
     return Promise.resolve();
@@ -577,7 +582,7 @@ test("R-09/E-17: 正常退出保存 interrupted；重开先恢复旧轮，不排
     program.workspaceKey,
   );
   assert.deepEqual(interruptedIds, [supervised.id]);
-  assert.ok(execution.calls.includes("suspendAtSafeBoundary"));
+  assert.ok(execution.calls.includes("interrupt"));
   const exited = await repository.getCycle(supervised.id);
   assert.equal(exited?.status, "interrupted");
   assert.equal(exited?.activeDurationMs, 1_234_567, "离线前的有效时长保留（不重置限额）");

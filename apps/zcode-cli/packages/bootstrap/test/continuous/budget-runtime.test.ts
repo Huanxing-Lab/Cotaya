@@ -24,12 +24,62 @@ import type {
   ModelRequestAdmissionTicket,
 } from "@zcode/contracts";
 import type { TraceContext } from "@zcode/contracts";
+import { createContinuousExecutionAdapter } from "../../src/app/continuous-execution-adapter.js";
 import { createDynamicWorkflowRunService } from "../../src/app/dynamic-workflow-run-service.js";
 import {
   ContinuousModelBudgetError,
   createContinuousModelBudgetGate,
   type ContinuousModelBudgetLedgerPort,
+  type ContinuousModelBudgetGateDeps,
 } from "../../src/app/continuous-model-budget.js";
+
+test("发布2.1：预算拒绝等待用户继续，不把同一模型调用抛成不可恢复失败", async () => {
+  let approved = false;
+  let wake!: () => void;
+  const continuation = new Promise<void>((resolve) => {
+    wake = resolve;
+  });
+  let reachedPause!: () => void;
+  const paused = new Promise<void>((resolve) => {
+    reachedPause = resolve;
+  });
+  const recorder = makeLedger({
+    reserve: () =>
+      approved ? { ok: true } : { ok: false, code: "budget_denied", message: "needs continuation" },
+  });
+  const inner = makeInner();
+  const gate = createContinuousModelBudgetGate({
+    programId: "regression-program",
+    cycleId: "regression-cycle",
+    ledger: recorder.ledger,
+    pricing: PRICING,
+    requestCaps: CAPS,
+    maxAttemptsPerRequest: 3,
+    ...{
+      suspension: {
+        waitForContinuation: async () => {
+          reachedPause();
+          await continuation;
+        },
+      },
+    },
+  }).wrap(inner.inner);
+  let failure: unknown;
+  const pending = gate
+    .acquire({ model: { providerId: "fixture", modelId: "fixture-model" } })
+    .catch((error: unknown) => {
+      failure = error;
+      return undefined;
+    });
+  await Promise.race([paused, pending]);
+  assert.equal(failure, undefined, "预算拒绝不能逃到driver导致Run errored");
+  assert.equal(inner.state.released, 1, "等用户时不能占并发座位");
+  approved = true;
+  wake();
+  const ticket = await pending;
+  assert.ok(ticket, "授权后原调用继续取得票据");
+  ticket.release();
+});
 
 // ── 替身：账本 / inner 准入 ───────────────────────────────────
 
@@ -405,7 +455,14 @@ async function waitFor(predicate: () => boolean, timeoutMs = 30_000): Promise<vo
   }
 }
 
-function makeWiringHarness(gateLedger: ContinuousModelBudgetLedgerPort): WiringHarness {
+function makeWiringHarness(
+  gateLedger: ContinuousModelBudgetLedgerPort,
+  options?: {
+    suspension: NonNullable<ContinuousModelBudgetGateDeps["suspension"]>;
+    admissionProbe: NonNullable<ContinuousModelBudgetGateDeps["admissionProbe"]>;
+    onProvider: () => void;
+  },
+): WiringHarness {
   const root = mkdtempSync(join(tmpdir(), "continuous-ct04-runtime-"));
   const store = createSqliteSessionStore({ dbPath: join(root, "sessions.sqlite") });
   const journal = store.workflowJournalStore() as JournalStorePort & DwfSequencedReportQueries;
@@ -423,6 +480,7 @@ function makeWiringHarness(gateLedger: ContinuousModelBudgetLedgerPort): WiringH
     pricing: PRICING,
     requestCaps: CAPS,
     maxAttemptsPerRequest: 3,
+    ...(options ? { suspension: options.suspension, admissionProbe: options.admissionProbe } : {}),
   });
   const MANAGED_RUN_ID = "dwfrun-ct04-budget-wiring";
   const service = createDynamicWorkflowRunService({
@@ -430,7 +488,7 @@ function makeWiringHarness(gateLedger: ContinuousModelBudgetLedgerPort): WiringH
     parentSessionId: `app-${randomUUID()}`,
     fileSystemPort,
     executionPort,
-    createActorRuntime: ({ runId, modelRequestAdmission }) => {
+    createActorRuntime: ({ runId, modelRequestAdmission, submitPort }) => {
       // 记录接缝产物即返回最小 stub：会话创建所需的最小面 + 任何真实使用都大声失败
       //（run 随后 errored 无妨——本测试只断言接线）。
       recorded.push({ runId, admission: modelRequestAdmission });
@@ -438,11 +496,32 @@ function makeWiringHarness(gateLedger: ContinuousModelBudgetLedgerPort): WiringH
         getSessionModelSelection: () => ({ providerId: "fixture", modelId: "fixture-model" }),
         ensureSessionPersistedForExternalActivity: async () => {},
         resumeFromStore: async () => {},
-        executeTurn: () =>
-          // stub 不执行真实 turn：**rejected promise**——同步 throw 会穿透
-          // AskScheduler.dispatch 炸掉进程；promise 拒绝经 runTurn 的 onTurnRejected 收容，
-          // ask 失败、run 落 errored 终态（接线断言不依赖 run 成功，但不能悬挂或炸进程）。
-          Promise.reject(new Error("ct04 wiring stub: no real turns")),
+        executeTurn: options
+          ? async (
+              _input: string,
+              _context: unknown,
+              turnOptions: { abortSignal?: AbortSignal },
+            ) => {
+              const ticket = await modelRequestAdmission!.acquire({
+                model: { providerId: "fixture", modelId: "fixture-model" },
+                signal: turnOptions.abortSignal,
+              });
+              options.onProvider();
+              ticket.release();
+              await submitPort.respond({
+                toolCallId: "budget-real-turn",
+                result: "ok",
+                trace: { traceId: "trace-ct04" as never },
+              });
+              return {
+                response: "submitted",
+                turnId: "budget-turn",
+                traceId: "trace-ct04",
+                events: [],
+                projection: {},
+              };
+            }
+          : () => Promise.reject(new Error("ct04 wiring stub: no real turns")),
         dispose: () => {},
       } as never;
     },
@@ -534,4 +613,140 @@ test("wiring：普通 submit（未登记 runId）的 actor 准入端口不经闸
   assert.equal(ledgerRecorder.length, 0, "未登记的 run 不触预算账本");
   await waitFor(() => harness.journal.getRun(submitted.runId)?.status === "errored");
   await harness.service.waitForQuiescence(submitted.runId);
+});
+
+test("发布2.1：真实 DWF 引擎预算等待保持 running，授权后同 Run 完成", async (t) => {
+  let approved = false;
+  let suspended = false;
+  let providers = 0;
+  let wake!: () => void;
+  let parked!: () => void;
+  const continuation = new Promise<void>((resolve) => {
+    wake = resolve;
+  });
+  const paused = new Promise<void>((resolve) => {
+    parked = resolve;
+  });
+  const ledger = makeLedger({
+    reserve: () =>
+      approved ? { ok: true } : { ok: false, code: "budget_denied", message: "budget" },
+  });
+  const harness = makeWiringHarness(ledger.ledger, {
+    admissionProbe: async () => ({ admissionState: suspended ? "suspended" : "open" }),
+    suspension: {
+      waitForContinuation: async () => {
+        suspended = true;
+        parked();
+        await continuation;
+      },
+    },
+    onProvider: () => {
+      providers++;
+    },
+  });
+  t.after(() => harness.dispose());
+  const runId = "dwfrun-ct04-budget-wiring";
+  await harness.service.submitOnce({
+    runId,
+    scriptText: ASK_SCRIPT,
+    cwd: harness.root,
+    parentSessionId: "budget-parent",
+    trace: { traceId: "trace-ct04" as never },
+  });
+  await Promise.race([
+    paused,
+    new Promise<never>((_, reject) => {
+      const timer = setTimeout(() => reject(new Error("未进入预算等待")), 15_000);
+      timer.unref();
+    }),
+  ]);
+  assert.equal(harness.journal.getRun(runId)?.status, "running", "没有 errored 终态");
+  assert.equal(providers, 0, "未获授权不发请求");
+  approved = true;
+  suspended = false;
+  wake();
+  await waitFor(() => harness.journal.getRun(runId)?.status === "completed");
+  await harness.service.waitForQuiescence(runId);
+  assert.equal(providers, 1);
+  assert.equal(harness.recorded.length, 1, "原 actor、原 Run，无重启");
+});
+
+test("发布2.1：预算等待收到停止信号立即取消，不等待用户回答", async () => {
+  const controller = new AbortController();
+  let parked!: () => void;
+  const paused = new Promise<void>((resolve) => {
+    parked = resolve;
+  });
+  const inner = makeInner();
+  const ledger = makeLedger({
+    reserve: () => ({ ok: false, code: "budget_denied", message: "budget" }),
+  });
+  const gate = createContinuousModelBudgetGate({
+    programId: "p",
+    cycleId: "c",
+    ledger: ledger.ledger,
+    pricing: PRICING,
+    requestCaps: CAPS,
+    maxAttemptsPerRequest: 3,
+    suspension: {
+      waitForContinuation: async () => {
+        parked();
+        await new Promise<void>(() => {});
+      },
+    },
+  }).wrap(inner.inner);
+  const pending = gate.acquire({
+    model: { providerId: "fixture", modelId: "fixture-model" },
+    signal: controller.signal,
+  });
+  await paused;
+  controller.abort(new Error("用户停止"));
+  await assert.rejects(pending, /用户停止/);
+  assert.equal(inner.state.released, 1);
+});
+
+test("发布2.1：退出中断真实预算等待，Run stopped/interrupted 且工具完成收尾", async (t) => {
+  let parked!: () => void;
+  const paused = new Promise<void>((resolve) => {
+    parked = resolve;
+  });
+  const ledger = makeLedger({
+    reserve: () => ({ ok: false, code: "budget_denied", message: "budget" }),
+  });
+  const harness = makeWiringHarness(ledger.ledger, {
+    admissionProbe: async () => ({ admissionState: "open" }),
+    suspension: {
+      waitForContinuation: async () => {
+        parked();
+        await new Promise<void>(() => {});
+      },
+    },
+    onProvider: () => assert.fail("退出前后都没有授权，不能调用 provider"),
+  });
+  t.after(() => harness.dispose());
+  const runId = "dwfrun-ct04-budget-wiring";
+  await harness.service.submitOnce({
+    runId,
+    scriptText: ASK_SCRIPT,
+    cwd: harness.root,
+    parentSessionId: "budget-parent",
+    trace: { traceId: "trace-ct04" as never },
+  });
+  await paused;
+  const adapter = createContinuousExecutionAdapter({
+    runService: harness.service,
+    journal: harness.journal,
+    reportReader: harness.journal,
+  });
+  await adapter.interrupt(
+    {
+      cycleId: "cycle-wiring",
+      executionSessionId: "budget-parent",
+      workflowRunId: runId,
+      traceId: "trace-ct04",
+    },
+    1,
+  );
+  assert.equal(harness.journal.getRun(runId)?.status, "stopped");
+  assert.equal(harness.journal.getRun(runId)?.stopReason, "interrupted");
 });

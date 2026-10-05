@@ -22,6 +22,7 @@ import type {
   WorkspaceLease,
 } from "../domain/types.js";
 import type { BudgetAdmissionLimits, UsageLedgerSummary } from "../domain/budgetPolicy.js";
+import { updateCycleHealthReady } from "./sqliteHealthStore.js";
 import type { ContinuousRepositoryPort } from "../application/ports.js";
 import {
   decodeCycle,
@@ -124,7 +125,6 @@ export class SqliteContinuousRepository implements ContinuousRepositoryPort {
     if (!this.db) throw new Error("continuous sqlite 尚未初始化（先 await ensureReady()）");
     return this.db;
   }
-
   // ── Program ──
 
   async insertProgram(program: Program): Promise<void> {
@@ -172,7 +172,6 @@ export class SqliteContinuousRepository implements ContinuousRepositoryPort {
       .all(workspaceKey);
     return rows.map((row) => decodeProgram(row as unknown as ProgramRow));
   }
-
   // ── Cycle ──
 
   async insertCycle(cycle: Cycle): Promise<void> {
@@ -191,6 +190,11 @@ export class SqliteContinuousRepository implements ContinuousRepositoryPort {
           kind: "not_found",
         });
     });
+  }
+
+  async updateCycleHealth(cycle: Cycle): Promise<boolean> {
+    await this.ensureReady();
+    return updateCycleHealthReady(this.database(), cycle);
   }
 
   async getCycle(cycleId: string): Promise<Cycle | null> {
@@ -218,7 +222,6 @@ export class SqliteContinuousRepository implements ContinuousRepositoryPort {
     await this.ensureReady();
     return listRecentCyclesReady(this.database(), programId, limit);
   }
-
   // ── 队列与报告导入（sqliteQueueStore）──
 
   async saveCandidate(candidate: Candidate): Promise<void> {
@@ -253,7 +256,6 @@ export class SqliteContinuousRepository implements ContinuousRepositoryPort {
     await this.ensureReady();
     return listDecisionsReady(this.database(), programId);
   }
-
   // ── 决策读面与 versioned resolve/dismiss（sqliteDecisionStore；CT-06）──
 
   async getDecision(decisionId: string): Promise<Decision | null> {
@@ -291,7 +293,6 @@ export class SqliteContinuousRepository implements ContinuousRepositoryPort {
     await this.ensureReady();
     applyReportImportReady(this.database(), input);
   }
-
   // ── 终态结算与租约（sqliteLifecycleStore）──
 
   async completeCycle(cycle: Cycle, programPatch: ProgramCompletionPatch): Promise<void> {
@@ -324,7 +325,6 @@ export class SqliteContinuousRepository implements ContinuousRepositoryPort {
     await this.ensureReady();
     releaseLeaseReady(this.database(), workspaceKey, updatedAt);
   }
-
   // ── 使用账本（sqliteUsageStore；CT-04 admission）──
 
   async insertUsageRecord(record: UsageRecord): Promise<void> {
@@ -366,7 +366,6 @@ export class SqliteContinuousRepository implements ContinuousRepositoryPort {
     await this.ensureReady();
     return admitUsageReservationReady(this.database(), input);
   }
-
   // ── 继续确认（sqliteContinuationStore；CT-04）──
 
   async insertContinuationRequest(request: ContinuationRequest): Promise<void> {

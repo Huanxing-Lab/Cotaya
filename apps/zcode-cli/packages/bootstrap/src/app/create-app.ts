@@ -88,6 +88,11 @@ import { getWorkflowConcurrencyGovernor } from "./workflow-concurrency-governor.
 import { createDynamicWorkflowSnippetService } from "./dynamic-workflow-snippet-service.js";
 import { createModelCatalogPort } from "./model-catalog-port.js";
 import { createDynamicWorkflowRunProgressSink } from "./dynamic-workflow-run-progress-sink.js";
+import { guardContinuousActorIo, continuousActorToolAllowlist } from "./continuous-io-guards.js";
+import {
+  requireContinuousManagedGuards,
+  requireContinuousRunRegistration,
+} from "./continuous-managed-guards.js";
 import { createScriptWorkflowAgentRuntime } from "./script-workflow-child-runtime.js";
 import {
   WorkflowActorPersonaModelError,
@@ -622,6 +627,7 @@ export async function createZCodeApp(options: ZCodeAppOptions): Promise<ZCodeApp
         : createDynamicWorkflowRunService({
             concurrency: workflowConcurrencyGovernor,
             createActorRuntime: ({
+              runId,
               persona,
               pinnedModel,
               runSubagentModel,
@@ -630,8 +636,13 @@ export async function createZCodeApp(options: ZCodeAppOptions): Promise<ZCodeApp
               submitProfile,
               escalatePort,
               modelRequestAdmission,
-            }) =>
-              createScriptWorkflowAgentRuntime({
+            }) => {
+              const registration = options.continuousManagedCycles?.executionPolicyFor?.(runId);
+              const policy = registration?.actorPolicyFor(persona.name);
+              const ports = policy
+                ? guardContinuousActorIo(policy, { fileSystemPort, executionPort })
+                : { fileSystemPort, executionPort };
+              return createScriptWorkflowAgentRuntime({
                 childSessionId: actorSessionId,
                 configOverrides: {
                   // persona 的身份（有效名 + system）→ context builder 的工作流子代理路径。
@@ -643,6 +654,7 @@ export async function createZCodeApp(options: ZCodeAppOptions): Promise<ZCodeApp
                   // actor 的工具面是减法（全集减去会悬挂/越权的交互工具），只能经 configOverrides
                   // 表达（request.opts.tools 只有 allowlist）。
                   ...workflowActorToolPolicy(),
+                  ...(policy ? { toolAllowlist: continuousActorToolAllowlist(policy.role) } : {}),
                   // 模型面四级链（整表见 workflow-actor-model.ts）：persona.model 声明（脚本
                   // 作者点名，就在下面第三参的位置解析）> `runSubagentModel`（本 run 的
                   // `subagent_model`，只覆盖**未声明模型的**子代理——主代理也不受它影响）>
@@ -669,11 +681,12 @@ export async function createZCodeApp(options: ZCodeAppOptions): Promise<ZCodeApp
                   appVersion,
                   artifactStore,
                   configResult,
-                  fileSystemPort,
+                  fileSystemPort: ports.fileSystemPort,
+                  executionPort: ports.executionPort,
                   httpClientPort,
                   imageProcessorPort,
                   logger,
-                  mcpPort,
+                  mcpPort: policy ? undefined : mcpPort,
                   // 父会话的 model factory：actor 与主 turn 从同一份 Registry 视图造 Model，
                   // 不各自冻结一份。
                   modelFactory,
@@ -683,7 +696,7 @@ export async function createZCodeApp(options: ZCodeAppOptions): Promise<ZCodeApp
                   sessionId,
                   sessionStore,
                   storageRoot,
-                  workingDirectory,
+                  workingDirectory: registration?.executionPath ?? workingDirectory,
                 },
                 // persona 不再经 request.opts.systemPrompt 整段替换子代理的系统提示，而是经
                 // workflowActor 叠加到基座之上。
@@ -705,7 +718,8 @@ export async function createZCodeApp(options: ZCodeAppOptions): Promise<ZCodeApp
                 workflowEscalatePort: escalatePort,
                 // 请求级准入端口：driver 在治理器在场时给出，runner 每次尝试先过闸门。
                 ...(modelRequestAdmission === undefined ? {} : { modelRequestAdmission }),
-              }),
+              });
+            },
             // 边界记账与转录截断都读写 actor 会话的消息，走的必须是同一个 store。
             actorTranscriptStore: sessionStore,
             // 用户面产物的字节落点：与主会话、workflow 子
@@ -713,6 +727,15 @@ export async function createZCodeApp(options: ZCodeAppOptions): Promise<ZCodeApp
             artifactStore,
             executionPort,
             fileSystemPort,
+            worldPortsFor: (runId) => {
+              const registration = options.continuousManagedCycles?.executionPolicyFor?.(runId);
+              return registration
+                ? guardContinuousActorIo(registration.worldPolicy, {
+                    fileSystemPort,
+                    executionPort,
+                  })
+                : undefined;
+            },
             journal: dynamicWorkflowJournal,
             logger,
             // 进度投影的接缝：一条引擎事件 → 一条父会话的会话事件 → v4 的 workflowRuns 状态键。
@@ -783,6 +806,14 @@ export async function createZCodeApp(options: ZCodeAppOptions): Promise<ZCodeApp
             runService: dynamicWorkflowRunPort,
             journal: dynamicWorkflowJournal,
             reportReader: dynamicWorkflowJournal,
+            beforeSubmit: (input) =>
+              requireContinuousManagedGuards(options.continuousManagedCycles, input),
+            beforeResume: (ref, cwd) =>
+              requireContinuousRunRegistration(
+                options.continuousManagedCycles,
+                ref.workflowRunId,
+                cwd,
+              ),
             logger,
           })
         : undefined;

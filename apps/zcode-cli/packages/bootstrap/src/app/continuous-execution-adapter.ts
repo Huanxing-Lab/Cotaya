@@ -1,29 +1,16 @@
-// ============================================================
-// ContinuousExecutionPort 的 CLI bootstrap 适配器（CT-03）
-// ============================================================
-// 规格来源：docs/specs/continuous.md §11（Integration 接口与报告）与 §6.1/§10（停止顺序、
-// 专用挂起、恢复身份）。本文件把 services 侧端口（packages/services/src/continuous/
-// application/ports.ts 的 ContinuousExecutionPort）落到现有 Dynamic Workflow run service 与
-// dwf journal 上——**services 不引用 AgentRuntime 实现**的边界因此成立：services 只见端口，
-// 本适配器在 CLI 进程内持有 Run service 与 journal。
-//
-// 与 services 端口类型的关系：**结构等价的本地镜像**而非 import（bootstrap 不依赖
-// @zcode/services，业务状态与 Host 装配都在那一侧）。字段逐一对齐；两处刻意差异都有注释：
-//   1. ContinuousReportItem.kind 多一个 "unknown"（读侧诚实：不丢行、不编造类别）；
-//   2. HealthSnapshot 多一个可选 admissionState（挂起/撤销是本适配器的自有状态）。
-// Host 装配（CT-05+）经 wire schema（@zcode/shared continuous-protocol）消费，不 import 本文件。
-//
-// 停止语义（规格 §6「立即停止本轮」）：先撤销新操作（admission 置 revoked，此后本适配器拒绝
-// 该 Cycle 的一切恢复/再挂起操作），再 abort（run service cancel，引擎经 stop(user) 结算成可
-// resume 的 stopped——但本适配器的 revoked 守卫保证「用户取消的 Run 不自动 resume」），最后
-// **等待 Agent/工具停止而不只等 run-settled**（waitForQuiescence = 结算 + 被中止 turn 的收尾）。
-//
-// 挂起语义（规格 §6.1/§11）：suspendAtSafeBoundary **不等同 stop**——绝不调用 cancel，绝不把
-// Run 结算成 stopped/cancelled；它冻结本适配器对该 Cycle 的操作准许（新请求/新写入的准入
-// 执行点在 CT-04 的模型准入接缝接线）。DWF 现无原生 pause 状态，本接口不伪装引擎已暂停：
-// 挂起后引擎照常收尾在途工作，恢复走 resumeSuspended（同 Run、同 Cycle），不铸新执行。
+// Continuous CLI 执行适配器：Host 保存业务状态，CLI 保存准入守卫、journal 和活 Run。
+// 预算暂停冻结新操作并等待；用户停止永久撤销；退出以 interrupted 取消并保留同 Run 恢复。
+// services 不引用 Runtime，执行端口通过 shared 的严格 wire 契约传输。
 
+import {
+  submitRejectionOf,
+  toReportItem,
+  executionStatusOf,
+} from "./continuous-execution-observation.js";
+export { executionStatusOf } from "./continuous-execution-observation.js";
+import { createContinuousAdmissionWaiters } from "./continuous-admission-waiters.js";
 import { createHash } from "node:crypto";
+import { createContinuousHealthEvidence } from "./continuous-health-evidence.js";
 import type {
   DynamicWorkflowRunCancelInitiator,
   DynamicWorkflowRunResumeResult,
@@ -35,97 +22,21 @@ import type { DwfSequencedReportQueries } from "@zcode/adapters/storage";
 import type { ContinuousExecutionRejectionReason } from "@zcode/shared/continuous-protocol";
 import { isResumableSettlement } from "./dynamic-workflow-run-observation.js";
 import type {
-  ManagedRunSubmitRejection,
   ManagedRunSubmitRequest,
   ManagedRunSubmitResult,
 } from "./dynamic-workflow-run-managed-submit.js";
 
 // ── services 端口的结构镜像（见文件头）────────────────────────
 
-/** 提交前持久化的执行身份（规格 §10）；与 services 端口 ManagedCycleInput 对齐。 */
-export interface ManagedCycleInput {
-  programId: string;
-  cycleId: string;
-  executionSessionId: string;
-  workflowRunId: string;
-  traceId: string;
-  /** Program worktree：actor 实际工作目录（规格 §11「实际 actor 工作目录必须是 executionPath」）。 */
-  executionPath: string;
-  scriptText: string;
-  scriptHash: string;
-  configurationSnapshot: unknown;
-  /**
-   * 模板实参。CT-00 端口没有这个字段（v1 模板无用户实参）；本地镜像带上它是为了让
-   * 「不同 args 拒绝」（规格 §10）在 run service 的身份核对里有一条真实的输入路径。
-   * 缺席 = 无实参 run；Host 侧端口补字段属 CT-05 装配。
-   */
-  args?: Record<string, unknown>;
-}
-
-export interface ExecutionReference {
-  cycleId: string;
-  executionSessionId: string;
-  workflowRunId: string;
-  traceId: string;
-}
-
-export interface ExecutionState {
-  runId: string;
-  status: "pending" | "running" | "completed" | "errored" | "stopped";
-  stopReason?: string;
-  failureCode?: string;
-  resumable: boolean;
-}
-
-/** 版本化报告条目（ContinuousReportV1 的 item 种类，规格 §11）。 */
-export interface ContinuousReportItem {
-  kind:
-    | "candidate"
-    | "decision"
-    | "validation"
-    | "candidate_result"
-    | "cycle_result"
-    /**
-     * 载荷不符合 ContinuousReportV1 的最小形状（缺 kind/itemKey 或类别不在词表内）。
-     * 读侧不丢行、不编造类别：条目原样上送，schema 校验与拒绝事件归 CT-05 的 reportIngestion
-     * （规格 §11「malformed report 记录拒绝事件」）。services 端口没有这个值——这是读侧的
-     * 诚实扩展，Host 装配时在导入层消化。
-     */
-    | "unknown";
-  itemKey: string;
-  journalSequence: number;
-  payload: unknown;
-}
-
-export interface ReportBatch {
-  items: ContinuousReportItem[];
-  nextCursor: number;
-}
-
-/** 主动探活健康快照（§10.1 骨架；进展分类与 normal_wait 证据归 CT-04 healthMonitor）。 */
-export interface HealthSnapshot {
-  runId: string;
-  actorIds: string[];
-  lastProgressAt?: number;
-  waitingFor?: { ownerId: string; reason: string; deadlineAt: number };
-  ownerEpoch: number;
-  reachable: boolean;
-  /** 本适配器的准许状态：open / suspended（资源挂起）/ revoked（用户停止后）。 */
-  admissionState: "open" | "suspended" | "revoked";
-}
-
-export interface ContinuousExecutionPort {
-  submitOnce(input: ManagedCycleInput): Promise<ExecutionReference>;
-  inspect(ref: ExecutionReference): Promise<ExecutionState>;
-  resume(ref: ExecutionReference, epoch: number): Promise<void>;
-  stop(ref: ExecutionReference, reason: string): Promise<void>;
-  waitForQuiescence(ref: ExecutionReference): Promise<void>;
-  readReports(ref: ExecutionReference, afterSequence: number): Promise<ReportBatch>;
-  /** 资源上限挂起（§6.1/§11）：不等同 stop；不能借 stop 把整轮永久 cancelled。 */
-  suspendAtSafeBoundary(ref: ExecutionReference, reason: string): Promise<void>;
-  resumeSuspended(ref: ExecutionReference, epoch: number): Promise<void>;
-  inspectHealth(ref: ExecutionReference): Promise<HealthSnapshot>;
-}
+import type {
+  ManagedCycleInput,
+  ExecutionReference,
+  ExecutionState,
+  ReportBatch,
+  HealthSnapshot,
+  ContinuousExecutionPort,
+} from "./continuous-execution-contract.js";
+export type * from "./continuous-execution-contract.js";
 
 // ── 结构化拒绝 ────────────────────────────────────────────────
 
@@ -179,6 +90,12 @@ export interface ContinuousExecutionAdapterDeps {
   logger?: Logger;
   /** 报告单页上限（缺省 256；有界取数，不整条 journal 读进内存）。 */
   reportPageSize?: number;
+  /** 生产装配必须核对全部 run 保护；单独适配器契约测试可以不传。 */
+  beforeSubmit?: (input: ManagedCycleInput) => void | Promise<void>;
+  beforeResume?: (
+    ref: ExecutionReference,
+    executionPath: string | undefined,
+  ) => void | Promise<void>;
 }
 
 /** 单 Cycle 的适配器自有状态：epoch 高水位 + 准许状态。 */
@@ -198,8 +115,12 @@ const DEFAULT_REPORT_PAGE_SIZE = 256;
  */
 export function createContinuousExecutionAdapter(
   deps: ContinuousExecutionAdapterDeps,
-): ContinuousExecutionPort {
+): ContinuousExecutionPort & {
+  /** CLI 内部接缝：预算与文件端口共享本适配器准入；不新增 Host wire 命令。 */
+  waitForAdmission(ref: ExecutionReference, signal?: AbortSignal): Promise<void>;
+} {
   const admissions = new Map<string, CycleAdmissionState>();
+  const evidenceOf = createContinuousHealthEvidence(deps.journal);
   const pageSize = () => deps.reportPageSize ?? DEFAULT_REPORT_PAGE_SIZE;
 
   const admissionOf = (cycleId: string): CycleAdmissionState => {
@@ -210,6 +131,8 @@ export function createContinuousExecutionAdapter(
     }
     return state;
   };
+
+  const waiters = createContinuousAdmissionWaiters((cycleId) => admissionOf(cycleId).admission);
 
   /** epoch 高水位守卫：回退的 epoch 一律 lease_lost（规格 §10「旧 epoch 不可写」）。 */
   const requireEpoch = (cycleId: string, epoch: number): CycleAdmissionState => {
@@ -244,6 +167,7 @@ export function createContinuousExecutionAdapter(
   });
 
   return {
+    waitForAdmission: (ref, signal) => waiters.wait(ref.cycleId, signal),
     async submitOnce(input: ManagedCycleInput): Promise<ExecutionReference> {
       // 绑定自洽先于提交：Host 持久化的 scriptHash 必须就是 scriptText 的 sha256
       // （compileOnce 用同一算法落 journal）。对不上说明绑定记录被改写或上游构造被绕过——
@@ -256,6 +180,7 @@ export function createContinuousExecutionAdapter(
           { retryable: false },
         );
       }
+      await deps.beforeSubmit?.(input);
       const result = await deps.runService.submitOnce({
         runId: input.workflowRunId,
         scriptText: input.scriptText,
@@ -314,19 +239,17 @@ export function createContinuousExecutionAdapter(
     async resume(ref: ExecutionReference, epoch: number): Promise<void> {
       requireNotRevoked(ref.cycleId);
       requireEpoch(ref.cycleId, epoch);
+      await deps.beforeResume?.(ref, deps.journal.getRun(ref.workflowRunId)?.cwd);
       await resumeRun(deps, ref);
+      admissionOf(ref.cycleId).admission = "open";
+      waiters.notify(ref.cycleId);
     },
 
     async stop(ref: ExecutionReference, reason: string): Promise<void> {
-      // 顺序即语义（规格 §6「立即停止本轮」）：
-      //   1. 撤销新操作 —— 准许置 revoked：此后本适配器拒绝该 Cycle 的 resume/resumeSuspended，
-      //      预算闸门经 admissionProbe 接缝在同一状态上拒绝新请求（评审修正：此前注释声称
-      //      CT-04 准入接缝消费此状态但并无接线——现 continuous-model-budget.ts 的
-      //      deps.admissionProbe 是真实硬执行点；未注入时仅有 Host 账本行状态这道闸）；
-      //   2. abort —— run service cancel(user)：引擎经 stop(user) 结算 stopped，journal 保留；
-      //   3. 等待停止 —— waitForQuiescence：结算 + 被中止 turn 的工具/转录收尾，不只等 run-settled。
+      // 先撤销新操作，再取消并等待工具收尾；用户停止后的 Run 不自动恢复。
       const state = admissionOf(ref.cycleId);
       state.admission = "revoked";
+      waiters.notify(ref.cycleId);
       state.lastReason = reason;
       deps.logger?.info?.("Continuous managed cycle stop requested", {
         event: "continuous.execution.stop_requested",
@@ -355,6 +278,14 @@ export function createContinuousExecutionAdapter(
       });
     },
 
+    async interrupt(ref: ExecutionReference, epoch: number): Promise<void> {
+      requireNotRevoked(ref.cycleId);
+      requireEpoch(ref.cycleId, epoch).admission = "suspended";
+      // 光冻结会让预算等待永不结算；退出取消用 interrupted，不能撤销成 user stop。
+      await deps.runService.cancel(ref.workflowRunId, "interrupted");
+      await deps.runService.waitForQuiescence(ref.workflowRunId);
+    },
+
     async waitForQuiescence(ref: ExecutionReference): Promise<void> {
       await deps.runService.waitForQuiescence(ref.workflowRunId);
     },
@@ -373,10 +304,8 @@ export function createContinuousExecutionAdapter(
     },
 
     async suspendAtSafeBoundary(ref: ExecutionReference, reason: string): Promise<void> {
-      // 不等同 stop：绝不 cancel、绝不让 Run 落 stopped/cancelled。冻结的是**本适配器的准许**，
-      // 引擎照常把在途操作收尾到安全边界；新请求的硬执行点是预算闸门的 admissionProbe 接缝
-      // （continuous-model-budget.ts 装配时注入 (ref) => inspectHealth(ref)，读 admissionState；
-      // 评审修正：此前注释声称该接缝已消费此状态但并无接线）。见文件头「挂起语义」。
+      requireNotRevoked(ref.cycleId);
+      // 资源暂停只冻结准入，不取消同 Run；在途操作允许收尾。
       const state = admissionOf(ref.cycleId);
       const previous = state.admission;
       state.admission = "suspended";
@@ -393,6 +322,7 @@ export function createContinuousExecutionAdapter(
 
     async resumeSuspended(ref: ExecutionReference, epoch: number): Promise<void> {
       requireNotRevoked(ref.cycleId);
+      await deps.beforeResume?.(ref, deps.journal.getRun(ref.workflowRunId)?.cwd);
       const state = requireEpoch(ref.cycleId, epoch);
       if (state.admission !== "suspended") {
         throw new ContinuousExecutionError(
@@ -400,7 +330,16 @@ export function createContinuousExecutionAdapter(
           `continuous cycle ${ref.cycleId} is not suspended (admission: ${state.admission})`,
         );
       }
+      // 旧版预算错误已结算为 errored，开内存闸门不能恢复它，必须明确拒绝。
+      const record = deps.journal.getRun(ref.workflowRunId);
+      if (record && record.status !== "pending" && record.status !== "running") {
+        throw new ContinuousExecutionError(
+          "not_resumable",
+          `run ${ref.workflowRunId} is ${record.status}`,
+        );
+      }
       state.admission = "open";
+      waiters.notify(ref.cycleId);
       deps.logger?.info?.("Continuous managed cycle suspension lifted", {
         event: "continuous.execution.resumed_suspended",
         module: "bootstrap.app",
@@ -422,9 +361,7 @@ export function createContinuousExecutionAdapter(
         ownerEpoch: state.epoch,
         reachable,
         admissionState: state.admission,
-        // lastProgressAt / waitingFor 刻意缺席：节点/工具级进展时刻与 normal_wait 证据
-        // （owner/原因/期限）归 CT-04 healthMonitor 的探活接缝；本骨架不拿 journal 行的
-        // time_updated 冒充进展时刻（规格 §10.1「不采用模型自述」，也不用行更新时间伪装）。
+        ...evidenceOf(ref.workflowRunId),
       };
     },
   };
@@ -449,60 +386,4 @@ async function resumeRun(
       result.message === undefined ? "" : ` (${result.message})`
     }`,
   );
-}
-
-/** submitOnce 拒绝 → 适配器拒绝：身份三元组归一为 execution_identity_mismatch（规格 §11）。 */
-function submitRejectionOf(reason: ManagedRunSubmitRejection): ContinuousExecutionRejectionReason {
-  switch (reason) {
-    case "owner_mismatch":
-    case "script_mismatch":
-    case "args_mismatch":
-      return "execution_identity_mismatch";
-    case "completed":
-    case "errored":
-      return "not_resumable";
-    case "superseded":
-      return "superseded";
-    case "stopped":
-      return "stopped";
-  }
-}
-
-/** ContinuousReportV1 的五个 item 种类（读侧投影的合法词表）。 */
-const REPORT_ITEM_KINDS: ReadonlySet<string> = new Set([
-  "candidate",
-  "decision",
-  "validation",
-  "candidate_result",
-  "cycle_result",
-]);
-
-/** journal report 行 → ContinuousReportItem：kind/itemKey 从载荷投影，投不出来就诚实标 unknown。 */
-function toReportItem(
-  runId: string,
-  row: { sequence: number; item: unknown },
-): ContinuousReportItem {
-  const payload = row.item;
-  const candidate = payload as { kind?: unknown; itemKey?: unknown } | null;
-  const shaped = typeof candidate === "object" && candidate !== null;
-  const kind =
-    shaped && typeof candidate.kind === "string" && REPORT_ITEM_KINDS.has(candidate.kind)
-      ? (candidate.kind as ContinuousReportItem["kind"])
-      : "unknown";
-  const itemKey =
-    shaped && typeof candidate.itemKey === "string" && candidate.itemKey.length > 0
-      ? candidate.itemKey
-      : // 回退键由 journal sequence 派生（规格 §11「itemKey 加来源 journal sequence 去重」）：
-        // 载荷没有自带 itemKey 时，sequence 本身就是这条报告的稳定去重身份。
-        `report:${runId}:${row.sequence}`;
-  return { kind, itemKey, journalSequence: row.sequence, payload };
-}
-
-/** ExecutionState.status 的运行态判定（live 注册表条目优先于 journal 行）。 */
-export function executionStatusOf(
-  live: boolean,
-  status: "pending" | "running" | "completed" | "errored" | "stopped",
-): ExecutionState["status"] {
-  if (live && (status === "pending" || status === "running")) return "running";
-  return status;
 }

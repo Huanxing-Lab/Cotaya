@@ -58,30 +58,28 @@ observe_only 平台的行为（规格 §13，服务与执行策略两层强制�
    生产 build 无测试故障接口（E-28）。核心失败或必需 live blocked 时，自主实施 flag 保持
    关闭，可交付明确标识的只读观察能力。
 
-## 2.1 已知边界（评审确认，开启前必须补齐）
+## 2.1 遗留问题修复进度（2026-10-05）
 
-以下缺口在 CT-01…CT-10 的单元/集成测试中以宽松替身成立，但产品路径未闭环。因功能当前
-默认关闭（无 Host 装配、CLI `continuousManagedCycles.enabled` 默认关），无实际暴露面；开启
-装配前必须逐项接线或明确决策：
+本次修复分支为 `codex/continuous-release-gaps`，基于 GLM 的 `feature/continuous-mvp`。
+**源代码接缝已经修复，完整产品仍未达到开启条件。** 后续工作与验收见
+[tickets/continuous-release-gaps.md](../tickets/continuous-release-gaps.md)。
 
-1. **CT-02 操作范围策略无执行点**：`continuous-execution-policy.ts` 的路径/命令/git/能力
-   检查（observer/builder 只读、候选路径限制、argv 白名单、`platform_read_only`）在产品
-   代码中没有任何调用者——§7 的写入边界当前不设防。装配时必须在工具/文件/执行层包装
-   接缝消费这些检查（接缝位置需设计决策），否则 actor 的写入不经范围校验。
-2. **预算挂起-继续的引擎侧半边**：`suspendCycleForBudget` 已接
-   `execution.suspendAtSafeBoundary`（评审修复：此前只写 DB，`resumeSuspended` 必抛
-   `not_suspended`）；但预算拒绝发生在 Run 终态 `errored` 之后，DWF 引擎 errored Run
-   不可恢复（无 pause 状态、`resume` 门只认 stopped+resumable）——用户 continue 后监督
-   会按同一条终态再次进入挂起确认。完整闭环需要引擎侧预算拒绝语义（结算为
-   stopped+resumable 或 errored 同 Run 重启），归 CT-09 后续。
-3. **§10.1 主动探活两端未闭合**：`ContinuousHealthMonitor` 无产品调用者（supervisor 不
-   启动探活循环）；且 CLI `inspectHealth` 刻意不提供 `lastProgressAt`/`waitingFor`——
-   缺进展证据源时健康分类对所有可达执行恒判「无进展」（180 秒后 suspected_hang）。启用
-   探活前必须先定义真实证据源（何为「进展」：journal sequence 推进/actor 转录更新），
-   否则接线即误报。
-4. **CT-04 预算闸门装配**：`createContinuousModelBudgetGate` 的 `admissionProbe` 接缝
-   （评审修复新增：挂起/撤销后新请求在本地硬执行点拒绝）与 Host 账本登记一样，都属
-   「Host 在 submitOnce 前登记」的装配工作，当前未实施。
+| 原问题                                 | 本次处理                                                                                                                                                                                                                                                                                                              | 仍需完成                                                                                                                                     |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| CT-02 策略没有实际执行点               | 受管 actor 的实际文件/执行端口和模板 `world` 端口均包装；角色、候选路径、符号链接及命令检查进入 IO 调用路径；child runtime 不再用原始端口覆盖检查端口。未支持的递归搜索、后台工具、任意 shell/MCP 和未证明隔离的命令明确拒绝。                                                                                        | CT-11：安全搜索、真实命令隔离、可信测试/浏览器证据及受控本地提交；文件检查后的符号链接替换竞态也必须验证，当前检查不宣称操作系统隔离已完成。 |
+| 预算拒绝使 Run errored，继续后循环确认 | 配置暂停端口的预算闸门释放并发席位并等待；用户授权后同一 acquire 重新预留，不增加 provider 尝试次数。真实 SQLite + DWF 引擎测试证明 Run 保持 running，并由同一 actor 完成。停止信号可以取消等待。旧 errored Run 明确拒绝继续；已完成 Run 只结算。Host 先保存 running，再唤醒 CLI。                                    | CT-12/13：Host 预算预留、拒绝原因、确认持久化、授权结果经真实通信装配；旧失败轮提供结束并显式新开轮的产品入口。                              |
+| 探活没有调用者，也没有真实证据         | supervisor 的同一监督循环每 15 秒探测；CLI 从 journal 的 sequence/timeCreated 读真实动作时间，不刷新查询时间。全部运行节点都具有落库 backoff 原因与期限才承认正常等待。有效时间/卡死触发同轮继续确认，不调用 stop；失联保存 interrupted。健康字段采用 running + leaseEpoch 条件原子更新，不能覆盖取消状态或报告游标。 | CT-14：覆盖声明测试、工具和其他真实长等待的可取消操作登记；失联探测有界响应；真实 UI 的一小时与 hang 场景。                                  |
+| 预算登记与本地准入没有装配             | 产品 submit/resume/continue 在预算（含暂停与本地探针）、决策、IO 登记缺失或 worktree 不符时拒绝；预算和 IO 可使用执行适配器同一 `waitForAdmission`。新增独立 interrupt 命令，退出取消引擎并等待收尾，保留 interrupted 恢复语义；已暂停轮也会结束进程内执行并保留确认。                                                | CT-12/13：window-scoped Local Host 的真实登记和启动/恢复/退出装配；登记检查不能替代这项工作。                                                |
+
+本次验证使用 Node 25.8.0；仓库要求 Node 24.14.0，当前机器没有 mise 与对应安装。
+因此下面结果不替代固定 Node 版本或打包平台验收：
+
+- 单元、集成、恢复、当前 macOS 平台 suite 与根/CLI 类型检查、Lint：见测试文档的本次记录。
+- 真实 Electron E2E runner 已运行并构建 CLI/Desktop：30 个场景 blocked、0 passed、0 failed。
+  实际 capability 预检停在窗口未就绪，不能声称观察到了 Continuous tab 的隐藏。
+  源码另确认 Host 尚无 Continuous 装配；多数 E 用例当前直接报告 blocked，还没有真实交互实现。
+- regression 实测失败：E-26/E-27 通过；E-28 production 无法打开 Automations 页面，断言失败。case 报告漏记该失败，但统一 runner 正确返回 failed/exit 1。修复导航及报告归 CT-15。
+- 自主实施仍默认关闭；手机、真实模型、其他平台与安装包未在本次验收。
 
 ## 3. 回滚顺序（有序执行；不得靠删表回滚）
 
@@ -91,9 +89,9 @@ continuousWake.ts` 接入点）与 Host 唤醒处理器注册——无新唤醒�
 2. 撤销新请求与新写入：立即停止在飞 Cycle（`stopCurrentCycle`：撤销准入 → cancel → 等待
    停止），CLI 侧关闭 `continuousManagedCycles.enabled`（模型准入/执行端口拒绝新调用）。
 3. 等待停止或保存 interrupted：正常退出走 `interruptCyclesForShutdown`
-   （suspendAtSafeBoundary，保存 interrupted、lease 保留持久化占用）；强制退出依赖下次
+   （interrupt：冻结准入、以 interrupted 取消引擎、等待收尾；保存 interrupted、lease 保留持久化占用）；强制退出依赖下次
    启动的恢复核对（先未结束 Cycle、后到期 Program）。
-4. 回退入口：隐藏/还原 Continuous tab（accessor 可选字段缺席即隐藏）、还原
+4. 回退入口：隐藏/还原 Continuous tab（capability 探测控制入口；RPC accessor 的 lazy getter 不能作为可用性证明）、还原
    `ServiceChannels.Continuous` 注册；旧产品入口（普通 Workflow/Automation/Goal/权限确认）
    不受影响（E-26 回归）。
 5. 保留 DB、worktree、用户改动和历史：不删除 `continuous_*` 表、Program worktree

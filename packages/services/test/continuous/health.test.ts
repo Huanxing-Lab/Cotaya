@@ -7,6 +7,7 @@
 // 运行入口：node scripts/test-continuous.mjs --suite integration（tsx + node:test）。
 
 import assert from "node:assert/strict";
+import { continueCycleExecution } from "../../src/continuous/application/supervisorResume.js";
 import test from "node:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -400,4 +401,124 @@ test("R-12 重启保留区间且离线缺口不计；15 秒节拍由注入 sched
   const afterRestart = await probeWith(fixture, monitor2);
   assert.equal(afterRestart.activeDeltaMs, 0, "离线缺口不计入（R-12/R-09）");
   assert.equal(afterRestart.activeDurationMs, 15_000, "重启前的有效时长保留（0 + 15s 两拍）");
+});
+
+test("发布2.1：探活等待快照时发生暂停，旧快照不能覆盖状态或报告游标", async (t) => {
+  const fixture = await makeFixture();
+  t.after(() => fixture.dispose());
+  let deliver!: (snapshot: HealthSnapshot) => void;
+  let reached!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  const monitor = new ContinuousHealthMonitor({
+    repository: fixture.repo,
+    clock: { now: fixture.now, timeZone: () => "Asia/Shanghai" },
+    execution: {
+      inspectHealth: () => {
+        reached();
+        return new Promise<HealthSnapshot>((resolve) => {
+          deliver = resolve;
+        });
+      },
+    },
+  });
+  const pending = monitor.probeOnce(fixture.ref);
+  await entered;
+  await fixture.repo.saveCycle({ ...fixture.cycle, status: "suspended", reportCursor: 99 });
+  deliver(progressingSnapshot(fixture.now()));
+  assert.equal(await pending, null);
+  const saved = await fixture.repo.getCycle(fixture.cycle.id);
+  assert.equal(saved?.status, "suspended");
+  assert.equal(saved?.reportCursor, 99);
+});
+
+test("发布2.1：健康字段原子更新拒绝旧 epoch 和已取消的轮，不覆盖游标", async (t) => {
+  const fixture = await makeFixture();
+  t.after(() => fixture.dispose());
+  await fixture.repo.saveCycle({ ...fixture.cycle, reportCursor: 9 });
+  const update = {
+    ...fixture.cycle,
+    activeDurationMs: 15_000,
+    lastProbeAt: fixture.now(),
+    updatedAt: fixture.now(),
+  };
+  assert.equal(await fixture.repo.updateCycleHealth(update), true);
+  assert.equal((await fixture.repo.getCycle(fixture.cycle.id))?.reportCursor, 9);
+  assert.equal(await fixture.repo.updateCycleHealth({ ...update, leaseEpoch: 0 }), false);
+  await fixture.repo.saveCycle({
+    ...(await fixture.repo.getCycle(fixture.cycle.id))!,
+    status: "cancelled",
+  });
+  assert.equal(
+    await fixture.repo.updateCycleHealth({ ...update, activeDurationMs: 30_000 }),
+    false,
+  );
+  assert.equal((await fixture.repo.getCycle(fixture.cycle.id))?.status, "cancelled");
+});
+
+test("发布2.1：Host running 先于唤醒等待者落库，恢复失败重新暂停", async (t) => {
+  const fixture = await makeFixture();
+  t.after(() => fixture.dispose());
+  const suspended = { ...fixture.cycle, status: "suspended" as const };
+  await fixture.repo.saveCycle(suspended);
+  const execution = {
+    resumeSuspended: async () => {
+      assert.equal(
+        (await fixture.repo.getCycle(suspended.id))?.status,
+        "running",
+        "预算账本已接受新请求",
+      );
+    },
+  } as never;
+  await continueCycleExecution(
+    {
+      repository: fixture.repo,
+      execution,
+      clock: { now: fixture.now, timeZone: () => "Asia/Shanghai" },
+    },
+    suspended,
+    fixture.ref,
+    { runId: "r", status: "running", resumable: false },
+  );
+  await fixture.repo.saveCycle(suspended);
+  await assert.rejects(
+    continueCycleExecution(
+      {
+        repository: fixture.repo,
+        execution: {
+          resumeSuspended: async () => {
+            throw new Error("CLI 不可达");
+          },
+        } as never,
+        clock: { now: fixture.now, timeZone: () => "Asia/Shanghai" },
+      },
+      suspended,
+      fixture.ref,
+      { runId: "r", status: "running", resumable: false },
+    ),
+    /CLI 不可达/,
+  );
+  assert.equal((await fixture.repo.getCycle(suspended.id))?.status, "suspended");
+});
+
+test("发布2.1：旧监督者不能借用后来 Cycle 行的新 epoch 更新健康", async (t) => {
+  const fixture = await makeFixture();
+  t.after(() => fixture.dispose());
+  await fixture.repo.saveCycle({ ...fixture.cycle, leaseEpoch: 2, reportCursor: 12 });
+  let probes = 0;
+  const monitor = new ContinuousHealthMonitor({
+    repository: fixture.repo,
+    ownerEpoch: 1,
+    clock: { now: fixture.now, timeZone: () => "Asia/Shanghai" },
+    execution: {
+      inspectHealth: async () => {
+        probes++;
+        return progressingSnapshot(fixture.now());
+      },
+    },
+  });
+  assert.equal(await monitor.probeOnce(fixture.ref), null);
+  assert.equal(probes, 0);
+  assert.equal((await fixture.repo.getCycle(fixture.cycle.id))?.reportCursor, 12);
 });

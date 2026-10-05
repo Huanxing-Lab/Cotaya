@@ -142,6 +142,11 @@ class FakeExecutionPort implements ContinuousExecutionPort {
     });
   }
 
+  interrupt(): Promise<void> {
+    this.calls.push("interrupt");
+    return Promise.resolve();
+  }
+
   suspendAtSafeBoundary(): Promise<void> {
     this.calls.push("suspendAtSafeBoundary");
     return Promise.resolve();
@@ -152,8 +157,14 @@ class FakeExecutionPort implements ContinuousExecutionPort {
     return Promise.resolve();
   }
 
-  inspectHealth(): Promise<never> {
-    throw new Error("decision.test 不驱动探活（health.test 覆盖）");
+  inspectHealth() {
+    this.calls.push("inspectHealth");
+    return Promise.resolve({
+      runId: this.state.runId,
+      actorIds: [],
+      ownerEpoch: 1,
+      reachable: true,
+    });
   }
 
   emit(kind: string, itemKey: string, payload: unknown): ContinuousReportItem {

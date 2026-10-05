@@ -1,11 +1,11 @@
 # Continuous 完整测试流程与 E2E
 
-| 项目     | 内容                                                |
-| -------- | --------------------------------------------------- |
-| 状态     | 验证计划；Continuous 尚未实现，所有新用例均 planned |
-| 规格     | [产品与架构](../specs/continuous.md)                |
-| 实施任务 | [CT-00 至 CT-10](../tickets/continuous.md)          |
-| 源码基线 | `7a83710b4ba13427f1c41d29f0ac3b242a7dfc03`          |
+| 项目     | 内容                                                   |
+| -------- | ------------------------------------------------------ |
+| 状态     | 模块和接缝已实现；核心产品 E2E blocked，本次结果见文末 |
+| 规格     | [产品与架构](../specs/continuous.md)                   |
+| 实施任务 | [CT-00 至 CT-10](../tickets/continuous.md)             |
+| 源码基线 | `7a83710b4ba13427f1c41d29f0ac3b242a7dfc03`             |
 
 本文是实施后的执行手册。当前没有新 runner、fixtures 或测试代码。下面的新增命令必须在对应 ticket 完成后才可运行；不得将文档中的命令存在视为通过。
 
@@ -525,3 +525,78 @@ UI用accessibility和稳定test IDs定位，不靠翻译文本或像素坐标。
 最终验收记录必须分别列：脚本化链路通过情况、live质量验证、各OS自主执行能力、手机恢复链路、旧功能回归、未验证范围、实际消费、清理/回滚证明。
 
 当前文档阶段仅完成规划与文档验证。不能填写Continuous功能passed；下一轮实施按CT和本文用例逐项补实际结果。
+
+## 2026-10-05：发布 §2.1 修复验证与下一步完整验收
+
+实施顺序见 [遗留问题 Ticket](../tickets/continuous-release-gaps.md)。以下分开记录当前已执行结果与产品接入后的验收流程。
+
+## 本次实际结果
+
+| 验证                     | 结果                             | 证据范围                                                                                                                                    |
+| ------------------------ | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| unit                     | 44 passed / 0 failed             | 领域、契约与 runner 自检                                                                                                                    |
+| integration              | 116 passed / 0 failed            | 真实 SQLite、Git、文件、DWF 子进程；包括预算等待、同 Run 继续、退出 interrupted、监督时间暂停和原子健康写入；部分端口用替身，不等于完整产品 |
+| recovery                 | 17 passed / 0 failed             | 存储重开与恢复；进程 kill 多为同库新实例模拟                                                                                                |
+| platform                 | 10 passed / 0 failed             | 当前 darwin-arm64 的真实文件/进程/Git/数据库；不替代安装包或其他平台                                                                        |
+| 根类型检查、CLI 类型检查 | passed                           | CLI 27 个 task 成功；有 workspace lockfile 警告                                                                                             |
+| 根 Lint、CLI Lint        | passed，0 errors                 | 原仓库已有警告，不声称零警告                                                                                                                |
+| Electron e2e             | 30 blocked / 0 passed / 0 failed | 真实构建并启动 Electron；窗口未就绪，未完成 Automations 导航；生产测试桥的无 flag 构建半边未在该 suite 验证                                 |
+| mobile、live、安装包     | 本次未执行                       | 不能写成 passed                                                                                                                             |
+
+全仓 `pnpm fmt:check` 未通过：34 个本次未修改文件存在格式问题（含用户已有 `.zcode` 计划），本次没有修改这些文件；本次改动文件单独格式检查通过。
+
+regression suite 已执行并失败（退出码 1）：E-26 bootstrap 既有测试与 E-27 停止/回滚检查通过；E-28 production build 无法打开 Automations 页面，`canary 必须先打开 Automations 页面` 断言失败。runner 的 case 报告漏记了这次失败，entryReport 错误显示 passed；统一 runner 仍正确保留 failed/exit 1。需 CT-15 同时修复导航预检和失败用例报告，不把它记成通过。
+regression 证据：`/private/var/folders/q9/kv1rgzmd33317h52wmx6fgzr0000gn/T/continuous-ct09-regression-uFbiqY/artifacts/`。
+
+本次使用 Node 25.8.0，`mise.toml` 固定为 24.14.0；本机未安装 mise/固定 Node。固定版本重跑是 CT-16 的必需条件。
+integration testRunId：`12eba9b5-ab27-4196-a693-0c45108d5a3d`；recovery：`c60d624e-9546-426a-92b1-68ffae735c67`。
+E2E 原始证据目录：`/private/var/folders/q9/kv1rgzmd33317h52wmx6fgzr0000gn/T/continuous-ct09-e2e-rwDJvA/artifacts/`。
+该报告的 sourceCommit 是执行时 HEAD，源码有本次未提交修改；它不单独代表被测试源码。下一轮按 CT-15 补工作树差异标识。
+
+## 可复现的自动流程
+
+从仓库根目录执行，运行前先确认 `mise.toml` 的 Node/pnpm 与实际环境一致；本地 shell 按仓库要求加 `rtk proxy` 前缀：
+
+```sh
+node scripts/check-workspace-freshness.mjs
+pnpm typecheck
+pnpm --dir apps/zcode-cli typecheck
+pnpm lint
+pnpm --dir apps/zcode-cli lint
+pnpm architecture:check --changed
+pnpm fmt:check
+node scripts/test-continuous.mjs --suite unit
+node scripts/test-continuous.mjs --suite integration
+node scripts/test-continuous.mjs --suite recovery
+node scripts/test-continuous.mjs --suite platform
+node scripts/test-continuous.mjs --suite e2e
+node scripts/test-continuous.mjs --suite mobile
+node scripts/test-continuous.mjs --suite regression
+```
+
+live 单独执行 `node scripts/test-continuous.mjs --suite live --allow-live`，使用已配置的测试账户/模型，费用计入真实预算；没有配置则保持 blocked。本次没有执行 live。
+任何 blocked/missing 都不能满足开启条件，runner 退出码 0 也不等于业务场景 passed。
+
+## 产品接入后完整 E2E 流程（CT-15 待实施）
+
+每次创建隔离 home、tasks-index、session journal 和临时 Git 原仓库；原仓库预先放一项用户未提交修改。记录 base commit/工作树差异、平台、Node、testRunId。模型使用脚本 fixture，所有命令通过真实 UI → Host → CLI 路径；时钟和故障由测试专用受控接口注入。
+
+| 步骤             | 真实操作                                                                                          | 必须核对的事实                                                                                                              |
+| ---------------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| 1. 能力与创建    | 等窗口和 Automations 页可见；点击 Continuous，填写 Scope、目标和确认                              | capability 实际返回；默认值为 10 / 10 亿 / USD 100 / USD 1000 / 有效一小时；一条 Program；原仓库用户修改不变                |
+| 2. 执行与重发    | Run now，重复发送同 requestId，再发另一个 requestId                                               | 一条开放 Cycle、一个 Run、一个执行权；重复返回同身份，另一请求不并行新开                                                    |
+| 3. 授权和验证    | 模型给出独立低风险候选与一个需要决策候选；通过受控工具实施                                        | 一名 builder；独立项继续；需决策项无写入；真实测试退出码、390/1280 浏览器证据和独立 Review 可关联同 candidate/run/epoch     |
+| 4. 本地交付      | 验证成功后提交；失败/缺证据时再尝试提交                                                           | 只有 Program 分支有验证通过的提交；原分支/原仓库修改不变；无 push/merge/deploy；缺任一验证没有提交                          |
+| 5. 越界拒绝      | observer/reviewer 写入；builder 写其他候选、protected/原仓库、链接目标；任意 shell、MCP、旧 epoch | 在真实文件/进程/调用记录确认零副作用；检查后 symlink 替换也不能绕过；yolo 和用户扩额不能扩大 Scope                          |
+| 6. 各资源上限    | 分别使单轮 token、单轮费用、日费用、文件/行数达到限额；10 路请求争抢最后额度                      | 先冻结再暂停，provider 调用数不增加；预留/unknown 均占额度；一条合并 pending 确认；原 Cycle/Run 保留                        |
+| 7. 回答与继续    | 选择增加额度，重放同回答，发旧 version；再选保持暂停或结束                                        | 增量只生效一次；Host running 落库后才唤醒；同 Run 完成；保持暂停无请求；结束取消工具并保留账本；不清零已用量                |
+| 8. 正常长等待    | 实际登记责任方、原因和两小时期限；推进墙钟超过一小时；再让一个 actor 开始工作                     | 全部正常等待时有效时间不增加、继续探测、不误报；任一 actor 工作时有效时间增加；完成/取消/期限失效移除登记                   |
+| 9. 一小时与 hang | 持续健康工作累计一小时；另一轮冻结真实动作但继续 heartbeat                                        | 前者 time_limit 暂停；后者 180 秒且 3 次失败探测才 suspected_hang；均询问用户，不 failed/cancelled；授权仍用同轮身份        |
+| 10. 退出与恢复   | 预算等待、正常执行和正常长等待期间分别退出应用，再启动                                            | 退出 interrupt 等工具收尾，无后台工作；预算暂停确认仍 pending；正常执行 interrupted 同 Run 恢复；离线不计时，先旧轮后未来轮 |
+| 11. 故障与幂等   | 保存身份后、ACK 后、usage 前、报告导入前分别终止子进程/重启；模拟 Host 通信阻塞                   | 无第二个 Run；unknown 保留；游标去重；有界探测报告失联；旧版本/旧 epoch/已 cancelled 状态不被晚到探活覆盖                   |
+| 12. 手机重连     | 手机连接桌面 attachment，开始/暂停/回答；断线后重连，重复提交回答                                 | 同 Local Host/Run/workspaceIdentity；snapshot/sequence 补缺口；不重复扩额或创建 actor；桌面退出后手机不能另起运行           |
+| 13. 关闭与生产   | 关闭功能后重开、普通任务/Workflow/Automation 回归；普通 production build 检查测试接口             | Continuous 入口由 capability 控制；已有数据/worktree 保留；普通行为不变；无故障注入与测试 store bridge                      |
+
+所有步骤保存 UI 截图、命令关联 ID、数据库/journal 序号、预算明细、真实 IO/进程/Git 证据。仅看到 UI 文案或直接修改 store 不算验收。现有 E2E 的 blockedCase 必须替换成这些真实操作；未实现步骤逐项保留 blocked，不用通用预检结果代替。
+
+上线判定：先完成 CT-11…16，核心 U/I/R/E 与兼容回归真实通过、手机和 live 完成、安装包与目标平台验证完成，再开放自主实施。当前不满足。

@@ -188,6 +188,9 @@ export interface ZCodeAppOptions {
    */
   continuousManagedCycles?: {
     enabled: boolean;
+    executionPolicyFor?: (
+      runId: string,
+    ) => import("./continuous-managed-guards.js").ContinuousManagedIoRegistration | undefined;
     /**
      * CT-04 预算闸门登记处：Host（CT-05 装配）在 submitOnce 前按 workflowRunId 登记该轮的
      * 闸门；run service 经 wrapModelRequestAdmission 接缝为该 run 的每个 actor 准入端口包上

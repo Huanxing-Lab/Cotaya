@@ -75,6 +75,9 @@ export async function dispatchContinuousManagedCycleCommand(
       case "stop":
         await port.stop(ref, command.reason!);
         return { ok: true, result: { type: "continuousManagedCycle", op: "stop" } };
+      case "interrupt":
+        await port.interrupt(ref, command.epoch!);
+        return { ok: true, result: { type: "continuousManagedCycle", op: "interrupt" } };
       case "waitForQuiescence":
         await port.waitForQuiescence(ref);
         return { ok: true, result: { type: "continuousManagedCycle", op: "waitForQuiescence" } };

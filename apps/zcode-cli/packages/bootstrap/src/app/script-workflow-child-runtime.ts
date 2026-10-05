@@ -1,7 +1,6 @@
 import { join } from "node:path";
 import { createNodeContextSourceAdapter } from "@zcode/adapters/context";
 import { createNodeExecutionAdapter } from "@zcode/adapters/exec";
-import { createNodeFileSystemAdapter } from "@zcode/adapters/fs";
 import { createNodeWebFetchHttpClientAdapter } from "@zcode/adapters/http";
 import { createNodeSkillAdapter } from "@zcode/adapters/skills";
 import type { ConfigResult } from "@zcode/adapters/config";
@@ -15,6 +14,7 @@ import {
 import {
   type AgentExecutionTelemetryPort,
   type ContextSourcePort,
+  type ExecutionPort,
   type FileSystemPort,
   type HttpClientPort,
   type ImageProcessorPort,
@@ -43,6 +43,7 @@ export interface ScriptWorkflowAgentRuntimeDeps {
   configResult: ConfigResult;
   contextSourcePort?: ContextSourcePort;
   fileSystemPort: FileSystemPort;
+  executionPort?: ExecutionPort;
   httpClientPort?: HttpClientPort;
   imageProcessorPort: ImageProcessorPort;
   pdfDocumentPort?: PdfDocumentPort;
@@ -142,9 +143,7 @@ export function createScriptWorkflowAgentRuntime(input: {
       ...(input.workflowSubmitPort && input.workflowSubmitSchema
         ? { workflowSubmitSchema: input.workflowSubmitSchema }
         : {}),
-      ...(input.workflowEscalatePort
-        ? { workflowEscalatePort: input.workflowEscalatePort }
-        : {}),
+      ...(input.workflowEscalatePort ? { workflowEscalatePort: input.workflowEscalatePort } : {}),
       ...(input.modelRequestAdmission
         ? { modelRequestAdmission: input.modelRequestAdmission }
         : {}),
@@ -190,6 +189,7 @@ function createRuntimeDeps(
     // transcript 就是永久空白（照 subagent.ts 的 `eventStore: this.eventStore`）。
     eventStore: deps.runtime.getSessionEventStore(),
     executionPort:
+      deps.executionPort ??
       deps.appOptions.executionPort ??
       createNodeExecutionAdapter({
         onToolExecResource: deps.appOptions.onToolExecResource,
@@ -201,7 +201,8 @@ function createRuntimeDeps(
         outputRootDir: join(deps.storageRoot, "cli", "exec"),
         processEnv: deps.appOptions.env ?? process.env,
       }),
-    fileSystemPort: deps.appOptions.fileSystemPort ?? createNodeFileSystemAdapter(),
+    // 受管 actor 注入的检查端口优先，不能被 appOptions 的原始端口覆盖。
+    fileSystemPort: deps.fileSystemPort,
     httpClientPort:
       deps.httpClientPort ??
       deps.appOptions.httpClientPort ??

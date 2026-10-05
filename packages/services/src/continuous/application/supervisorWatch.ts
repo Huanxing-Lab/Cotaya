@@ -4,6 +4,8 @@
 // 全部经注入依赖执行，无自有状态；supervisor.startSupervision 负责实例内单飞（每 Cycle
 // 至多一条循环），本文件不做去重。
 
+import { ContinuousHealthMonitor, CONTINUOUS_PROBE_INTERVAL_MS } from "./healthMonitor.js";
+import { applyHealthAssessment } from "./supervisorHealth.js";
 import type { Cycle, Program } from "../domain/types.js";
 import { isTerminalCycleStatus } from "../domain/types.js";
 import { ContinuousReportIngestion } from "./reportIngestion.js";
@@ -78,9 +80,20 @@ export async function watchCycle(
   const pollIntervalMs = deps.pollIntervalMs ?? 500;
   let lastState: ExecutionState | undefined;
   let lastRenewAt = deps.clock.now();
+  let lastProbeAt: number | undefined;
+  const health = new ContinuousHealthMonitor({ ...deps, ownerEpoch: cycle.leaseEpoch });
 
   while (true) {
     const current = (await deps.repository.getCycle(cycle.id)) ?? cycle;
+    if (current.leaseEpoch !== cycle.leaseEpoch) {
+      // 已被新监督者接管：退出旧循环，不能用新 epoch 写回 interrupted 或健康字段。
+      return {
+        cycleId: cycle.id,
+        cycleStatus: "interrupted",
+        programStatus: program.status,
+        reportRejections: accumulator.rejections,
+      };
+    }
     // suspended（资源挂起）/interrupted（退出/失去租约）由其他路径落库：监督到此为止；
     // cancelled 的占用由停止路径释放，这里兜底释放一次（幂等）。
     if (
@@ -94,7 +107,7 @@ export async function watchCycle(
       return {
         cycleId: cycle.id,
         cycleStatus: current.status,
-        programStatus: program.status,
+        programStatus: ((await deps.repository.getProgram(program.id)) ?? program).status,
         reportRejections: accumulator.rejections,
       };
     }
@@ -117,6 +130,14 @@ export async function watchCycle(
     }
     lastState = await deps.execution.inspect(ref);
     if (isTerminalExecution(lastState.status)) break;
+    if (
+      lastProbeAt === undefined ||
+      deps.clock.now() - lastProbeAt >= CONTINUOUS_PROBE_INTERVAL_MS
+    ) {
+      lastProbeAt = deps.clock.now();
+      const assessment = await health.probeOnce(ref);
+      if (assessment) await applyHealthAssessment(deps, ref, program, assessment);
+    }
     const schedule = deps.clock.schedule ?? defaultSchedule;
     await new Promise<void>((resolve) => {
       schedule(resolve, pollIntervalMs);
@@ -124,7 +145,7 @@ export async function watchCycle(
   }
   await deps.execution.waitForQuiescence(ref);
   const outcome = await settleCycle(deps, {
-    cycle,
+    cycle: (await deps.repository.getCycle(cycle.id)) ?? cycle,
     program,
     ref,
     finalState: lastState!,

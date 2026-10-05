@@ -492,6 +492,10 @@ interface ContinuousExecutionPort {
   inspect(ref: ExecutionReference): Promise<ExecutionState>;
   resume(ref: ExecutionReference, epoch: number): Promise<void>;
   stop(ref: ExecutionReference, reason: string): Promise<void>;
+  interrupt(ref: ExecutionReference, epoch: number): Promise<void>;
+  suspendAtSafeBoundary(ref: ExecutionReference, reason: string): Promise<void>;
+  resumeSuspended(ref: ExecutionReference, epoch: number): Promise<void>;
+  inspectHealth(ref: ExecutionReference): Promise<HealthSnapshot>;
   waitForQuiescence(ref: ExecutionReference): Promise<void>;
   readReports(ref: ExecutionReference, afterSequence: number): Promise<ReportBatch>;
 }
@@ -505,7 +509,7 @@ interface ContinuousExecutionPort {
 
 模型请求准入复用既有 `ModelRequestAdmission` 接缝：run service 提供可选的 per-run 准入包装点（缺席即普通 Workflow 行为逐字不变），Continuous 的预算闸门经它包住每个 actor 的准入端口——先过既有座位/治理器，再向 Host 账本原子预留，票据同时是结算事件汇。不改变所有 session 的全局 retry；单请求尝试上限由该闸门施加。
 
-受控执行面在 CLI 侧经 v4 命令 `continuousManagedCycle` 暴露（九个操作共用一张 strict 载荷：引用四元组必带，op 专属字段按 op 校验在场；词表与拒绝 fault 前缀在 shared continuous-protocol）。能力缺席（未装配/功能关闭/旧 CLI）必须回答不支持，绝不退回普通 prompt 自主执行。
+受控执行面在 CLI 侧经 v4 命令 `continuousManagedCycle` 暴露（十个操作共用一张 strict 载荷：引用四元组必带，op 专属字段按 op 校验在场；词表与拒绝 fault 前缀在 shared continuous-protocol）。能力缺席（未装配/功能关闭/旧 CLI）必须回答不支持，绝不退回普通 prompt 自主执行。
 
 submitOnce 对非终态的既有行按同身份幂等复用（不铸第二个引擎）：执行是否真的活着由 inspectHealth 的可达性回答，死进程行的核对与接管归恢复流程；终态行 completed/errored/superseded/stopped 全部拒绝重提交（恢复走 resume，且 superseded/errored 不可恢复）。
 
@@ -515,7 +519,7 @@ submitOnce 对非终态的既有行按同身份幂等复用（不铸第二个引
 
 固定模板以版本化注册表提供（bootstrap `continuous-templates`，templateId@version + 脚本 sha256 绑定 Program 授权）；Host 经注入的模板来源解析，模板不可用或 hash 与授权不符时结构化拒绝，不静默换脚本。模板只使用现有 typed ask/submit_result/report/artifact 能力，不扩 compiler/lowering；每个 Cycle 都是新 submitOnce（非 amend），imported cache 不跨 Cycle，新 Cycle 的 actor 会话身份按 runId 派生、不复用旧轮。
 
-专用执行接口新增 suspendAtSafeBoundary、resumeSuspended、inspectHealth，明确不等同 stop；挂起请求/工具准入与旧执行确认是同一所有者链。单轮计时不使用会直接 abort Run 的固定墙钟 timeout。
+专用执行接口提供 suspendAtSafeBoundary、resumeSuspended、inspectHealth 与 interrupt；interrupt 只用于退出中断，其他资源暂停不取消 Run，明确不等同 stop；挂起请求/工具准入与旧执行确认是同一所有者链。单轮计时不使用会直接 abort Run 的固定墙钟 timeout。
 
 结构化错误至少包括：authorization_stale、scope_denied、budget_denied、usage_unknown、lease_lost、execution_not_quiescent、execution_identity_mismatch、template_mismatch、remote_execution_not_supported、validation_unavailable；CT-08 起 additive 追加 version_conflict（resolve/dismiss/继续确认的旧 version 或异答重放拒绝）、program_not_runnable（paused/failed/completed Program 的启动/恢复类命令拒绝）与 open_cycle_exists（幂等竞态吸收后的明确回执）；CT-10 起 additive 追加 platform_execution_not_supported（未验证平台的自主实施拒绝，见 §13）——四者都是服务层既有语义上送 wire，不改变原有错误。
 
@@ -558,6 +562,20 @@ Program 详情必须包含：Status、Goal、Scope、Budget、Cadence、Health/�
 源码 seed graph 暂不添加指向不存在实现的节点。实现新增 source 后，CT-00/后续集成任务按技能要求补 graph 并验证路径/符号。
 
 ## 14. 当前验证状态
+
+### 2026-10-05：发布文档 §2.1 修复边界
+
+退出使用独立 `interrupt(ref, epoch)`：冻结准入、以 interrupted 原因取消引擎、等待工具收尾；不能只冻结后等待永不结束的预算调用。已经 suspended 的轮保留确认和暂停状态，但同样终止进程内执行。恢复和继续都先核对已登记的保护；Host 先保存 running，再解除 CLI 等待。
+
+探活持久化只允许更新健康字段，并以 `status=running`、同一 `leaseEpoch` 为原子条件；不得整行覆盖 Cycle 的暂停、停止、游标或确认指针。不需要新增数据库表或列。
+
+资源准入拒绝必须在 provider 调用前进入可取消的等待，而不是向 ask 抛错让 Run 进入 errored。CLI 执行适配器是本地准入状态唯一所有者；预算闸门释放已取得的并发座位后通知 Host 保存暂停和继续确认，等待同一所有者的显式恢复，再重新预留。用户停止或进程退出可以中断等待；继续本轮不能重启一个 errored Run。
+
+managed submit 前必须核对该 run 的预算闸门、暂停闸门、操作范围策略和决策闸门已登记；缺一项则拒绝启动。普通 Workflow 不受此登记规则影响。文件/命令限制在 actor 的实际 FileSystemPort/ExecutionPort 上包装，不能只调用纯策略测试。未声明的外部工具不授予 managed actor。
+
+健康监控由 Supervisor 的同一监督循环每15秒驱动，不新增第二条写 Cycle 的定时循环。真实 journal 事件的 sequence/timeCreated 是已完成步骤的进展证据；模型/工具等待还必须由执行适配器登记真实操作与期限。不得以每次查询的当前时间或心跳伪造进展。探活导致的暂停、预算暂停共用继续确认；旧 epoch 和停止后的观察结果不能覆盖 Cycle 状态。
+
+Host 完整装配、实际 UI 启动、手机恢复和 live 验收按新增后续 tickets 推进。尚未通过的产品链路保持明确 blocked，不能因单元测试通过登记已发布。
 
 此前只读调研：freshness 通过；lint 0 errors/70 warnings；typecheck --dry 只检查构建计划，不是类型通过。本次文档阶段不执行功能测试，不把计划标为通过。没有 Continuous 实现，E2E 状态均为 planned。
 
