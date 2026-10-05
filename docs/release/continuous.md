@@ -34,10 +34,12 @@ observe_only 平台的行为（规格 §13，服务与执行策略两层强制�
 
 当前状态：**默认关闭，且尚未开启**。关闭的机制与开启所需步骤：
 
-1. 关闭机制（已在代码中）：Host 未装配 `ServiceChannels.Continuous` → renderer
-   `accessor.continuousService` 缺席 → Automations 页只有「自动化/工作流」两个 tab、
-   ContinuousSection 不挂载不查询（E-24/E-27 的真实产品行为，CT-09 e2e 与 CT-10 regression
-   均有 production build 探针证据）；scheduler 对缺表旧库返回空查询、Host 唤醒处理器缺席时
+1. 关闭机制（已在代码中）：Host 未装配 `ServiceChannels.Continuous` → renderer capability
+   探测无响应（未注册 channel 的请求被 ChannelServer 排队挂起，availability 停留
+   checking）→ Automations 页只有「自动化/工作流」两个 tab、ContinuousSection 不挂载不查询
+   （E-24/E-27 的真实产品行为；评审修复：原描述「accessor.continuousService 缺席即隐藏」
+   不成立——RPC accessor 的 lazy getter 恒返回 ProxyChannel 代理，tab 门已改为 capability
+   探测驱动）；scheduler 对缺表旧库返回空查询、Host 唤醒处理器缺席时
    wake 回执失败并重发（无业务副作用）；CLI 侧 `continuousManagedCycles.enabled` 未开时
    `continuousManagedCycleExecution` 不暴露，v4 命令面回答能力不支持。
 2. 开启前置（装配清单，CT-08/09 记录的已知边界——尚未实施）：
@@ -55,6 +57,31 @@ observe_only 平台的行为（规格 §13，服务与执行策略两层强制�
    发布平台证据齐全（本表）、live 验收单独完成（无测试身份凭据时 blocked，不能模拟通过）、
    生产 build 无测试故障接口（E-28）。核心失败或必需 live blocked 时，自主实施 flag 保持
    关闭，可交付明确标识的只读观察能力。
+
+## 2.1 已知边界（评审确认，开启前必须补齐）
+
+以下缺口在 CT-01…CT-10 的单元/集成测试中以宽松替身成立，但产品路径未闭环。因功能当前
+默认关闭（无 Host 装配、CLI `continuousManagedCycles.enabled` 默认关），无实际暴露面；开启
+装配前必须逐项接线或明确决策：
+
+1. **CT-02 操作范围策略无执行点**：`continuous-execution-policy.ts` 的路径/命令/git/能力
+   检查（observer/builder 只读、候选路径限制、argv 白名单、`platform_read_only`）在产品
+   代码中没有任何调用者——§7 的写入边界当前不设防。装配时必须在工具/文件/执行层包装
+   接缝消费这些检查（接缝位置需设计决策），否则 actor 的写入不经范围校验。
+2. **预算挂起-继续的引擎侧半边**：`suspendCycleForBudget` 已接
+   `execution.suspendAtSafeBoundary`（评审修复：此前只写 DB，`resumeSuspended` 必抛
+   `not_suspended`）；但预算拒绝发生在 Run 终态 `errored` 之后，DWF 引擎 errored Run
+   不可恢复（无 pause 状态、`resume` 门只认 stopped+resumable）——用户 continue 后监督
+   会按同一条终态再次进入挂起确认。完整闭环需要引擎侧预算拒绝语义（结算为
+   stopped+resumable 或 errored 同 Run 重启），归 CT-09 后续。
+3. **§10.1 主动探活两端未闭合**：`ContinuousHealthMonitor` 无产品调用者（supervisor 不
+   启动探活循环）；且 CLI `inspectHealth` 刻意不提供 `lastProgressAt`/`waitingFor`——
+   缺进展证据源时健康分类对所有可达执行恒判「无进展」（180 秒后 suspected_hang）。启用
+   探活前必须先定义真实证据源（何为「进展」：journal sequence 推进/actor 转录更新），
+   否则接线即误报。
+4. **CT-04 预算闸门装配**：`createContinuousModelBudgetGate` 的 `admissionProbe` 接缝
+   （评审修复新增：挂起/撤销后新请求在本地硬执行点拒绝）与 Host 账本登记一样，都属
+   「Host 在 submitOnce 前登记」的装配工作，当前未实施。
 
 ## 3. 回滚顺序（有序执行；不得靠删表回滚）
 

@@ -106,12 +106,25 @@ export interface ContinuousModelBudgetGateDeps {
   programId: string;
   cycleId: string;
   ledger: ContinuousModelBudgetLedgerPort;
-  /** 价格快照（版本随 reservation 落库）；缺失该 model 的单价 → pricing_missing 拒绝。 */
+  /**
+   * 价格快照（版本随 reservation 落库）；缺失该 model 的单价 → pricing_missing 拒绝。
+   */
   pricing: ContinuousPriceSnapshot;
   /** 单请求保守预留的输入/输出 token 上限（§9「每个请求必须有输入上限和输出上限」）。 */
   requestCaps: ContinuousRequestCaps;
   /** 单逻辑请求的尝试上限（默认 3，规格 §2）。 */
   maxAttemptsPerRequest: number;
+  /**
+   * 本地准许状态探针（评审修复接缝）：适配器 suspendAtSafeBoundary（资源挂起）/stop
+   * （用户停止）冻结的是它自己的内存准许状态——本闸门在此硬执行点消费同一状态，冻结后
+   * 新请求在等座位、占额度之前就被 admission_closed 拒绝（§6.1「挂起冻结新请求」的 CLI
+   * 侧半边）。装配时注入 `(ref) => adapter.inspectHealth(ref)`（HealthSnapshot.admissionState）
+   * 或任何同语义探针；缺席时仅依赖 Host 账本行状态（存在「适配器已冻结而 Host 行尚未
+   * 推进」的窗口）。
+   */
+  admissionProbe?: (ref: { cycleId: string }) => Promise<{
+    admissionState: "open" | "suspended" | "revoked";
+  }>;
   logger?: { warn?: (message: string, meta?: unknown) => void };
 }
 
@@ -169,6 +182,17 @@ export function createContinuousModelBudgetGate(
       return {
         // 刻意无 tryAcquire（文件头）：runner 直接 await acquire。
         acquire: async ({ model, signal }) => {
+          // 准许冻结优先于一切（评审修复）：挂起（suspendAtSafeBoundary）/用户停止（stop）
+          // 之后的新请求在占用座位与额度之前就被拒绝——不能等到 Host 账本行推进才拦。
+          if (deps.admissionProbe !== undefined) {
+            const probe = await deps.admissionProbe({ cycleId: deps.cycleId });
+            if (probe.admissionState !== "open") {
+              throw new ContinuousModelBudgetError(
+                "admission_closed",
+                `continuous cycle ${deps.cycleId} admission is ${probe.admissionState}; new model requests are frozen (§6.1)`,
+              );
+            }
+          }
           const chain: ChainAttempts = { attempts: 1 };
           if (signal !== undefined) {
             const existing = chains.get(signal);

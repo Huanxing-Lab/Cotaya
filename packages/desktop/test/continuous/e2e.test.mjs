@@ -95,7 +95,9 @@ function parseArgs(argv) {
 }
 
 const args = parseArgs(process.argv.slice(2));
-const sourceCommit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: REPO_ROOT })
+const sourceCommit = execFileSync("git", ["rev-parse", "HEAD"], {
+  cwd: REPO_ROOT,
+})
   .toString()
   .trim();
 const run = createTestRun({ suiteLabel: "e2e", parentRunId: args.parentRunId });
@@ -139,7 +141,10 @@ async function setup() {
   const cli = args.skipCliBuild
     ? {
         staged: stagedBundle,
-        fingerprint: { ...(await sha256File(stagedBundle)), stagedBundlePath: stagedBundle },
+        fingerprint: {
+          ...(await sha256File(stagedBundle)),
+          stagedBundlePath: stagedBundle,
+        },
       }
     : await buildAgentCli(run);
   await ensureDesktopBuild(run, { skipDesktopBuild: args.skipDesktopBuild });
@@ -147,7 +152,9 @@ async function setup() {
   const repo = await createGitRepoFixture(run, { name: "e2e-origin" });
   const targetApp = createTargetAppServer(run, { repoDir: repo.dir });
   const provider = createScriptedProvider(run);
-  const app = await launchDesktop(run, { env: { ...process.env, ...bridgeEnv } });
+  const app = await launchDesktop(run, {
+    env: { ...process.env, ...bridgeEnv },
+  });
   const window = await waitForFirstWindow(app.electron, 60_000);
   const fingerprint = await waitForHostFingerprint(run, {
     stdoutText: app.stdoutText,
@@ -155,7 +162,16 @@ async function setup() {
     distBundlePath: AGENT_DIST_BUNDLE,
     timeoutMs: 60_000,
   });
-  return { cli, bridgeEnv, repo, targetApp, provider, app, window, fingerprint };
+  return {
+    cli,
+    bridgeEnv,
+    repo,
+    targetApp,
+    provider,
+    app,
+    window,
+    fingerprint,
+  };
 }
 
 let context;
@@ -177,23 +193,38 @@ try {
 }
 
 // capability 预检：Host 未装配 Continuous channel 时 UI 的 Continuous tab 必须隐藏
-//（accessor.continuousService 缺席 = 默认关闭，spec §13）。这是「不可用」的真实产品行为证据。
+// （capability 探测无结论 = 默认关闭，spec §13）。这是「不可用」的真实产品行为证据。
+// 评审修复：Continuous tab 只在用户进入 Automations 页面时才挂载——必须先真实导航过去
+// 再扫描，否则「selector 不存在」无法区分「被门隐藏」与「页面根本没打开」（空转 canary）。
 async function probeContinuousCapability() {
   const selector = '[data-testid="automations-page-tab-continuous"]';
   const windows = context.app.electron.windows();
   for (const [index, window] of windows.entries()) {
     try {
+      // 导航到 Automations 主视图（侧栏入口），并等待页面骨架挂载（toast 锚点 main 元素）。
+      await window.locator('[data-testid="automations-open"]').first().click({ timeout: 10_000 });
+      await window
+        .locator("#automations-main-toast-anchor")
+        .first()
+        .waitFor({ state: "attached", timeout: 10_000 });
       if ((await window.locator(selector).count()) > 0) {
-        return { available: true, evidence: `selector 命中于 window#${index}` };
+        return {
+          available: true,
+          evidence: `selector 命中于 window#${index}（已导航至 automations 页）`,
+        };
       }
+      return {
+        available: false,
+        reason:
+          "automations 页已打开但未出现 Continuous tab：Host 未装配 ServiceChannels.Continuous（CT-08 记录的装配边界，功能默认关闭）",
+      };
     } catch {
       // 窗口导航态不稳定时继续探测其余窗口。
     }
   }
   return {
     available: false,
-    reason:
-      "automations 页未出现 Continuous tab：Host 未装配 ServiceChannels.Continuous（CT-08 记录的装配边界，功能默认关闭）",
+    reason: "无法完成 automations 页导航（窗口未就绪）；tab 缺席证据不成立",
   };
 }
 

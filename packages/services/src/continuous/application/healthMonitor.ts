@@ -16,6 +16,12 @@
 // 不重算（R-12）。达到有效上限（含 grant 增量）且当前**健康工作**时报告 time_limit 动作；
 // normal_wait 推迟触发（§10.1），等待结束恢复计时后再触发。全部 actor 等待才算 normal_wait
 // ——快照聚合归 supervisor（CT-05）：任一 actor 有进展时 snapshot.lastProgressAt 前进。
+//
+// 已知边界（评审确认，如实声明）：本监控当前**没有产品调用者**（supervisor/watchCycle 不
+// 启动探活循环）；且 CLI 适配器的 inspectHealth 刻意不提供 lastProgressAt/waitingFor——
+// 证据源缺席时本分类对所有可达执行恒判「无进展」（progressed/waitValid 恒 false，180 秒
+// 后 suspected_hang）。启用探活前必须先落地真实进展证据源（journal sequence 推进/actor
+// 转录更新等），否则接线即误报（见 docs/release/continuous.md §2.1 已知边界）。
 
 import type { Cycle } from "../domain/types.js";
 import type {

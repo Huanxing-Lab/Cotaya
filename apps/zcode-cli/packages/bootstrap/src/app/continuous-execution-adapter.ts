@@ -320,7 +320,9 @@ export function createContinuousExecutionAdapter(
     async stop(ref: ExecutionReference, reason: string): Promise<void> {
       // 顺序即语义（规格 §6「立即停止本轮」）：
       //   1. 撤销新操作 —— 准许置 revoked：此后本适配器拒绝该 Cycle 的 resume/resumeSuspended，
-      //      CT-04 的模型准入接缝在同一状态上拒绝新请求；
+      //      预算闸门经 admissionProbe 接缝在同一状态上拒绝新请求（评审修正：此前注释声称
+      //      CT-04 准入接缝消费此状态但并无接线——现 continuous-model-budget.ts 的
+      //      deps.admissionProbe 是真实硬执行点；未注入时仅有 Host 账本行状态这道闸）；
       //   2. abort —— run service cancel(user)：引擎经 stop(user) 结算 stopped，journal 保留；
       //   3. 等待停止 —— waitForQuiescence：结算 + 被中止 turn 的工具/转录收尾，不只等 run-settled。
       const state = admissionOf(ref.cycleId);
@@ -372,8 +374,9 @@ export function createContinuousExecutionAdapter(
 
     async suspendAtSafeBoundary(ref: ExecutionReference, reason: string): Promise<void> {
       // 不等同 stop：绝不 cancel、绝不让 Run 落 stopped/cancelled。冻结的是**本适配器的准许**，
-      // 引擎照常把在途操作收尾到安全边界；新请求/新写入的硬执行点在 CT-04 的准入接缝
-      // （continuous-model-budget.ts）消费同一状态。见文件头「挂起语义」。
+      // 引擎照常把在途操作收尾到安全边界；新请求的硬执行点是预算闸门的 admissionProbe 接缝
+      // （continuous-model-budget.ts 装配时注入 (ref) => inspectHealth(ref)，读 admissionState；
+      // 评审修正：此前注释声称该接缝已消费此状态但并无接线）。见文件头「挂起语义」。
       const state = admissionOf(ref.cycleId);
       const previous = state.admission;
       state.admission = "suspended";

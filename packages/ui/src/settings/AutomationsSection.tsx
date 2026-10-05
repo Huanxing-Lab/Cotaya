@@ -41,6 +41,7 @@ import { ControlHintTooltip } from "@/ControlHintTooltip.js";
 import { AutomationScheduledTemplateIcon } from "@/settings/AutomationScheduledTemplateIcon.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { useServices } from "@/hooks/useServices.js";
+import { useContinuousAvailability } from "@/hooks/useContinuous.js";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog.js";
 import { usePlatform } from "@/hooks/usePlatform.js";
 import {
@@ -613,9 +614,15 @@ export function AutomationsSection({
   // 页面退回单一的「自动化」。快照未就绪时 enabled 为 false，宁可标题晚半拍长出切换，也不先闪
   // 一个标签再收起——中枢很少是用户进 app 后第一眼看的东西。
   const { enabled: dynamicWorkflowEnabled } = useDynamicWorkflowAvailability();
-  // Continuous（CT-08）：第三个顶级 tab 的门是服务在场（Host 未装配/功能默认关闭 = 隐藏，
-  // 回滚位）。capability 细判（旧 CLI/远程 → unsupported 页）在 ContinuousSection 内部。
-  const continuousTabEnabled = continuousService !== undefined;
+  // Continuous（CT-08）：第三个顶级 tab 的门是 capability 探测结果（评审修复：原判据
+  // `continuousService !== undefined` 恒真——RemoteServiceAccess 的 lazy getter 对未注册
+  // channel 也返回 ProxyChannel 代理，Host 未装配时 tab 仍会渲染 unsupported 页，破坏
+  // 「默认关闭 = 隐藏」回滚位）。现在：ready/unsupported 才显示 tab（unsupported 进 tab
+  // 后由 ContinuousSection 展示旧 CLI/远程的解释页）；checking（channel 未装配时 capability
+  // 请求被服务端挂起）与 service_missing 都隐藏。
+  const continuousAvailability = useContinuousAvailability(continuousService);
+  const continuousTabEnabled =
+    continuousAvailability.status === "ready" || continuousAvailability.status === "unsupported";
   // 顶级标签「自动化 / 工作流 / Continuous」：页标题即切换。中枢已是跨项目视图，记忆不再按项目
   // 分桶，用 app 级单 key。
   const [storedPageTab, setPageTabState] = useState<AutomationsPageTab>(() =>

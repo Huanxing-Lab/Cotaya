@@ -90,10 +90,12 @@ export interface IServiceAccessor {
   readonly feedbackService: IFeedbackService;
   readonly promptAttachmentTransferService: IPromptAttachmentTransferService;
   /**
-   * Continuous 长期自主改进（CT-08）。可选 = 功能默认关闭：Host 未装配时 accessor 不提供，
-   * UI 的 Continuous tab 整体隐藏（回滚位）；装配后 UI 仍要先查 capability（旧 CLI/远程
-   * workspace 返回不支持，界面如实展示 E-24，不退回普通 prompt 执行）。类型为命令面 +
-   * 查询面的 Facade（一个 channel 一个实现类）。
+   * Continuous 长期自主改进（CT-08）。可选；但注意 RPC accessor（RemoteServiceAccess）的
+   * lazy getter 对未注册 channel 也返回 ProxyChannel 代理——「字段缺席」只在非 RPC 装配
+   * 下成立，不能当「功能默认关闭」判据。UI 的 tab 门以 capability 探测为准
+   * （useContinuousAvailability：未装配 → 请求挂起 → checking → tab 隐藏，回滚位）；装配后
+   * UI 仍要先查 capability（旧 CLI/远程 workspace 返回不支持，界面如实展示 E-24，不退回
+   * 普通 prompt 执行）。类型为命令面 + 查询面的 Facade（一个 channel 一个实现类）。
    */
   readonly continuousService?: IContinuousServiceFacade;
 }

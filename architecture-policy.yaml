@@ -35,7 +35,13 @@ modules:
     roots: [packages/services/src/continuous]
     managed: true
     requires: [shared, services]
-    publicEntrypoints: [packages/services/src/continuous/contract.ts]
+    # contract-interfaces.ts 是接口 + RPC 描述符的 browser-safe 叶子（renderer/包根入口消费），
+    # 与 contract.ts（完整契约，Node 侧）同为公开入口。
+    publicEntrypoints:
+      [
+        packages/services/src/continuous/contract.ts,
+        packages/services/src/continuous/contract-interfaces.ts,
+      ]
     layers: { domain: domain, app: application, adapters: adapters }
     layerOrder: [domain, app, adapters]
     owner: continuous

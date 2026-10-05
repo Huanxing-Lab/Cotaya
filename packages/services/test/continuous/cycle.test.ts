@@ -69,11 +69,19 @@ function makeProgram(overrides: Partial<Program> = {}): Program {
     revision: 1,
     goal: "持续改进桌面 UI",
     timeZone: "Asia/Shanghai",
-    scope: { allowedPaths: ["src"], forbiddenPaths: [], forbiddenCapabilities: ["push", "merge"] },
+    scope: {
+      allowedPaths: ["src"],
+      forbiddenPaths: [],
+      forbiddenCapabilities: ["push", "merge"],
+    },
     budget: CONTINUOUS_DEFAULT_BUDGET,
     cadence: CONTINUOUS_DEFAULT_CADENCE,
     decisionPolicy: { unknownToDecision: true },
-    authorization: { revision: 1, templateHash: TEMPLATE_HASH, grantedAt: "2026-10-05T00:00:00Z" },
+    authorization: {
+      revision: 1,
+      templateHash: TEMPLATE_HASH,
+      grantedAt: "2026-10-05T00:00:00Z",
+    },
     templateId: "ui-ux-v1",
     templateVersion: "1",
     templateHash: TEMPLATE_HASH,
@@ -407,7 +415,10 @@ test("E-03: 候选数超上限只选 3 项；未实施候选保持可执行（�
   execution.emit("cycle_result", "cycle-result", cycleResultPayload("no_changes"));
   execution.finish("completed");
 
-  const { completion } = await supervisor.runNow({ programId: program.id, requestId: "req-1" });
+  const { completion } = await supervisor.runNow({
+    programId: program.id,
+    requestId: "req-1",
+  });
   const outcome = await completion;
   // 模板之外的候选未实施（无 candidate_result）→ no_changes；全部留在队列。
   assert.equal(outcome.result?.outcome, "no_changes");
@@ -486,7 +497,10 @@ test("I-08: 运行中 Decision 已保存（终态前导入）；cursor 增量推
   const supervisor = makeSupervisor(repository, execution);
 
   execution.emit("decision", "dec-a", decisionPayload());
-  const { completion } = await supervisor.runNow({ programId: program.id, requestId: "req-1" });
+  const { completion } = await supervisor.runNow({
+    programId: program.id,
+    requestId: "req-1",
+  });
 
   // Run 仍在 running：监督轮询已把 Decision 导入（运行中持久化，不是结算才写）。
   const deadline = Date.now() + 10_000;
@@ -522,7 +536,9 @@ test("E-12: unverified 候选不 done；done 门要求 tests/browser/review 全 
   execution.emit(
     "validation",
     "cand-a:browser",
-    validationPayload("cand-a", "browser", "unverified", { reason: "浏览器不可用" }),
+    validationPayload("cand-a", "browser", "unverified", {
+      reason: "浏览器不可用",
+    }),
   );
   execution.emit("validation", "cand-a:review", validationPayload("cand-a", "review", "passed"));
   execution.emit(
@@ -533,12 +549,54 @@ test("E-12: unverified 候选不 done；done 门要求 tests/browser/review 全 
   execution.emit("cycle_result", "cycle-result", cycleResultPayload("partial"));
   execution.finish("completed");
 
-  const { completion } = await supervisor.runNow({ programId: program.id, requestId: "req-1" });
+  const { completion } = await supervisor.runNow({
+    programId: program.id,
+    requestId: "req-1",
+  });
   const outcome = await completion;
   assert.equal(outcome.result?.outcome, "partial");
   assert.deepEqual(outcome.result?.commits, []);
   const queue = await repository.listQueueableCandidates(program.id);
   assert.equal(queue.length, 1, "unverified 候选不 done，保持可再观察");
+});
+
+// ── 评审修复：done 门采信「最新结果」，早期 passed 不遮蔽后续 failed ──
+
+test("E-12 扩展：同 stage 先 passed 后 failed 时 done 仍被拒（最新结果语义）", async (t) => {
+  const repository = await freshRepository();
+  t.after(() => void repository.close());
+  const program = makeProgram();
+  await repository.insertProgram(program);
+  const execution = new FakeExecutionPort();
+  const supervisor = makeSupervisor(repository, execution);
+
+  execution.emit(
+    "candidate",
+    "cand-a",
+    candidatePayload({ itemKey: "cand-a", fingerprint: "fp-a-stale-pass" }),
+  );
+  // 三个 stage 都先 passed……
+  execution.emit("validation", "cand-a:tests", validationPayload("cand-a", "tests", "passed"));
+  execution.emit("validation", "cand-a:browser", validationPayload("cand-a", "browser", "passed"));
+  execution.emit("validation", "cand-a:review", validationPayload("cand-a", "review", "passed"));
+  // ……随后 tests 复验 failed（journal 顺序在后 = 最新结果）：曾经 passed 不得换 done。
+  execution.emit(
+    "validation",
+    "cand-a:tests-2",
+    validationPayload("cand-a", "tests", "failed", { reason: "复验失败" }),
+  );
+  execution.emit("candidate_result", "cand-a:result", candidateResultPayload("cand-a", "done"));
+  execution.finish("completed");
+
+  const { completion } = await supervisor.runNow({
+    programId: program.id,
+    requestId: "req-1",
+  });
+  const outcome = await completion;
+  // done 被拒：缺（最新的）tests passed——按 partial 收尾，候选留在队列。
+  assert.equal(outcome.result?.outcome, "partial");
+  const queue = await repository.listQueueableCandidates(program.id);
+  assert.equal(queue.length, 1, "被后期 failed 撤销的 stage 不满足 done 门");
 });
 
 // ── E-15：no_changes 与非法报告 ──────────────────────────────
@@ -557,7 +615,10 @@ test("E-15: 空候选 completed/no_changes 后休眠；非法 cycle_result 不�
   });
   execution.finish("completed");
 
-  const { completion } = await supervisor.runNow({ programId: program.id, requestId: "req-1" });
+  const { completion } = await supervisor.runNow({
+    programId: program.id,
+    requestId: "req-1",
+  });
   const outcome = await completion;
   // 非法 cycle_result 整条拒绝：无有效 done、无提交；空候选按 no_changes 收尾。
   assert.equal(outcome.result?.outcome, "no_changes");
@@ -587,7 +648,10 @@ test("Run 失败也导入已保存报告；连续 3 轮 failed 后 Program faile
     );
     execution.finish("errored", { failureCode: "ProviderError" });
     const outcome = await (
-      await supervisor.runNow({ programId: program.id, requestId: `req-fail-${round}` })
+      await supervisor.runNow({
+        programId: program.id,
+        requestId: `req-fail-${round}`,
+      })
     ).completion;
     assert.equal(outcome.cycleStatus, "failed");
     const storedProgram = await repository.getProgram(program.id);
@@ -617,8 +681,14 @@ test("重复 Run now 同 requestId 命中同一 Cycle；不同 requestId 在开�
   const execution = new FakeExecutionPort();
   const supervisor = makeSupervisor(repository, execution);
 
-  const first = await supervisor.runNow({ programId: program.id, requestId: "req-same" });
-  const replay = await supervisor.runNow({ programId: program.id, requestId: "req-same" });
+  const first = await supervisor.runNow({
+    programId: program.id,
+    requestId: "req-same",
+  });
+  const replay = await supervisor.runNow({
+    programId: program.id,
+    requestId: "req-same",
+  });
   assert.equal(replay.cycle.id, first.cycle.id);
   assert.equal(execution.submitted.length, 2);
   assert.equal(new Set(execution.submitted.map((input) => input.workflowRunId)).size, 1);
@@ -656,6 +726,12 @@ test("预算类失败挂起（suspended+paused+pending 确认）；grant 后同 
 
   assert.equal(outcome.cycleStatus, "suspended");
   assert.equal(outcome.programStatus, "paused");
+  // 评审修复回归：挂起必须落到执行端口（suspendAtSafeBoundary），不能只写 DB——
+  // 否则真实适配器的本地准许停留 open，continue 时 resumeSuspended 必抛 not_suspended。
+  assert.ok(
+    execution.calls.includes("suspendAtSafeBoundary"),
+    "预算挂起需调用 execution.suspendAtSafeBoundary（冻结执行侧准许）",
+  );
   const pending = await repository.getPendingContinuationRequest(cycle.id);
   assert.ok(pending, "同轮唯一 pending 继续确认");
   assert.equal(pending!.reason, "cost_limit");
@@ -713,7 +789,10 @@ test("模板 hash 与授权不符/远程 Program/暂停 Program 均结构化拒�
   );
 
   // 远程 Program：remote_execution_not_supported（D4）。
-  const remote = makeProgram({ id: nextId("program-remote"), remoteSessionId: "rs-1" });
+  const remote = makeProgram({
+    id: nextId("program-remote"),
+    remoteSessionId: "rs-1",
+  });
   await repository.insertProgram(remote);
   await assert.rejects(
     base.runNow({ programId: remote.id, requestId: "req-1" }),
@@ -757,7 +836,12 @@ test("candidatePolicy: forbidden/Scope 外排除、pending Decision 局部推迟
       candidate("c6", "fp-6", ["src/ui/C.tsx"], 3),
     ],
     scope: { allowedPaths: ["src"], forbiddenPaths: ["secret"] },
-    pendingDecisions: [{ id: "d1", blockingScope: { candidateIds: [], paths: ["src/settings"] } }],
+    pendingDecisions: [
+      {
+        id: "d1",
+        blockingScope: { candidateIds: [], paths: ["src/settings"] },
+      },
+    ],
     maxImprovements: 2,
   });
   assert.deepEqual(

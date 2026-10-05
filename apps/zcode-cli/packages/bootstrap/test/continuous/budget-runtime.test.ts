@@ -128,6 +128,48 @@ function statusEvent(
 
 // ── 闸门行为 ─────────────────────────────────────────────────
 
+// ── 准许冻结接缝（评审修复）──────────────────────────────────
+
+test("admissionProbe：挂起/撤销后新请求在最前置点被 admission_closed 拒绝，不触 inner、不占额度", async () => {
+  const { calls, ledger } = makeLedger();
+  const { state, inner } = makeInner();
+  let admissionState: "open" | "suspended" | "revoked" = "open";
+  const gate = createContinuousModelBudgetGate({
+    programId: "prog-1",
+    cycleId: "cycle-1",
+    ledger,
+    pricing: PRICING,
+    requestCaps: CAPS,
+    maxAttemptsPerRequest: 3,
+    admissionProbe: async () => ({ admissionState }),
+  });
+  const wrapped = gate.wrap(inner);
+  // open：正常放行（inner + 预留都发生）。
+  await wrapped.acquire({ model: { providerId: "fixture", modelId: "fixture-model" } });
+  assert.equal(state.acquired, 1);
+  // 挂起（suspendAtSafeBoundary 后）：新请求在 inner/预留之前拒绝——「适配器已冻结而
+  // Host 账本行尚未推进」的竞态窗口被本地硬执行点封死（§6.1 挂起冻结新请求）。
+  admissionState = "suspended";
+  await assert.rejects(
+    wrapped.acquire({ model: { providerId: "fixture", modelId: "fixture-model" } }),
+    (error: unknown) =>
+      error instanceof ContinuousModelBudgetError && error.code === "admission_closed",
+  );
+  // 用户停止（stop → revoked）：同拒绝。
+  admissionState = "revoked";
+  await assert.rejects(
+    wrapped.acquire({ model: { providerId: "fixture", modelId: "fixture-model" } }),
+    (error: unknown) =>
+      error instanceof ContinuousModelBudgetError && error.code === "admission_closed",
+  );
+  assert.equal(state.acquired, 1, "冻结后的请求不触 inner（不占座位）");
+  assert.equal(
+    calls.filter((call) => call.kind === "reserve").length,
+    1,
+    "冻结后的请求不向 Host 账本预留额度",
+  );
+});
+
 test("闸门 acquire：先过 inner、再原子预留；整数微美元向上取整；不提供 tryAcquire 快路径", async () => {
   const { calls, ledger } = makeLedger();
   const { state, inner } = makeInner();

@@ -51,10 +51,15 @@ function parseArgs(argv) {
 }
 
 const args = parseArgs(process.argv.slice(2));
-const sourceCommit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: REPO_ROOT })
+const sourceCommit = execFileSync("git", ["rev-parse", "HEAD"], {
+  cwd: REPO_ROOT,
+})
   .toString()
   .trim();
-const run = createTestRun({ suiteLabel: "regression", parentRunId: args.parentRunId });
+const run = createTestRun({
+  suiteLabel: "regression",
+  parentRunId: args.parentRunId,
+});
 
 async function writeReport(statusOverride) {
   await finalizeTestRun(run, { sourceCommit, cleanOnSuccess: true });
@@ -194,7 +199,10 @@ test("E-28: production build（无 bridge flag）——测试桥不可用、测�
       if (text.includes(symbol)) symbolHits.push({ file: path.relative(outDir, file), symbol });
     }
   }
-  await evidence.record("bundle-scan.json", { bundles: bundles.length, symbolHits });
+  await evidence.record("bundle-scan.json", {
+    bundles: bundles.length,
+    symbolHits,
+  });
   assert.deepEqual(symbolHits, [], "测试专用符号（barrier/时钟/provider）不得进入生产产物");
 
   // 真实访问：普通 production build + 只有 ZCODE_ENV=test（无双重测试标识）。
@@ -202,7 +210,10 @@ test("E-28: production build（无 bridge flag）——测试桥不可用、测�
     userDataDir: path.join(run.dirs.electronUserData, "plain"),
     appNameSuffix: " Plain",
   });
-  const app = await launchDesktop(run, { env: { ...process.env, ...plainEnv }, quiet: true });
+  const app = await launchDesktop(run, {
+    env: { ...process.env, ...plainEnv },
+    quiet: true,
+  });
   try {
     const window = await waitForFirstWindow(app.electron, 60_000);
     const probe = await probeE2EBridge(window);
@@ -214,24 +225,45 @@ test("E-28: production build（无 bridge flag）——测试桥不可用、测�
       "production build + ZCODE_ENV=test（无双重测试标识）不得暴露测试桥",
     );
     // Continuous tab 缺席 = 默认关闭在真实 production build 上的产品行为（E-27 同源证据）。
+    // 评审修复：先真实导航到 Automations 页面再扫描——tab 只在该页面挂载，直接扫全新窗口
+    // 时「不命中」无法区分「被门隐藏」与「页面未打开」（空转 canary，验收证据不成立）。
     let tabPresent = false;
+    let navigated = false;
     for (const candidate of app.electron.windows()) {
       try {
+        await candidate
+          .locator('[data-testid="automations-open"]')
+          .first()
+          .click({ timeout: 10_000 });
+        await candidate
+          .locator("#automations-main-toast-anchor")
+          .first()
+          .waitFor({ state: "attached", timeout: 10_000 });
+        navigated = true;
         if (
           (await candidate.locator('[data-testid="automations-page-tab-continuous"]').count()) > 0
         ) {
           tabPresent = true;
         }
+        break;
       } catch {
         // 窗口导航态不稳定时继续扫描其余窗口。
       }
     }
-    await evidence.record("continuous-tab-probe.json", { tabPresent });
-    run.recordCheck("production-continuous-default-off", !tabPresent, {
-      detail: tabPresent ? "tab 出现（默认关闭被破坏）" : "tab 缺席 = 默认关闭",
+    await evidence.record("continuous-tab-probe.json", {
+      tabPresent,
+      navigated,
+    });
+    run.recordCheck("production-continuous-default-off", !tabPresent && navigated, {
+      detail: tabPresent
+        ? "tab 出现（默认关闭被破坏）"
+        : navigated
+          ? "已导航至 automations 页，tab 缺席 = 默认关闭"
+          : "未完成 automations 页导航，缺席证据不成立",
     });
     // 默认关闭 canary（规格 §13）：production build 上 Continuous tab 必须缺席。
     // 将来正式开启功能时，此断言应随装配 consciously 更新，而不是默默失效。
+    assert.equal(navigated, true, "canary 必须先打开 Automations 页面，否则探针空转");
     assert.equal(tabPresent, false, "production build 上 Continuous 必须默认关闭（tab 缺席）");
     recordCase(run, {
       caseId: "E-28",
@@ -273,7 +305,10 @@ test("E-27: 关闭与回滚——停止链语义重跑 + 回滚顺序文档在�
   const docText = await readFile(releaseDoc, "utf8");
   const hasRollbackOrder =
     /1[.、]\s*停止调度与唤醒/.test(docText) && /保留.*DB|DB.*保留/.test(docText);
-  await evidence.record("rollback-doc.json", { path: releaseDoc, hasRollbackOrder });
+  await evidence.record("rollback-doc.json", {
+    path: releaseDoc,
+    hasRollbackOrder,
+  });
   assert.ok(hasRollbackOrder, "docs/release/continuous.md 必须包含有序回滚步骤与数据保留规则");
 
   recordCase(run, {

@@ -221,7 +221,7 @@ export function applyDecisionResolutionReady(
     if (input.candidateDisposition === "reject_blocked") {
       const links = listDecisionCandidateLinksReady(db, input.decision.id);
       for (const link of links) {
-        // status 谓词直接放進 SQL WHERE（未终态才落 rejected；done/rejected 不动）。
+        // status 谓词直接放进 SQL WHERE（未终态才落 rejected；done/rejected 不动）。
         const updated = db
           .prepare(
             `UPDATE continuous_candidate SET status = 'rejected', updated_at = ?

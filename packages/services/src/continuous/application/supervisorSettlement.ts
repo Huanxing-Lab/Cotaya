@@ -4,13 +4,34 @@
 
 import { randomUUID } from "node:crypto";
 import type { Cycle, CycleResult, Program } from "../domain/types.js";
-import type { ContinuousClockPort, ContinuousRepositoryPort, ExecutionState } from "./ports.js";
+import type {
+  ContinuousClockPort,
+  ContinuousExecutionPort,
+  ContinuousRepositoryPort,
+  ExecutionReference,
+  ExecutionState,
+} from "./ports.js";
 import type { ReportAccumulator, SupervisedCycleOutcome } from "./supervisorTypes.js";
 
 /** 资源挂起写入需要的依赖子集（settleCycle 交进来）。 */
 export interface SuspendWriteDeps {
   repository: ContinuousRepositoryPort;
+  /**
+   * 评审修复：挂起语义必须落到执行端口——只写 DB 不调 suspendAtSafeBoundary 时，CLI 适配器
+   * 的本地准许状态停留在 open，用户回答 continue 后 resumeSuspended 必抛 not_suspended，
+   * 「挂起冻结新请求 / 继续解冻」的执行侧半边完全断裂（规格 §6.1/§11）。
+   */
+  execution: Pick<ContinuousExecutionPort, "suspendAtSafeBoundary">;
   clock: Pick<ContinuousClockPort, "now">;
+}
+
+function referenceOf(cycle: Cycle): ExecutionReference {
+  return {
+    cycleId: cycle.id,
+    executionSessionId: cycle.executionSessionId,
+    workflowRunId: cycle.workflowRunId,
+    traceId: cycle.traceId,
+  };
 }
 
 /** 资源上限挂起：cycle suspended + program paused + 同轮唯一 pending 继续确认（§6.1/§5）。 */
@@ -26,6 +47,10 @@ export async function suspendCycleForBudget(
   const { cycle, program, finalState, accumulator } = input;
   const reason = budgetSuspensionReason(finalState)!;
   const now = deps.clock.now();
+  // 先冻结执行侧准许再落库：适配器 admission → suspended（Resume 走 resumeSuspended 解冻；
+  // 装配后 CT-04 预算闸门在同一状态上拒绝新请求）。Run 已终态时该调用仍安全——适配器只
+  // 翻内存准许状态，不触碰引擎。
+  await deps.execution.suspendAtSafeBoundary(referenceOf(cycle), reason);
   const existing = await deps.repository.getPendingContinuationRequest(cycle.id);
   let requestId = existing?.id;
   if (requestId === undefined) {
@@ -109,7 +134,14 @@ export function buildCycleResult(
   };
 }
 
-/** 预算/重试类失败 → 挂起原因；其余失败按任务失败处理（尽力映射，真实 provider 链路归 CT-09）。 */
+/**
+ * 预算/重试类失败 → 挂起原因；其余失败按任务失败处理。
+ * 已知边界（评审确认，如实记录）：这是对 Run 终态 failureCode 的文本映射（尽力），发生在
+ * Run 已经 errored 之后——「在请求被拒的瞬间于安全边界挂起、Run 保持可恢复」需要引擎侧
+ * 预算拒绝语义（结算为 stopped+resumable 或支持 errored 同 Run 重启），当前 DWF 引擎两者
+ * 皆无；因此 continue 后若 Run 已 errored，监督会按同一条终态再次进入挂起确认。真实
+ * provider 链路的端到端闭环归 CT-09 后续（见 docs/release/continuous.md 已知边界）。
+ */
 export function budgetSuspensionReason(state: ExecutionState): "cost_limit" | "retry_limit" | null {
   const text = `${state.failureCode ?? ""} ${state.stopReason ?? ""}`;
   const budgetCodes = ["budget_denied", "admission_closed", "ledger_unreachable"];

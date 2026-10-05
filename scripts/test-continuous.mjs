@@ -28,6 +28,9 @@ const SUITES = {
     kind: "node-test",
     files: [
       "packages/services/test/continuous/contract.test.ts",
+      // 根入口 browser-safe 回归（评审修复）：renderer 可消费的 @zcode/services 根入口
+      // 不得解析到 node:* 模块（真实 esbuild browser bundle 断言）。
+      "packages/services/test/continuous/browserSafe.test.ts",
       "apps/zcode-cli/packages/bootstrap/test/continuous/scope.test.ts",
       "packages/ui/test/continuous/continuousFormat.test.ts",
       // CT-09：runner 快速自检（隔离校验、suite 缺失非零、fixtures 基线），不启动 Electron。

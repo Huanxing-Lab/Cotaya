@@ -34,8 +34,13 @@ import type {
  * Pause 与立即停止本轮是两个命令：前者本轮结束后生效，后者撤销写入→取消→等待停止。
  */
 export interface IContinuousService {
-  /** 声明 managed cycle capability；必须先查询，未支持时不得调用其余命令。 */
-  capability(): ContinuousCapabilityResult;
+  /**
+   * 声明 managed cycle capability；必须先查询，未支持时不得调用其余命令。
+   * 评审修复：返回 Promise——本接口经 RPC ProxyChannel 消费，所有方法在 renderer 侧都
+   * 返回 Promise；原同步声明让 UI 把 Promise 对象直接喂给 supportsManagedCycles（恒 false，
+   * 装配后也会被判 unsupported）。Host 侧实现对齐为 async。
+   */
+  capability(): Promise<ContinuousCapabilityResult>;
   /** workspace 维度的事实快照；UI 只消费 snapshot，不在本地另建接受队列。
    * CT-08 起参数形与 wire schema 对齐（{context}；此前直接收 context——统一后 RPC 映射零特判）。 */
   snapshot(params: ContinuousSnapshotParams): Promise<ContinuousSnapshotResult>;

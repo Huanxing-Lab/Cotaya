@@ -145,11 +145,16 @@ export class ContinuousReportIngestion {
           break;
         }
         case "validation": {
+          const stages = passedStages.get(item.candidateKey) ?? new Set<string>();
+          // 评审修复：done 门采信「最新结果」而非「曾经 passed」——同 stage 后续
+          // failed/unverified 撤销既有 passed 记录，防止模型以早期通过遮蔽后期失败
+          // 直接换 done（§7「模型不能直接声称验证通过」的意图）。
           if (item.outcome === "passed") {
-            const stages = passedStages.get(item.candidateKey) ?? new Set<string>();
             stages.add(item.stage);
-            passedStages.set(item.candidateKey, stages);
+          } else {
+            stages.delete(item.stage);
           }
+          passedStages.set(item.candidateKey, stages);
           outcome.imported.validations += 1;
           items.push({ event: auditEvent(input, report, "report.validation", item, now) });
           break;
@@ -241,7 +246,7 @@ function sortedBySequence(items: ContinuousReportItem[]): ContinuousReportItem[]
   return [...items].sort((left, right) => left.journalSequence - right.journalSequence);
 }
 
-/** 已导入事件里的事实提取：passed 阶段表 + itemKey→fingerprint 映射。 */
+/** 已导入事件里的事实提取：passed 阶段表（最新结果语义，见 validation 分支注释）+ itemKey→fingerprint 映射。 */
 function readPriorFact(
   event: ContinuousEvent,
   passedStages: Map<string, Set<string>>,
@@ -252,12 +257,17 @@ function readPriorFact(
     if (
       payload?.candidateKey === undefined ||
       payload?.stage === undefined ||
-      payload?.outcome !== "passed"
+      typeof payload.outcome !== "string"
     ) {
       return;
     }
     const stages = passedStages.get(String(payload.candidateKey)) ?? new Set<string>();
-    stages.add(String(payload.stage));
+    // 与本批内同一规则：最新非 passed（failed/unverified）撤销既有 passed（评审修复）。
+    if (payload.outcome === "passed") {
+      stages.add(String(payload.stage));
+    } else {
+      stages.delete(String(payload.stage));
+    }
     passedStages.set(String(payload.candidateKey), stages);
     return;
   }

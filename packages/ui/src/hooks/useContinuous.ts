@@ -6,7 +6,9 @@
 // 重连后的补状态由服务读面回答，renderer 不重放已接受命令。
 //
 // 可用性三分（E-24 与回滚位的判据）：
-//   service_missing —— accessor 没有 continuousService（Host 未装配/功能默认关闭）→ tab 隐藏；
+//   service_missing —— accessor 没有 continuousService → tab 隐藏；
+//   checking        —— capability 未决（含 Host 未装配 channel：请求被服务端排队挂起，
+//                      永不返回）→ tab 隐藏（「功能默认关闭」的真实产品形态）；
 //   unsupported     —— 服务在但 capability 不支持（旧 CLI/远程）→ 页面明确展示不支持；
 //   ready           —— 可以查询与操作。
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -49,6 +51,48 @@ export type ContinuousAvailability =
   | { status: "unsupported" }
   | { status: "ready"; capability: ContinuousCapabilityResult };
 
+/**
+ * capability 门（评审修复拆出）：只判「服务在不在、支不支持」，不启动 snapshot/detail
+ * 轮询。页面级 tab 门（AutomationsSection）与 useContinuous 共用同一探测语义，避免页面
+ * 为了显隐判定挂一份完整轮询。channel 未注册（Host 未装配）时 capability 请求被服务端
+ * 排队挂起 → 恒为 checking → tab 隐藏（默认关闭的真实产品形态，回滚位）。
+ */
+export function useContinuousAvailability(
+  service: IContinuousServiceFacade | undefined,
+): ContinuousAvailability {
+  const [availability, setAvailability] = useState<ContinuousAvailability>(() =>
+    service ? { status: "checking" } : { status: "service_missing" },
+  );
+  useEffect(() => {
+    if (!service) {
+      setAvailability({ status: "service_missing" });
+      return;
+    }
+    let disposed = false;
+    setAvailability((previous) =>
+      previous.status === "service_missing" ? { status: "checking" } : previous,
+    );
+    service
+      .capability()
+      .then((capability) => {
+        if (disposed) return;
+        setAvailability(
+          supportsManagedCycles(capability)
+            ? { status: "ready", capability }
+            : { status: "unsupported" },
+        );
+      })
+      .catch((error: unknown) => {
+        logger.warn("[continuous] capability 查询失败", { message: String(error) });
+        if (!disposed) setAvailability({ status: "unsupported" });
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [service]);
+  return availability;
+}
+
 export interface UseContinuousOptions {
   workspacePath?: string | null;
   workspaceIdentity?: string;
@@ -80,9 +124,8 @@ export function useContinuous(options: UseContinuousOptions) {
   const services = useServices();
   const service: IContinuousServiceFacade | undefined = services.continuousService;
 
-  const [availability, setAvailability] = useState<ContinuousAvailability>(() =>
-    service ? { status: "checking" } : { status: "service_missing" },
-  );
+  // capability 门复用 useContinuousAvailability（见其注释：channel 未装配 = checking = 隐藏）。
+  const availability = useContinuousAvailability(service);
   const [snapshot, setSnapshot] = useState<ContinuousSnapshotResult | null>(null);
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const [detail, setDetail] = useState<ContinuousProgramDetailResult | null>(null);
@@ -147,31 +190,6 @@ export function useContinuous(options: UseContinuousOptions) {
     },
     [context, service],
   );
-
-  // capability 门：service 实例出现即查（一次）；不支持/失败都如实落 availability。
-  useEffect(() => {
-    if (!service) {
-      setAvailability({ status: "service_missing" });
-      return;
-    }
-    let disposed = false;
-    try {
-      const capability = service.capability();
-      if (!disposed) {
-        setAvailability(
-          supportsManagedCycles(capability)
-            ? { status: "ready", capability }
-            : { status: "unsupported" },
-        );
-      }
-    } catch (error) {
-      logger.warn("[continuous] capability 查询失败", { message: String(error) });
-      if (!disposed) setAvailability({ status: "unsupported" });
-    }
-    return () => {
-      disposed = true;
-    };
-  }, [service]);
 
   // 模板目录：授权表单的数据源；读失败按空目录处理（表单展示不可用原因）。
   useEffect(() => {

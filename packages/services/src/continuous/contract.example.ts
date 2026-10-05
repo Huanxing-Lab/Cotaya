@@ -8,7 +8,8 @@ export async function runCycleNowSafely(
   service: IContinuousService,
   params: ContinuousRunNowParams,
 ): Promise<ContinuousSnapshotResult> {
-  if (!supportsManagedCycles(service.capability())) {
+  // capability 经 RPC 返回 Promise（评审修复：接口对齐异步，示例同步消费会恒判不支持）。
+  if (!supportsManagedCycles(await service.capability())) {
     // 旧 CLI/旧 Host：结构化拒绝（capability_missing），绝不静默降级为普通 Workflow。
     throw new Error("continuous managed cycles not supported by this host");
   }

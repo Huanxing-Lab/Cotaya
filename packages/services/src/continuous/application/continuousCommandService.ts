@@ -80,7 +80,9 @@ export class ContinuousCommandService implements IContinuousService, IContinuous
     });
   }
 
-  capability(): ContinuousCapabilityResult {
+  // 评审修复：对齐接口为 async——RPC 边界上 renderer 经 ProxyChannel 拿到的是 Promise，
+  // 同步声明会让 UI 消费方误判（见 contract-interfaces.ts 的 capability 注释）。
+  async capability(): Promise<ContinuousCapabilityResult> {
     // 装配即支持：本类被构造 = Host 显式开启了 managed cycles（默认关闭时根本不注册）。
     // 协议小版本 1 = CT-08 的 additive 读/回答面（templates/programDetail/resolveContinuation）。
     // platform（CT-10 additive）：observe_only 平台的「只提供观察」解释面（§13/E-24）；

@@ -94,9 +94,9 @@ export class RemoteServiceAccess implements IServiceAccessor {
   readonly settingsSyncService: ISettingsSyncService;
   readonly feedbackService: IFeedbackService;
   readonly promptAttachmentTransferService: IPromptAttachmentTransferService;
-  // Continuous（CT-08）：Host 装配后才注册 channel。ProxyChannel 代理是惰性的——
-  // 未注册 channel 上构造代理不抛错，只有真实调用才失败；accessor 字段可选 +
-  // UI 先查 capability，双保险让「功能默认关闭」等价于「tab 隐藏」。
+  // Continuous（CT-08）：Host 装配后才注册 channel。字段经 lazy getter 恒返回 ProxyChannel
+  // 代理（见构造器内注释）——不能以「字段缺席」判定功能关闭；UI 的 tab 门用 capability
+  // 探测（useContinuousAvailability）区分装配/未装配。字段保持可选：非 RPC 装配可不提供。
   readonly continuousService?: IContinuousServiceFacade;
   private continuousServiceProxy?: IContinuousServiceFacade;
 
@@ -226,6 +226,11 @@ export class RemoteServiceAccess implements IServiceAccessor {
     this.promptAttachmentTransferService = ProxyChannel.toService<IPromptAttachmentTransferService>(
       channelClient.getChannel(IPromptAttachmentTransferService.channelName),
     );
+    // Continuous（CT-08 评审修复注释）：本 getter 恒返回 ProxyChannel 代理——channel 未注册
+    // 时构造代理也不抛错（getChannel 不查注册表），只有真实调用才可能失败，且未注册 channel
+    // 的请求会被 ChannelServer 排队挂起。因此「字段缺席」不能当「功能默认关闭」的判据；
+    // UI 的 tab 门看 capability 探测（useContinuousAvailability）：未装配 → 挂起 → checking
+    // → tab 隐藏。字段仍保持可选：非 RPC 装配（测试替身）可不提供。
     Object.defineProperty(this, "continuousService", {
       get: () =>
         (this.continuousServiceProxy ??= ProxyChannel.toService<IContinuousServiceFacade>(

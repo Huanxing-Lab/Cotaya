@@ -249,7 +249,7 @@ function makeDecision(programId: string, overrides: Partial<Decision> = {}): Dec
 test("capability/snapshot/templates：装配即支持；snapshot 列出 workspace 的 Program 与计数", async (t) => {
   const { repository, commands } = await freshFixture();
   t.after(() => void repository.close());
-  assert.equal(commands.capability().supported, true);
+  assert.equal((await commands.capability()).supported, true);
   assert.deepEqual(
     (await commands.listTemplates({ context: contextOf(makeProgram()) })).templates,
     [{ templateId: "ui-ux-v1", templateVersion: "1", templateHash: TEMPLATE_HASH }],
