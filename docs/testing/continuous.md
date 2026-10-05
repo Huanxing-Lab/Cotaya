@@ -13,21 +13,21 @@
 
 已经核对的入口：
 
-| 入口                                                | 当前状态            | 用途                                                 |
-| --------------------------------------------------- | ------------------- | ---------------------------------------------------- |
-| `pnpm typecheck`                                    | 已有                | 根 workspace TS 项目，未覆盖全部 CLI                 |
-| `pnpm lint`、`pnpm fmt:check`                       | 已有                | 根 lint/格式；旧失败需单独记录                       |
-| `pnpm architecture:check --changed`                 | 已有                | 变更模块边界                                         |
-| `pnpm verify:pre-push`                              | 已有                | lint 和 architecture，不包含全部测试                 |
-| `pnpm --dir apps/zcode-cli typecheck`、`lint`       | 已有                | CLI 子 workspace                                     |
-| `pnpm --dir apps/zcode-cli/packages/bootstrap test` | 已有                | bootstrap 的 tsx/Node test                           |
-| `packages/services/test/*.test.ts`                  | 已有                | Node test，但 services package 没有统一 test script  |
-| `packages/ui/test/*.test.ts`                        | 已有                | Node test，但 UI package 没有统一 test script        |
-| desktop 的 `playwright-core`                        | 已有依赖            | 可用于 Electron/浏览器控制，不等于已有 E2E runner    |
-| `packages/shared/src/e2e-test-bridge.ts`            | 已有                | 专用 build flag + run ID；不能仅凭 test 环境扩大权限 |
-| `packages/desktop/src/main/e2eCoverage.ts`          | 已有                | coverage 支持，不等于行为覆盖                        |
-| `scripts/test-continuous.mjs`                       | **待新增 CT-00/09** | suite 编排、报告、严格退出码                         |
-| `packages/desktop/test/continuous/*`                | **待新增 CT-09**    | Electron、手机、live 和故障测试                      |
+| 入口                                                | 当前状态                                    | 用途                                                      |
+| --------------------------------------------------- | ------------------------------------------- | --------------------------------------------------------- |
+| `pnpm typecheck`                                    | 已有                                        | 根 workspace TS 项目，未覆盖全部 CLI                      |
+| `pnpm lint`、`pnpm fmt:check`                       | 已有                                        | 根 lint/格式；旧失败需单独记录                            |
+| `pnpm architecture:check --changed`                 | 已有                                        | 变更模块边界                                              |
+| `pnpm verify:pre-push`                              | 已有                                        | lint 和 architecture，不包含全部测试                      |
+| `pnpm --dir apps/zcode-cli typecheck`、`lint`       | 已有                                        | CLI 子 workspace                                          |
+| `pnpm --dir apps/zcode-cli/packages/bootstrap test` | 已有                                        | bootstrap 的 tsx/Node test                                |
+| `packages/services/test/*.test.ts`                  | 已有                                        | Node test，但 services package 没有统一 test script       |
+| `packages/ui/test/*.test.ts`                        | 已有                                        | Node test，但 UI package 没有统一 test script             |
+| desktop 的 `playwright-core`                        | 已有依赖                                    | 可用于 Electron/浏览器控制，不等于已有 E2E runner         |
+| `packages/shared/src/e2e-test-bridge.ts`            | 已有                                        | 专用 build flag + run ID；不能仅凭 test 环境扩大权限      |
+| `packages/desktop/src/main/e2eCoverage.ts`          | 已有                                        | coverage 支持，不等于行为覆盖                             |
+| `scripts/test-continuous.mjs`                       | 已有（CT-00；CT-09 接入 script suite 契约） | suite 编排、报告、严格退出码                              |
+| `packages/desktop/test/continuous/*`                | 已有（CT-09）                               | runner/fixtures/evidence、Electron、手机、live 和故障测试 |
 
 不使用假定的根 `pnpm test`、`pnpm test:e2e` 或未安装的 `@playwright/test`。测试代码沿用 Node test；TypeScript 使用已有 tsx；Electron 使用 desktop 现有 playwright-core。
 
@@ -120,7 +120,7 @@ CLI typecheck 可能需要生成库和依赖 build，按实际脚本执行，不
 
 ### 步骤 B：单元和存储集成
 
-以下命令为 **CT-00 后新增 runner 的确定接口**，当前不存在：
+以下命令为 **CT-00 后新增 runner 的确定接口**（CT-01 起逐 suite 可用；CT-09 起 e2e/mobile/live 入口存在，用例状态见各自 artifacts/results.json）：
 
 ```sh
 rtk proxy node scripts/test-continuous.mjs --suite unit

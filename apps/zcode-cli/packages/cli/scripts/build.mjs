@@ -196,6 +196,13 @@ export const resolveBuildAliases = ({
     rootDirectory,
     "../../packages/shared/src/zcodeEndpoint.ts",
   ),
+  // CT-03 起 bootstrap（execution adapter/managed cycle 命令/预算闸门）直连 continuous-protocol
+  // 子路径；漏声明会被通用 "@zcode/shared" 前缀改写成 `src/index.ts/continuous-protocol`，
+  // Desktop agent/SEA 打包失败（CT-09 runner 实际执行 build-desktop-agent-cli 时暴露）。
+  "@zcode/shared/continuous-protocol": resolve(
+    rootDirectory,
+    "../../packages/shared/src/continuous-protocol.ts",
+  ),
   "@zcode/shared/node": resolve(rootDirectory, "../../packages/shared/src/node.ts"),
   "@zcode/shared": resolve(rootDirectory, "../../packages/shared/src/index.ts"),
   "@zcode/core": resolve(cliDirectory, "../core/dist/index.js"),

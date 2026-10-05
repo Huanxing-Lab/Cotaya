@@ -11,6 +11,8 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -28,6 +30,8 @@ const SUITES = {
       "packages/services/test/continuous/contract.test.ts",
       "apps/zcode-cli/packages/bootstrap/test/continuous/scope.test.ts",
       "packages/ui/test/continuous/continuousFormat.test.ts",
+      // CT-09：runner 快速自检（隔离校验、suite 缺失非零、fixtures 基线），不启动 Electron。
+      "packages/desktop/test/continuous/runner-selfcheck.test.mjs",
     ],
   },
   integration: {
@@ -83,14 +87,18 @@ const SUITES = {
 };
 
 const ALL_EXCLUDED = ["live"];
-const USAGE = `用法: node scripts/test-continuous.mjs --suite <name> [--allow-live] [--timeout-ms <n>]
+const USAGE = `用法: node scripts/test-continuous.mjs --suite <name> [--allow-live] [--timeout-ms <n>] [-- <entry-args...>]
 suite: ${[...Object.keys(SUITES), "all"].join(", ")}
-all = 除 live 外全部 suite（live 必须单独显式运行）`;
+all = 除 live 外全部 suite（live 必须单独显式运行）
+-- 之后的参数原样传给 script suite 的桌面 runner（如 --skip-desktop-build；node-test suite 忽略）`;
 
 function parseArgs(argv) {
-  const parsed = { suite: null, allowLive: false, timeoutMs: DEFAULT_TIMEOUT_MS };
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
+  const parsed = { suite: null, allowLive: false, timeoutMs: DEFAULT_TIMEOUT_MS, entryArgs: [] };
+  const separatorIndex = argv.indexOf("--");
+  const ownArgs = separatorIndex === -1 ? argv : argv.slice(0, separatorIndex);
+  if (separatorIndex !== -1) parsed.entryArgs = argv.slice(separatorIndex + 1);
+  for (let index = 0; index < ownArgs.length; index += 1) {
+    const arg = ownArgs[index];
     if (arg === "--suite") {
       parsed.suite = argv[index + 1];
       index += 1;
@@ -204,7 +212,7 @@ async function runNodeTestSuite(name, definition, timeoutMs) {
   };
 }
 
-async function runScriptSuite(name, definition, timeoutMs) {
+async function runScriptSuite(name, definition, timeoutMs, allowLive, parentRunId, entryArgs = []) {
   const entry = path.join(repoRoot, definition.entry);
   if (!existsSync(entry)) {
     return {
@@ -216,38 +224,66 @@ async function runScriptSuite(name, definition, timeoutMs) {
       files: [{ file: definition.entry, status: "missing" }],
     };
   }
-  const result = await runChild(process.execPath, [entry], timeoutMs);
+  // CT-09：script suite 与桌面 runner 的契约——传入父 testRunId 与 report 文件路径，
+  // runner 把 case 级结果与 artifact 清单写回（标准 JSON），编排层合并进本报告。
+  // report 文件放系统临时目录（不入仓库），读后即删。`--` 之后的参数原样透传给 entry。
+  const reportDir = await mkdtemp(path.join(os.tmpdir(), "continuous-suite-report-"));
+  const reportFile = path.join(reportDir, "report.json");
+  const args = [entry, "--parent-run-id", parentRunId, "--report-file", reportFile];
+  if (allowLive) args.push("--allow-live");
+  args.push(...entryArgs);
+  const result = await runChild(process.execPath, args, timeoutMs);
+  const entryReport = await readSuiteReport(reportFile);
+  await rm(reportDir, { recursive: true, force: true });
+  const base = {
+    suite: name,
+    kind: "script",
+    files: [{ file: definition.entry, status: "found" }],
+  };
   if (result.timedOut) {
     return {
-      suite: name,
-      kind: "script",
+      ...base,
       status: "failed",
       exitCode: null,
       failureReason: `suite 超时（>${timeoutMs}ms）被终止`,
-      files: [{ file: definition.entry, status: "found" }],
     };
   }
   if (result.spawnError) {
     return {
-      suite: name,
-      kind: "script",
+      ...base,
       status: "missing",
       exitCode: null,
       failureReason: `无法启动 runner: ${result.spawnError}`,
-      files: [{ file: definition.entry, status: "found" }],
     };
   }
   return {
-    suite: name,
-    kind: "script",
+    ...base,
     status: result.exitCode === 0 ? "passed" : "failed",
     exitCode: result.exitCode,
     failureReason: result.exitCode === 0 ? null : `runner 退出码 ${result.exitCode}`,
-    files: [{ file: definition.entry, status: "found" }],
+    ...(entryReport ? { entryReport } : {}),
   };
 }
 
-async function runSuite(name, timeoutMs, allowLive) {
+async function readSuiteReport(reportFile) {
+  try {
+    const raw = await readFile(reportFile, "utf8");
+    const parsed = JSON.parse(raw);
+    return {
+      testRunId: parsed.testRunId ?? null,
+      status: parsed.status ?? null,
+      summary: parsed.summary ?? null,
+      cases: parsed.cases ?? [],
+      checks: parsed.checks ?? [],
+      artifacts: parsed.artifacts ?? null,
+    };
+  } catch {
+    // runner 未写报告或报告损坏：不吞退出码，仅缺 artifact 明细。
+    return null;
+  }
+}
+
+async function runSuite(name, timeoutMs, allowLive, parentRunId, entryArgs = []) {
   const definition = SUITES[name];
   if (definition.requiresAllowLive && !allowLive) {
     return {
@@ -261,7 +297,7 @@ async function runSuite(name, timeoutMs, allowLive) {
   }
   return definition.kind === "node-test"
     ? runNodeTestSuite(name, definition, timeoutMs)
-    : runScriptSuite(name, definition, timeoutMs);
+    : runScriptSuite(name, definition, timeoutMs, allowLive, parentRunId, entryArgs);
 }
 
 async function main() {
@@ -271,7 +307,7 @@ async function main() {
   const results = [];
   for (const name of selectedSuites(args.suite)) {
     // suite 顺序执行（unit → … → regression），失败不中断后续 suite，汇总统一判定。
-    results.push(await runSuite(name, args.timeoutMs, args.allowLive));
+    results.push(await runSuite(name, args.timeoutMs, args.allowLive, testRunId, args.entryArgs));
   }
   const summary = {
     passed: results.filter((item) => item.status === "passed").length,
