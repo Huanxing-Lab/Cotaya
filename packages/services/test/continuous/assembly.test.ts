@@ -95,6 +95,8 @@ interface ScriptedPeer {
   rejectOps: Map<string, string>;
   /** run 状态（inspect 应答）。 */
   runStatus: "running" | "stopped" | "errored" | "completed";
+  /** 最近一次登记下发的 leaseEpoch（inspectHealth 快照回显；CT-16 修复见下方 handler）。 */
+  lastLeaseEpoch?: number;
 }
 
 function makeTransport(peer: ScriptedPeer): ContinuousAgentTransport {
@@ -124,6 +126,7 @@ function makeTransport(peer: ScriptedPeer): ContinuousAgentTransport {
           return { status: "rejected", reasonCode: "fault.command.capabilityUnsupported" };
         }
         const registration = payload as ContinuousRegisterManagedRunCommand;
+        peer.lastLeaseEpoch = registration.leaseEpoch;
         return {
           status: "accepted",
           result: {
@@ -188,6 +191,27 @@ function makeTransport(peer: ScriptedPeer): ContinuousAgentTransport {
               type: "continuousManagedCycle",
               op: "readReports",
               batch: { items: [], nextCursor: 0 },
+            },
+          };
+        }
+        if (command.op === "inspectHealth") {
+          // CT-16 修复：此前 double 对 inspectHealth 不回 health 字段——wire 端口按「缺快照
+          // = unreachable」（CT-12 语义）分类，监督循环每次探活都判失联；该不可达冻结
+          // （保存 interrupted）与预算挂起落库（保存 suspended）赛跑，wire 发送多一个
+          // 微任务 tick 后冻结先赢，用例断言被打成 interrupted。double 模拟的是健康在线
+          // 的 CLI 对端，如实回 reachable 快照（progressing 证据缺席只影响健康列，
+          // unreachable 的冻结语义由 ct14-probe-communication 的显式失联用例覆盖）。
+          return {
+            status: "accepted",
+            result: {
+              type: "continuousManagedCycle",
+              op: "inspectHealth",
+              health: {
+                runId: "run",
+                actorIds: [],
+                ownerEpoch: peer.lastLeaseEpoch ?? 0,
+                reachable: true,
+              },
             },
           };
         }

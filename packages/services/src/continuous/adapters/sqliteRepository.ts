@@ -59,6 +59,7 @@ import {
 import {
   acquireLeaseReady,
   completeCycleReady,
+  getCycleByExecutionSessionReady,
   getCycleByTriggerKeyReady,
   getLatestCycleSequenceReady,
   getLeaseReady,
@@ -195,12 +196,10 @@ export class SqliteContinuousRepository implements ContinuousRepositoryPort {
         });
     });
   }
-
   async updateCycleHealth(cycle: Cycle): Promise<boolean> {
     await this.ensureReady();
     return updateCycleHealthReady(this.database(), cycle);
   }
-
   async getCycle(cycleId: string): Promise<Cycle | null> {
     await this.ensureReady();
     const row = this.database().prepare("SELECT * FROM continuous_cycle WHERE id = ?").get(cycleId);
@@ -211,17 +210,18 @@ export class SqliteContinuousRepository implements ContinuousRepositoryPort {
     await this.ensureReady();
     return getOpenCycleReady(this.database(), programId);
   }
-
+  async getCycleByExecutionSession(executionSessionId: string): Promise<Cycle | null> {
+    await this.ensureReady();
+    return getCycleByExecutionSessionReady(this.database(), executionSessionId);
+  }
   async getCycleByTriggerKey(programId: string, triggerKey: string): Promise<Cycle | null> {
     await this.ensureReady();
     return getCycleByTriggerKeyReady(this.database(), programId, triggerKey);
   }
-
   async getLatestCycleSequence(programId: string): Promise<number> {
     await this.ensureReady();
     return getLatestCycleSequenceReady(this.database(), programId);
   }
-
   async listRecentCycles(programId: string, limit: number): Promise<Cycle[]> {
     await this.ensureReady();
     return listRecentCyclesReady(this.database(), programId, limit);

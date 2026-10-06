@@ -28,7 +28,7 @@ import { ContinuousCommandService } from "../application/continuousCommandServic
 import { ContinuousDecisionService } from "../application/decisionService.js";
 import { interruptCyclesForShutdown } from "../application/supervisorControl.js";
 import { ContinuousSupervisor, type ContinuousTemplateSource } from "../application/supervisor.js";
-import { ContinuousRecoveryService } from "../application/recovery.js";
+import { ContinuousRecoveryService, type RecoveryReport } from "../application/recovery.js";
 import { handleContinuousAgentRequest } from "../application/agentRequests.js";
 import type { ContinuousAgentTransport } from "../application/agentTransport.js";
 import type { ContinuousClockPort, WorkspacePreparationPort } from "../application/ports.js";
@@ -84,6 +84,14 @@ export interface AssembledContinuousHost {
   ) => ReturnType<typeof handleContinuousAgentRequest>;
   /** wake 入口（Host 消息路由注册）：stopped 后如实回执失败，不派发。 */
   handleWake: (programId: string) => Promise<void>;
+  /**
+   * Host 启动核对（§10 恢复顺序第一步 / D2「重启先核对未结束轮」）：对全部 workspace
+   * 先核对未结束 Cycle，再处理到期 Program。桌面 Host 在装配完成后调用一次（CT-16 修复：
+   * 此前装配只有 wake/interrupt 入口，重启后 interrupted 轮要等下一次 cadence wake 才被
+   * 核对，违反「重启先核对未结束轮，再调度未来轮」）。幂等：open cycle 核对与 trigger key
+   * 唯一约束吸收重复调用；stopped 后与 handleWake 同语义拒绝。
+   */
+  recoverAllOnStartup: () => Promise<RecoveryReport[]>;
   /** 退出链：先停新 wake，再 interrupt 全部开放轮（保存 interrupted；suspended 保留确认）。 */
   interruptForShutdown: (workspaceKey: string) => Promise<string[]>;
   /** 回滚/停机：停止接受新 wake（在飞请求按既有链路收尾）。 */
@@ -168,6 +176,16 @@ export async function assembleContinuousHost(
       // stopped = 退出/回滚中：新 wake 不再派发（在飞轮由 interrupt 链收口）。
       if (stopped) throw new Error("continuous host assembly stopped (feature disabled)");
       await recovery.handleWake(programId);
+    },
+    recoverAllOnStartup: async () => {
+      if (stopped) throw new Error("continuous host assembly stopped (feature disabled)");
+      // §10 恢复顺序：先全部未结束 Cycle（reattach/resume/settle/suspended 保持），最后
+      // 到期 Program。与 interruptForShutdown("*") 同一 listWorkspaceKeys 收口面。
+      const reports: RecoveryReport[] = [];
+      for (const key of await repository.listWorkspaceKeys()) {
+        reports.push(await recovery.recoverWorkspace(key));
+      }
+      return reports;
     },
     interruptForShutdown: async (workspaceKey) => {
       stopped = true;

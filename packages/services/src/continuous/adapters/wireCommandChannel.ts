@@ -29,10 +29,14 @@ function rejectionCodeOf(reasonCode: string | undefined): string {
 
 export interface WireCommandChannelDeps {
   transport: ContinuousAgentTransport;
-  /** 登记时记住的会话 workspace（远程 identity 贯穿，防同路径串任务）。 */
+  /**
+   * 登记时记住的会话 workspace（远程 identity 贯穿，防同路径串任务）。CT-16 起允许
+   * 异步解析：本实例未登记过的会话（重启后的恢复核对）由实现方从持久化事实解析并
+   * 先复活执行会话，再返回 workspace——不因实例重启丢失路由。
+   */
   workspaceOf: (
     sessionId: string,
-  ) => { workspacePath: string; workspaceIdentity?: string } | undefined;
+  ) => Promise<{ workspacePath: string; workspaceIdentity?: string } | undefined>;
   /** CT-14 读操作通信期限（缺省 30 秒）。 */
   readDeadlineMs?: number;
   logger?: { warn?: (message: string, meta?: unknown) => void };
@@ -68,7 +72,7 @@ export function createWireCommandChannel(deps: WireCommandChannelDeps): WireComm
     context: string,
   ): Promise<ContinuousAgentCommandAck> => {
     try {
-      const workspace = deps.workspaceOf(sessionId);
+      const workspace = await deps.workspaceOf(sessionId);
       return await deps.transport.sendCommand({
         sessionId,
         type,

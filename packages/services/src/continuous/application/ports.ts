@@ -43,6 +43,12 @@ export interface ContinuousRepositoryPort {
   /** 同一 Program 最多一个未结束 Cycle（部分唯一索引保证，不靠内存 mutex）。 */
   getOpenCycle(programId: string): Promise<Cycle | null>;
   /**
+   * 按执行会话反查 Cycle（CT-16）：重启后 Host 实例内的 session→workspace 路由为空，
+   * wire 发送（恢复核对的 inspect/resume 等）从持久化事实解析归属，不以空 workspace
+   * 发送。同会话优先未结束行（执行会话按 Cycle 独占）。
+   */
+  getCycleByExecutionSession(executionSessionId: string): Promise<Cycle | null>;
+  /**
    * 按 trigger key 读 Cycle（UNIQUE(program_id,trigger_key)）：同请求/同到期窗口的幂等
    * 重放命中同一条行——终态行也返回（不重提交；开放行走监督复用），CT-07。
    */

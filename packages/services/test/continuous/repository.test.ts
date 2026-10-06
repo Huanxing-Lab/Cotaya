@@ -349,6 +349,11 @@ test("I-01 一个 Program 一条未结束 Cycle：部分唯一索引拒绝第二
   const cycleA2 = makeCycle(programA.id, 2, "interval-2");
   await repo.insertCycle(cycleA2);
   assert.equal((await repo.getOpenCycle(programA.id))?.id, cycleA2.id);
+
+  // CT-16：按执行会话反查 Cycle（重启后 wire 发送路由的持久化事实源）——同会话优先
+  // 未结束行；未知会话返回 null（不猜测归属，防同路径串任务）。
+  assert.equal((await repo.getCycleByExecutionSession(cycleA2.executionSessionId))?.id, cycleA2.id);
+  assert.equal(await repo.getCycleByExecutionSession("ctexec-unknown"), null);
   repo.close({ throwOnError: true });
 });
 

@@ -713,7 +713,40 @@ Host 侧装配与登记协议的固定规则（实施记录见 tickets/records/C
 5. **用例报告一致性**：断言失败必须先落 failed case 记录与证据再上抛（recordCaseFailure），
    entryReport 状态与 Node 退出码由编排层交叉核对，不一致显式标注——不把故障改写成通过。
 
-### 2026-10-05：发布文档 §2.1 修复边界
+### 2026-10-06：CT-16 固定运行时、安装包与真实模型验收边界
+
+固定运行时与打包/真模型验收的实施事实（实施记录见 tickets/records/CT-16.md）：
+
+1. **Host 启动核对接线**：装配面新增 `recoverAllOnStartup`（全部 workspace 先核对未结束
+   Cycle、再到期 Program，与 interruptForShutdown 同一 listWorkspaceKeys 收口面），桌面
+   Host 在装配完成后立即触发（不阻塞 init，失败记 warn——wake 链路仍在，核对幂等）。
+   修复依据：装配此前只有 wake/interrupt 入口，重启后 interrupted 轮要等下一次 cadence
+   wake（数小时后）才被核对，违反 D2「重启先核对未结束轮」与 §10 恢复顺序。
+   重启恢复链的两处配套修复（packaged E-17 实测暴露）：
+   - wire 发送的会话路由从持久化事实解析（`getCycleByExecutionSession`）：实例内
+     session→workspace 映射只活到进程退出，此前重启后的恢复核对以空 workspace 发送、
+     读期限超时→退避→resume_limit 挂起；未登记会话先经 ensureExecutionSession 幂等复活
+     （冷恢复装载持久化 run）再放行发送。
+   - 租约接管的防御性撤销从 `stop` 改为 `interrupt`：stop 是用户停止语义（CLI 侧
+     admission 永久 revoked，§6），落在复活的冷执行会话上会把紧随其后的同 Run 恢复
+     （requireNotRevoked）毒化成 stopped 拒绝；interrupt 同样撤销旧许可（冻结准入 +
+     interrupted 取消引擎）但保留可恢复性。用户/配置变更的显式停止链仍用 stop 不变。
+2. **打包验收链（packaged suite）**：完全复用 packages/desktop 现有脚本——CLI 构建
+   （build-desktop-agent-cli.mjs）→ `pnpm build`（含 prepare:runtime-assets；renderer 不带
+   bridge flag 的生产形态）→ `pnpm exec electron-builder --config electron-builder.config.js
+--dir`（与 bundle.mjs 同一配置与镜像 env 辅助函数；--dir 只出 unpacked .app，不出 dmg
+   安装器——安装器是同一 .app 的分发包装）。如实取舍：ZCODE_SKIP_REMOTE_ASSETS=1（远程
+   workspace 原生资产不进产物，D4 第一版仅本地 workspace）；ZCODE_ENV=production（生产
+   身份）。产物核对：app.asar 在场 + resources/glm/zcode.cjs 指纹 == CLI 构建指纹
+   （打包态 Host 经 providerRuntimeResolver 从 process.resourcesPath 解析的同一份文件）。
+   在打包 app 内重复暂停/退出/恢复/停止/本地提交边界与 E-28 负向探针（run ID 在场、
+   build flag 缺席 → 桥不暴露）。正向本地提交链仍受授权面声明测试命令为空约束（CT-12
+   已知限制 3），如实 blocked 不伪造。
+3. **live 的 blocked 退出码语义**：live suite 汇总断言与 §10 对齐——无已配置测试身份时
+   如实记 blocked、退出码 0（由 release gate 消费并保持自主实施 flag 关闭）；旧断言要求
+   blocked===0，把「凭据不可用」折叠成 failed（entryReport 状态与退出码矛盾）。
+4. **平台登记纪律不变**（§13）：autonomous 只随真实机器的 platform suite 证据登记；
+   Windows/Linux 无机器即保持 observe_only，不因代码审查或单平台通过外推。
 
 退出使用独立 `interrupt(ref, epoch)`：冻结准入、以 interrupted 原因取消引擎、等待工具收尾；不能只冻结后等待永不结束的预算调用。已经 suspended 的轮保留确认和暂停状态，但同样终止进程内执行。恢复和继续都先核对已登记的保护；Host 先保存 running，再解除 CLI 等待。
 

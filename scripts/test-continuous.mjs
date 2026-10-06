@@ -110,12 +110,21 @@ const SUITES = {
     kind: "script",
     entry: "packages/desktop/test/continuous/regression.test.mjs",
   },
+  // CT-16：真实打包 app 验收（electron-builder 产物内重复暂停/退出/恢复/停止/本地提交与
+  // 生产无测试桥）。单独执行：打包链重（CLI+desktop 生产构建+electron-builder）且产物
+  // 按平台/机器单独取证（发布文档逐平台证据表），不并入 all 的默认面。
+  packaged: {
+    description:
+      "真实打包 app 验收（CT-16：electron-builder 产物内重复暂停/退出/恢复/停止/本地提交；生产无测试桥）",
+    kind: "script",
+    entry: "packages/desktop/test/continuous/packaged.test.mjs",
+  },
 };
 
-const ALL_EXCLUDED = ["live"];
+const ALL_EXCLUDED = ["live", "packaged"];
 const USAGE = `用法: node scripts/test-continuous.mjs --suite <name> [--allow-live] [--timeout-ms <n>] [-- <entry-args...>]
 suite: ${[...Object.keys(SUITES), "all"].join(", ")}
-all = 除 live 外全部 suite（live 必须单独显式运行）
+all = 除 live/packaged 外全部 suite（live 必须单独显式运行；packaged 打包链重、按平台单独取证）
 -- 之后的参数原样传给 script suite 的桌面 runner（如 --skip-desktop-build；node-test suite 忽略）`;
 
 function parseArgs(argv) {

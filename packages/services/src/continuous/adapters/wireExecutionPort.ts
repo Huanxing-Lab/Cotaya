@@ -60,6 +60,38 @@ export function createWireContinuousExecutionPort(deps: WireExecutionPortDeps) {
     string,
     { workspacePath: string; workspaceIdentity?: string }
   >();
+  /**
+   * CT-16 修复：会话 workspace 解析。实例内映射只活到进程退出——重启后恢复核对的
+   * inspect/resume 等发送此前以空 workspace 路由（实测读期限超时→退避→resume_limit 挂起，
+   * 违反 §10「重启先核对未结束轮」）。未登记过的会话从持久化事实（Cycle→Program）解析
+   * 归属，并先经 ensureExecutionSession 幂等复活执行会话（冷恢复 spawn CLI、装载持久化
+   * run）再放行发送；查无 Cycle 的会话保持 undefined（不猜测归属，防同路径串任务）。
+   */
+  const workspaceOfSession = async (
+    sessionId: string,
+  ): Promise<{ workspacePath: string; workspaceIdentity?: string } | undefined> => {
+    const known = sessionWorkspaces.get(sessionId);
+    if (known) return known;
+    const cycle = await deps.repository.getCycleByExecutionSession(sessionId);
+    if (!cycle) return undefined;
+    const program = await deps.repository.getProgram(cycle.programId);
+    if (!program) return undefined;
+    const workspace = {
+      workspacePath: program.workspacePath,
+      ...(program.workspaceIdentity === undefined
+        ? {}
+        : { workspaceIdentity: program.workspaceIdentity }),
+    };
+    if (deps.ensureSession !== false) {
+      await deps.transport.ensureExecutionSession({
+        ...workspace,
+        executionSessionId: sessionId,
+        workingDirectory: program.workspacePath,
+      });
+    }
+    sessionWorkspaces.set(sessionId, workspace);
+    return workspace;
+  };
   const commandOf = (
     op: ContinuousManagedCycleCommand["op"],
     ref: ExecutionReference,
@@ -76,7 +108,7 @@ export function createWireContinuousExecutionPort(deps: WireExecutionPortDeps) {
   // CT-14：发送/回执投影/读期限集中在 wireCommandChannel（max-file-lines 拆分，非边界变化）。
   const { send, sendRead, requireAccepted } = createWireCommandChannel({
     transport: deps.transport,
-    workspaceOf: (sessionId) => sessionWorkspaces.get(sessionId),
+    workspaceOf: workspaceOfSession,
     ...(deps.readDeadlineMs === undefined ? {} : { readDeadlineMs: deps.readDeadlineMs }),
     ...(deps.logger === undefined ? {} : { logger: deps.logger }),
   });

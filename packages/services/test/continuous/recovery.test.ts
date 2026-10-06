@@ -517,7 +517,11 @@ test("R-06/E-19: 旧 owner 仍活着不启动第二写入者；确认停止后�
   const secondStack = makeStack(repository, execution, { ownerId: "host-new" });
   const secondReport = await secondStack.recovery.recoverWorkspace(program.workspaceKey);
   assert.equal(secondReport.reconciled[0]?.action, "resumed");
-  assert.ok(execution.calls.includes("stop"), "接管前撤销旧许可");
+  // CT-16 修复：接管的防御性撤销从 stop（用户停止语义，admission 永久 revoked）改为
+  // interrupt（interrupted 语义，保留同 Run 可恢复性）——stop 会把复活冷会话上的同 Run
+  // 恢复毒化成 stopped 拒绝（packaged E-17 实测）。
+  assert.ok(execution.calls.includes("interrupt"), "接管前撤销旧许可（interrupt 语义）");
+  assert.ok(!execution.calls.includes("stop"), "接管不得使用用户停止语义");
   assert.ok(execution.calls.includes("waitForQuiescence"), "接管前确认停止");
   assert.ok(execution.calls.includes("resume"), "同 Run 恢复");
   const takenLease = await repository.getLease(program.workspaceKey);

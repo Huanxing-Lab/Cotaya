@@ -36,7 +36,9 @@ export interface WorkspaceLeaseDeps {
   >;
   execution: Pick<
     ContinuousExecutionPort,
-    "inspect" | "inspectHealth" | "stop" | "waitForQuiescence"
+    // CT-16：接管的防御性撤销从 stop（用户停止语义）改为 interrupt（interrupted 语义，
+    // 保留同 Run 可恢复性）；stop 保留给用户/配置变更的显式停止链。
+    "inspect" | "inspectHealth" | "stop" | "interrupt" | "waitForQuiescence"
   >;
   clock: Pick<ContinuousClockPort, "now">;
 }
@@ -123,12 +125,19 @@ export async function acquireCycleLease(
         // 旧 owner 还活着：保持现状（不接管、不创建替代 Run），交由占用方继续或后续核对。
         return { status: "refused", reason: "old_owner_alive", epoch: existing.epoch };
       }
-      // 撤销旧许可并确认停止：对已不可达的执行者 stop 尽力而为（冷行幂等），
-      // waitForQuiescence 在冷行上立即返回——「确认停止」以不可达+静默为证（§10）。
+      // 撤销旧许可并确认停止（CT-16 修复：改用 interrupt 语义）。修复依据：上方的 alive
+      // 判定已排除「可达且 running/pending」的活执行者——接管分支面对的只有已中断/冷执行
+      // 面。此前的防御性 `stop` 是用户停止语义（CLI 侧 admission 永久 revoked，§6「用户
+      // 取消的 Run 不自动恢复」），落在重启后复活的冷执行会话上会把紧随其后的同 Run 恢复
+      // （resumeInterrupted → execution.resume 的 requireNotRevoked）毒化成 stopped 拒绝
+      // （实测 packaged E-17：cycle failed + resume_limit 语义被误用）。interrupt 语义才是
+      // 这里的正确动词：以 interrupted 原因取消引擎、冻结准入但保留可恢复性（§10「退出
+      // 中断保存 interrupted，同 Run 安全恢复」）；对真正不可达的执行者两者同样尽力而为
+      // （传输失败被吞），对冷行 cancel 为 no-op、waitForQuiescence 立即返回。
       try {
-        await deps.execution.stop(ref, `lease-takeover:${input.workspaceKey}`);
+        await deps.execution.interrupt(ref, occupant.leaseEpoch);
       } catch {
-        // 不可达执行者的 stop 可能失败；可达性已排除活执行者，这里不吞接管依据。
+        // 不可达执行者的 interrupt 可能失败；可达性已排除活执行者，这里不吞接管依据。
       }
       await deps.execution.waitForQuiescence(ref);
     }

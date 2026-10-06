@@ -453,7 +453,12 @@ test("I-11/R-06/E-19: 过期不直接接管——旧 owner 仍活着拒绝；确
   });
   assert.equal(takeover.status, "acquired");
   assert.equal(takeover.epoch, 2);
-  assert.ok(execution.calls.includes("stop"), "接管前先撤销旧执行（stop）");
+  // CT-16 修复：接管的防御性撤销从 stop 改为 interrupt——stop 是用户停止语义（CLI 侧
+  // admission 永久 revoked），落在重启后复活的冷执行会话上会毒化同 Run 恢复（packaged
+  // E-17 实测 resume 被 requireNotRevoked 拒成 stopped）。interrupt 同样撤销旧许可
+  // （冻结准入 + 以 interrupted 取消引擎）但保留可恢复性（§10）。
+  assert.ok(execution.calls.includes("interrupt"), "接管前先撤销旧执行（interrupt 语义）");
+  assert.ok(!execution.calls.includes("stop"), "接管不得使用用户停止语义（revoked 毒化恢复）");
   assert.ok(execution.calls.includes("waitForQuiescence"), "接管前确认旧执行停止（quiescence）");
 
   // 旧 epoch 的副作用拒绝（lease_lost）。

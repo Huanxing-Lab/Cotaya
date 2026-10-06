@@ -3000,6 +3000,28 @@ parentPort.on("message", async (e: Electron.MessageEvent) => {
             });
             continuousHostRuntime = runtime;
             logger.info("continuous host assembled (ServiceChannels.Continuous registered)");
+            // CT-16 修复：Host 启动核对（规格 §10 恢复顺序 / D2「重启先核对未结束轮」）。
+            // 修复依据：装配此前只有 wake/interrupt 入口，重启后未结束 Cycle（如退出发的
+            // interrupted）要等下一次 cadence wake（数小时后）才被核对，违反「重启先核对
+            // 未结束轮，再调度未来轮」。这里在装配完成后立即核对全部 workspace；恢复含
+            // wire IO（可能复活执行会话），不阻塞 Host init，失败记 warn——wake 链路仍在，
+            // 核对本身幂等（open cycle 约束 + trigger key 唯一吸收重复）。
+            void runtime.assembled
+              .recoverAllOnStartup()
+              .then((reports) => {
+                logger.info("continuous startup recovery reconciled", {
+                  workspaces: reports.length,
+                  reconciled: reports.reduce(
+                    (total, report) => total + report.reconciled.length,
+                    0,
+                  ),
+                });
+              })
+              .catch((error: unknown) => {
+                logger.warn("continuous startup recovery failed; wake path remains", {
+                  errorMessage: error instanceof Error ? error.message : String(error),
+                });
+              });
           } catch (error) {
             continuousHostRuntime = null;
             logger.warn("continuous host assembly failed; feature stays disabled", {

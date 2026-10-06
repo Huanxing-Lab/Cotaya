@@ -27,6 +27,26 @@ export function getOpenCycleReady(db: ContinuousDatabaseSync, programId: string)
   return row ? decodeCycle(row as unknown as CycleRow) : null;
 }
 
+/**
+ * CT-16：按执行会话反查 Cycle——重启后 wire 端口会话路由的持久化事实源（实例内
+ * session→workspace 映射只活到进程退出；§10「恢复前从持久化快照重建」的读侧配套）。
+ * 同会话优先未结束行（执行会话按 Cycle 独占，这里只是确定性兜底）。
+ */
+export function getCycleByExecutionSessionReady(
+  db: ContinuousDatabaseSync,
+  executionSessionId: string,
+): Cycle | null {
+  const statuses = CONTINUOUS_OPEN_CYCLE_STATUSES as readonly string[];
+  const placeholders = statuses.map(() => "?").join(", ");
+  const row = db
+    .prepare(
+      `SELECT * FROM continuous_cycle WHERE execution_session_id = ? ` +
+        `ORDER BY (status IN (${placeholders})) DESC, created_at DESC LIMIT 1`,
+    )
+    .get(executionSessionId, ...statuses);
+  return row ? decodeCycle(row as unknown as CycleRow) : null;
+}
+
 export function getCycleByTriggerKeyReady(
   db: ContinuousDatabaseSync,
   programId: string,

@@ -13,21 +13,21 @@
 
 已经核对的入口：
 
-| 入口                                                | 当前状态                                                         | 用途                                                     |
-| --------------------------------------------------- | ---------------------------------------------------------------- | -------------------------------------------------------- |
-| `pnpm typecheck`                                    | 已有                                                             | 根 workspace TS 项目，未覆盖全部 CLI                     |
-| `pnpm lint`、`pnpm fmt:check`                       | 已有                                                             | 根 lint/格式；旧失败需单独记录                           |
-| `pnpm architecture:check --changed`                 | 已有                                                             | 变更模块边界                                             |
-| `pnpm verify:pre-push`                              | 已有                                                             | lint 和 architecture，不包含全部测试                     |
-| `pnpm --dir apps/zcode-cli typecheck`、`lint`       | 已有                                                             | CLI 子 workspace                                         |
-| `pnpm --dir apps/zcode-cli/packages/bootstrap test` | 已有                                                             | bootstrap 的 tsx/Node test                               |
-| `packages/services/test/*.test.ts`                  | 已有                                                             | Node test，但 services package 没有统一 test script      |
-| `packages/ui/test/*.test.ts`                        | 已有                                                             | Node test，但 UI package 没有统一 test script            |
-| desktop 的 `playwright-core`                        | 已有依赖                                                         | 可用于 Electron/浏览器控制，不等于已有 E2E runner        |
-| `packages/shared/src/e2e-test-bridge.ts`            | 已有                                                             | 专用 build flag + run ID；不能仅凭 test 环境扩大权限     |
-| `packages/desktop/src/main/e2eCoverage.ts`          | 已有                                                             | coverage 支持，不等于行为覆盖                            |
-| `scripts/test-continuous.mjs`                       | 已有（CT-00；CT-09 script 契约；CT-10 platform/regression 接入） | suite 编排、报告、严格退出码                             |
-| `packages/desktop/test/continuous/*`                | 已有（CT-09；CT-10 增 regression 入口）                          | runner/fixtures/evidence、Electron、手机、live、回归测试 |
+| 入口                                                | 当前状态                                                                            | 用途                                                               |
+| --------------------------------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `pnpm typecheck`                                    | 已有                                                                                | 根 workspace TS 项目，未覆盖全部 CLI                               |
+| `pnpm lint`、`pnpm fmt:check`                       | 已有                                                                                | 根 lint/格式；旧失败需单独记录                                     |
+| `pnpm architecture:check --changed`                 | 已有                                                                                | 变更模块边界                                                       |
+| `pnpm verify:pre-push`                              | 已有                                                                                | lint 和 architecture，不包含全部测试                               |
+| `pnpm --dir apps/zcode-cli typecheck`、`lint`       | 已有                                                                                | CLI 子 workspace                                                   |
+| `pnpm --dir apps/zcode-cli/packages/bootstrap test` | 已有                                                                                | bootstrap 的 tsx/Node test                                         |
+| `packages/services/test/*.test.ts`                  | 已有                                                                                | Node test，但 services package 没有统一 test script                |
+| `packages/ui/test/*.test.ts`                        | 已有                                                                                | Node test，但 UI package 没有统一 test script                      |
+| desktop 的 `playwright-core`                        | 已有依赖                                                                            | 可用于 Electron/浏览器控制，不等于已有 E2E runner                  |
+| `packages/shared/src/e2e-test-bridge.ts`            | 已有                                                                                | 专用 build flag + run ID；不能仅凭 test 环境扩大权限               |
+| `packages/desktop/src/main/e2eCoverage.ts`          | 已有                                                                                | coverage 支持，不等于行为覆盖                                      |
+| `scripts/test-continuous.mjs`                       | 已有（CT-00；CT-09 script 契约；CT-10 platform/regression 接入；CT-16 增 packaged） | suite 编排、报告、严格退出码                                       |
+| `packages/desktop/test/continuous/*`                | 已有（CT-09；CT-10 增 regression 入口；CT-16 增 packaged 入口）                     | runner/fixtures/evidence、Electron、手机、live、回归、打包验收测试 |
 
 不使用假定的根 `pnpm test`、`pnpm test:e2e` 或未安装的 `@playwright/test`。测试代码沿用 Node test；TypeScript 使用已有 tsx；Electron 使用 desktop 现有 playwright-core。
 
@@ -183,6 +183,14 @@ rtk proxy node scripts/test-continuous.mjs --suite platform
 ```
 
 macOS/Windows/Linux 分别记录。平台无法可靠限制文件/命令时验证其观察模式和自主执行拒绝，不能标该平台自主写入通过。CT-10 起 platform suite 在两份实测文件（services 存储/工作区面 + bootstrap 执行策略/进程树面）于当前 OS 真实执行并把证据 JSON 写入 `os.tmpdir()/continuous-ct10-*`（路径打印到 stdout）；某平台从未运行过该 suite 时，其自主执行能力由 shared 登记表 fail closed（observe_only），登记追加必须随附该平台证据（`docs/release/continuous.md` 逐平台证据表）。
+
+CT-16 起真实打包 app 验收单独执行（打包链重、按平台/机器取证，不并入 all）：
+
+```sh
+rtk proxy node scripts/test-continuous.mjs --suite packaged
+```
+
+runner 复用 packages/desktop 现有打包脚本（CLI 构建 → `pnpm build` 生产构建（renderer 无 bridge flag）→ `electron-builder --config electron-builder.config.js --dir`，产物为 unpacked .app 真实打包形态），在打包 app 内重复暂停/退出/恢复/停止/本地提交边界（E-34/E-01/E-02/E-15/E-16/E-11/E-17 打包形态重复）与 E-28 负向探针（run ID 在场、build flag 缺席 → 桥不暴露）。正向本地提交链仍受授权面声明测试命令为空约束（CT-12 已知限制 3），如实 blocked。
 
 ### 步骤 G：回归、汇总与发布
 
@@ -532,6 +540,62 @@ UI用accessibility和稳定test IDs定位，不靠翻译文本或像素坐标。
 
 ## 本次实际结果
 
+CT-16 增补（2026-10-06，见 tickets/records/CT-16.md）。**实际 Node 版本：v25.8.0**
+（`mise.toml` 为 `>=24` 下限，本机未安装 mise；pnpm 10.33.2 与 mise 一致；版本写入各
+results.json 的 `nodeVersion`）。分工：本 ticket 实测 packaged/platform/live 与
+services/bootstrap 包级全量、host 项目类型检查；root typecheck/lint、unit/integration/
+recovery/e2e/regression 与格式检查由统一门禁在工作流脚本执行（结果以其运行为准，本文
+不预填）。逐项：
+
+- **packaged suite（新增，`node scripts/test-continuous.mjs --suite packaged`）真实通过
+  （exit 0：9 passed / 0 failed / 0 blocked）**：electron-builder unpacked `.app`
+  （真实打包形态；`--dir` 只出 .app 不出 dmg 安装器——安装器是同一 .app 的分发包装，
+  如实记录未测）内重复暂停（E-11 Pause/Resume）、退出（正常退出保存 interrupted）、
+  恢复（重启后 Host 启动核对同 Cycle/同 Run 恢复至 completed，无第二 Cycle/执行者，
+  provider 计数证明真实重放）、停止（E-11 立即停止 cancelled）、本地提交边界（无验证
+  候选零本地提交 + 原仓库字节不变；正向提交链如实未驱动——授权面声明测试命令第一版
+  为空，CT-12 已知限制 3）与 E-34/E-01/E-02/E-15/E-16 打包形态重复；E-28 打包半边
+  （run ID 在场、build flag 缺席 → 桥不暴露）。进程级证据：随包
+  `resources/glm/zcode.cjs` 指纹 == 本次 CLI 构建，且 spawn preflight 显示打包 app 以
+  该随包文件启动（launcher 固定中性 cwd——dev 候选 findUpward 会从仓库 cwd 解析到
+  checkout dist，字节虽同、取证弱化）。证据目录：
+  `os.tmpdir()/continuous-ct09-packaged-*/artifacts/`（最终代码形态复核 run 目录
+  `continuous-ct09-packaged-7YFFAH`，testRunId `806a6a2d-d63b-4cd4-a2b0-e4ddd49fd619`，
+  含 9 用例截图/SQL facts/退出前后对照与 results.json（nodeVersion v25.8.0）；全新
+  构建轮与中间复核轮同样 9 passed/exit 0）。
+- **打包链路暴露并修复真实缺陷 3 处**（每处中文注释说明依据）：①Host 启动核对未接线
+  （装配只有 wake/interrupt 入口，重启后 interrupted 轮要等 cadence wake——新增
+  `recoverAllOnStartup`，D2/§10）；②wire 会话路由实例内丢失（重启后 inspect 以空
+  workspace 发送→读期限超时→退避→resume_limit 挂起——`getCycleByExecutionSession`
+  持久化事实解析 + 未登记会话先 ensureExecutionSession 复活）；③租约接管的防御性
+  `stop`（用户停止语义，admission 永久 revoked）毒化同 Run 恢复（改 interrupt 语义；
+  scheduler/recovery 测试同步钉死新行为）。另修复 assembly 测试 double 不回 health
+  快照导致的失联冻结竞态（double 如实回 reachable 快照；unreachable 语义由 ct14
+  专用用例覆盖）。
+- **platform suite 复核 exit 0**（darwin-arm64，Node 25.8.0；证据 JSON
+  `os.tmpdir()/continuous-ct10-*`）。**其他平台如实未验证**：win32/linux 无机器，
+  保持 observe_only（release 文档 §1），不因代码审查或单平台通过外推。
+- **live：`node scripts/test-continuous.mjs --suite live --allow-live` 真实执行 →
+  exit 0、状态 blocked**（E-01/E-03/E-04 三用例如实 blocked：无已配置测试身份
+  `ZCODE_E2E_LIVE_PROVIDER_KEY`；不由 agent 输入个人凭据，不用模拟结果替代）。
+  修复：live 汇总断言与 §10 对齐（旧断言要求 blocked===0，把「无凭据」折叠成
+  failed/非零，entryReport 与退出码矛盾）。
+- **包级全量**：services `npx tsx --test "test/continuous/*.test.ts"` → 130/130；
+  bootstrap 同款 → 83/83；`tsc -b packages/shared packages/services
+packages/desktop/tsconfig.host.json` → 0。
+- **手机恢复链路**：E-21 仍如实 blocked（外部 relay 不在仓库，连接真实 relay 需个人
+  凭据，§3/§4 禁止）；packaged 形态未新增手机断言。
+- **未验证范围（如实）**：dmg/zip 安装器分发形态；win32/linux 平台；darwin-x64；
+  live 真实模型质量（usage/compaction/sidecar/限流/unknown/无进展/同轮继续——需
+  测试凭据）；正向本地提交链（授权面声明测试命令为空）；e2e 时钟类与候选路径用例
+  （CT-15 既有 21 个 blocked 理由不变）。
+- **实际消费**：脚本化 provider 虚构固定价目（不产生真实费用）；live 未运行（无凭据，
+  零消费）；打包构建本地产物不外发。
+- **清理/回滚证明**：packaged suite 成功路径清理临时数据目录、保留 artifacts 报告
+  （runner 既有语义）；测试新增文件独立可删（packaged\*.mjs + suite 注册行）；产品修复
+  三处各自独立可回退（见 CT-16 记录）；`packages/desktop/dist` 打包产物为构建输出、
+  不入版本库。
+
 CT-15 增补（2026-10-06，见 tickets/records/CT-15.md）：e2e/regression/mobile suite 重写为
 真实驱动并多轮真实执行（run1…run15）。**e2e suite 真实通过（exit 0：9 passed / 0 failed /
 21 blocked / 0 skipped / 0 planned）**：E-01/E-02/E-15/E-16（首轮执行链：空候选轮经真实
@@ -599,7 +663,7 @@ CT-13/16。
 regression suite 已执行并失败（退出码 1）：E-26 bootstrap 既有测试与 E-27 停止/回滚检查通过；E-28 production build 无法打开 Automations 页面，`canary 必须先打开 Automations 页面` 断言失败。runner 的 case 报告漏记了这次失败，entryReport 错误显示 passed；统一 runner 仍正确保留 failed/exit 1。需 CT-15 同时修复导航预检和失败用例报告，不把它记成通过。
 regression 证据：`/private/var/folders/q9/kv1rgzmd33317h52wmx6fgzr0000gn/T/continuous-ct09-regression-uFbiqY/artifacts/`。
 
-本次使用 Node 25.8.0，`mise.toml` 固定为 24.14.0；本机未安装 mise/固定 Node。固定版本重跑是 CT-16 的必需条件。
+本次使用 Node 25.8.0，`mise.toml` 固定为 24.14.0；本机未安装 mise/固定 Node。固定版本重跑是 CT-16 的必需条件。（CT-16 更正：`mise.toml` 现为 `>=24` 下限——`e941526` 放开；Node 25.8.0 满足下限，CT-16 已按该口径复跑并记录版本，见本文 CT-16 增补。）
 integration testRunId：`12eba9b5-ab27-4196-a693-0c45108d5a3d`；recovery：`c60d624e-9546-426a-92b1-68ffae735c67`。
 E2E 原始证据目录：`/private/var/folders/q9/kv1rgzmd33317h52wmx6fgzr0000gn/T/continuous-ct09-e2e-rwDJvA/artifacts/`。
 该报告的 sourceCommit 是执行时 HEAD，源码有本次未提交修改；它不单独代表被测试源码。下一轮按 CT-15 补工作树差异标识。
@@ -623,9 +687,10 @@ node scripts/test-continuous.mjs --suite platform
 node scripts/test-continuous.mjs --suite e2e
 node scripts/test-continuous.mjs --suite mobile
 node scripts/test-continuous.mjs --suite regression
+node scripts/test-continuous.mjs --suite packaged
 ```
 
-live 单独执行 `node scripts/test-continuous.mjs --suite live --allow-live`，使用已配置的测试账户/模型，费用计入真实预算；没有配置则保持 blocked。本次没有执行 live。
+live 单独执行 `node scripts/test-continuous.mjs --suite live --allow-live`，使用已配置的测试账户/模型，费用计入真实预算；没有配置则保持 blocked（exit 0、状态 blocked，§10 语义；由 release gate 消费）。packaged 打包链重（CLI+desktop 生产构建+electron-builder）且按平台取证，`--suite all` 不含 packaged/live，需单独执行；可加 `-- --skip-cli-build --skip-desktop-build --skip-package` 复用既有产物。
 任何 blocked/missing 都不能满足开启条件，runner 退出码 0 也不等于业务场景 passed。
 
 ## 产品接入后完整 E2E 流程（CT-15 待实施）
@@ -650,4 +715,4 @@ live 单独执行 `node scripts/test-continuous.mjs --suite live --allow-live`�
 
 所有步骤保存 UI 截图、命令关联 ID、数据库/journal 序号、预算明细、真实 IO/进程/Git 证据。仅看到 UI 文案或直接修改 store 不算验收。现有 E2E 的 blockedCase 必须替换成这些真实操作；未实现步骤逐项保留 blocked，不用通用预检结果代替。
 
-上线判定：先完成 CT-11…16，核心 U/I/R/E 与兼容回归真实通过、手机和 live 完成、安装包与目标平台验证完成，再开放自主实施。当前不满足。
+上线判定：先完成 CT-11…16，核心 U/I/R/E 与兼容回归真实通过、手机和 live 完成、安装包与目标平台验证完成，再开放自主实施。CT-11…16 已全部实施；当前仍不满足——live blocked（无测试凭据）、手机 E-21 blocked（外部 relay）、win32/linux 平台无机器证据，自主实施 flag 保持关闭。

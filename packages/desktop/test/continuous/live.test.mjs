@@ -110,12 +110,17 @@ test("live 准入与测试身份检查", async (t) => {
   t.skip(`blocked: ${reason}`);
 });
 
-test("live suite 汇总：blocked/failed 必须为 0", () => {
+test("live suite 汇总：failed 必须为 0（blocked 如实记录，§10 退出码语义）", () => {
+  // CT-16 修复依据（docs/testing/continuous.md §10）：旧断言要求 blocked===0，使「无已配置
+  // 测试身份 → 如实 blocked」被折叠成 Node 非零（failed）——entryReport 状态 blocked 与
+  // 退出码 1 矛盾，还会触发编排层 CT-15 的不一致守卫。§10 明确 blocked 不是失败：凭据
+  // 不可用时 runner 如实记 blocked、退出码 0，由 release gate（步骤 G）消费 blocked 并
+  // 保持自主实施 flag 关闭。failed/planned 仍必须为 0（真失败与无结论不允许静默）。
   const summary = caseSummary(run);
   console.log(`[live] case summary: ${JSON.stringify(summary)}`);
   assert.equal(summary.failed, 0);
-  assert.equal(summary.blocked, 0);
-  assert.ok(summary.passed > 0);
+  assert.equal(summary.planned, 0, "planned 用例（没有结论）不允许");
+  assert.ok(summary.blocked + summary.passed > 0, "没有任何用例结论时 suite 不能通过");
 });
 
 after(async () => {
