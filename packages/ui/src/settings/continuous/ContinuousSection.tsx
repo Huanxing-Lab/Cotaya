@@ -53,9 +53,14 @@ export function ContinuousSection({
   const continuous = useContinuous({ workspacePath, workspaceIdentity, remoteSessionId });
   const [view, setView] = useState<ContinuousView>({ mode: "list" });
 
-  if (continuous.availability.status === "service_missing") {
-    // 父层（AutomationsSection）在 service 缺席时已收窄 tab；这里兜底不渲染业务面。
-    logger.debug("[continuous] service 缺席，tab 收起");
+  if (
+    continuous.availability.status === "service_missing" ||
+    continuous.availability.status === "disabled"
+  ) {
+    // 父层（AutomationsSection）在 service 缺席/功能未开启时已收窄 tab；这里兜底不渲染
+    // 业务面（disabled 是关闭态 stub 的明确应答，一期未决 4 修复，与 service_missing 同为
+    // 隐藏态——「未开启」不展示不支持解释面）。
+    logger.debug("[continuous] service 缺席或功能未开启，tab 收起");
     return null;
   }
 

@@ -35,6 +35,8 @@ import {
   isContinuousHostEnabled,
   type ContinuousHostRuntime,
 } from "./continuousHost.js";
+// 一期未决 4 修复：关闭态 capability stub（实现类经 /continuous 子路径消费，根入口只导类型）。
+import { ContinuousDisabledService } from "@zcode/services/continuous";
 import { registerHostServiceResourceTelemetry } from "./hostServiceResourceTelemetry.js";
 import { resolveResourceTelemetryEnvironmentKey } from "./hostResourceTelemetryEnvironment.js";
 import { reportHostSessionCreate } from "./hostSessionCreateTelemetry.js";
@@ -2982,8 +2984,8 @@ parentPort.on("message", async (e: Electron.MessageEvent) => {
         }
         wireLocalResourceTelemetry(services);
         // CT-12：Continuous Host 装配（env 门，默认关闭）。装配失败只记日志并保持功能
-        // 关闭（channel 未注册 → renderer capability 挂起 → tab 隐藏，E-24/E-27 形态）；
-        // agent service 经 late-bound ref 在首次执行命令时解析。
+        // 关闭（capability 应答 supported:false → tab 隐藏，E-24/E-27 形态）；agent
+        // service 经 late-bound ref 在首次执行命令时解析。
         if (isContinuousHostEnabled()) {
           try {
             const runtime = await createContinuousHostRuntime({
@@ -3027,7 +3029,18 @@ parentPort.on("message", async (e: Electron.MessageEvent) => {
             logger.warn("continuous host assembly failed; feature stays disabled", {
               errorMessage: error instanceof Error ? error.message : String(error),
             });
+            // 装配失败同样回落关闭态 stub（与 else 分支同语义），不留沉默 channel。
+            services.register(IContinuousService, new ContinuousDisabledService());
           }
+        } else {
+          // 一期未决 4 修复：关闭态注册静态 stub——capability 立即以 continuous_not_enabled
+          // 拒绝（UI 落 disabled 隐藏态）、其余命令 fail closed，取代「channel 未注册」的
+          // 沉默关闭位。未注册 channel 的 renderer 请求会在 ChannelServer 的
+          // pendingRequests 里永久排队（每次打开 Automations 页新增 1-2 条，无上界）；
+          // 注册 stub 后探测立即落定，堆积从源头消失。tab 隐藏行为不变（E-24/E-27；
+          // 「未开启」disabled ≠ 「不支持」unsupported——后者才进 tab 展示解释面），
+          // stub 零业务状态，「功能默认关闭」语义不变——只是把「沉默」换成「明确说不」。
+          services.register(IContinuousService, new ContinuousDisabledService());
         }
         hasDisposedHostResources = false;
         disposeHostResourcesInFlight = null;

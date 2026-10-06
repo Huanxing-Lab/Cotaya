@@ -229,6 +229,9 @@ export { ContinuousWakeSource } from "./adapters/continuousWakeSource.js";
 // continuousCommandErrors 是命令层结构化错误的单一映射。
 export type { ContinuousCommandServiceDeps } from "./application/continuousCommandService.js";
 export { ContinuousCommandService } from "./application/continuousCommandService.js";
+// 关闭态 stub（一期未决 4 修复）：Host 未开启 Continuous 时注册到同一 channel，capability
+// 立即回答 supported:false、其余命令 fail closed——取代「channel 未注册」的沉默关闭位。
+export { ContinuousDisabledService } from "./application/continuousDisabledService.js";
 export { ContinuousCommandError } from "./application/continuousCommandErrors.js";
 export { CONTINUOUS_DETAIL_RECENT_CYCLES } from "./application/continuousViews.js";
 // CT-12：Host 装配（ServiceChannels.Continuous + wake handler + CLI→Host 请求处理）。

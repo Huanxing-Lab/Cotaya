@@ -1,7 +1,9 @@
 // CT-12：桌面 window-scoped Local Host 的 Continuous 装配。功能默认关闭——
-// `ZCODE_CONTINUOUS_HOST_ENABLED=1` 时才构造（规格 §13「功能默认关闭」；未装配 =
-// ServiceChannels.Continuous 未注册 → renderer capability 探测挂起 → tab 隐藏，
-// E-24/E-27 的真实产品形态）。
+// `ZCODE_CONTINUOUS_HOST_ENABLED=1` 时才构造（规格 §13「功能默认关闭」；未装配时
+// host/index.ts 注册 ContinuousDisabledService stub：capability 立即以
+// continuous_not_enabled 拒绝 → UI 落 disabled 隐藏态 → tab 缺席，E-24/E-27 的真实
+// 产品形态——一期未决 4 修复后不再是「channel 未注册 → 探测挂起」的沉默关闭位，
+// pendingRequests 不再累积）。
 //
 // 职责（ticket CT-12）：复用窗口现有 Local Host（services 注入与 channel 注册），不用 Main
 // 保存业务状态。本文件把 services 的 assembleContinuousHost 接到桌面事实源上：

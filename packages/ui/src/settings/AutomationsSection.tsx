@@ -618,8 +618,8 @@ export function AutomationsSection({
   // `continuousService !== undefined` 恒真——RemoteServiceAccess 的 lazy getter 对未注册
   // channel 也返回 ProxyChannel 代理，Host 未装配时 tab 仍会渲染 unsupported 页，破坏
   // 「默认关闭 = 隐藏」回滚位）。现在：ready/unsupported 才显示 tab（unsupported 进 tab
-  // 后由 ContinuousSection 展示旧 CLI/远程的解释页）；checking（channel 未装配时 capability
-  // 请求被服务端挂起）与 service_missing 都隐藏。
+  // 后由 ContinuousSection 展示旧 CLI/远程的解释页）；checking（版本错配探测未决）、
+  // disabled（关闭态 stub 的「未开启」应答，一期未决 4 修复）与 service_missing 都隐藏。
   const continuousAvailability = useContinuousAvailability(continuousService);
   const continuousTabEnabled =
     continuousAvailability.status === "ready" || continuousAvailability.status === "unsupported";

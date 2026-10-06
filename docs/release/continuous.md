@@ -34,12 +34,17 @@ observe_only 平台的行为（规格 §13，服务与执行策略两层强制�
 
 当前状态：**默认关闭，且尚未开启**。关闭的机制与开启所需步骤：
 
-1. 关闭机制（已在代码中）：Host 未装配 `ServiceChannels.Continuous` → renderer capability
-   探测无响应（未注册 channel 的请求被 ChannelServer 排队挂起，availability 停留
-   checking）→ Automations 页只有「自动化/工作流」两个 tab、ContinuousSection 不挂载不查询
-   （E-24/E-27 的真实产品行为；评审修复：原描述「accessor.continuousService 缺席即隐藏」
-   不成立——RPC accessor 的 lazy getter 恒返回 ProxyChannel 代理，tab 门已改为 capability
-   探测驱动）；scheduler 对缺表旧库返回空查询、Host 唤醒处理器缺席时
+1. 关闭机制（已在代码中）：Host 未开启 Continuous 时在 `ServiceChannels.Continuous` 注册
+   `ContinuousDisabledService` 静态 stub → renderer capability 探测**立即**得到带
+   `continuous_not_enabled` 标记的结构化拒绝（availability 落 `disabled`）→ Automations 页
+   只有「自动化/工作流」两个 tab、ContinuousSection 不挂载不查询（E-24/E-27 的真实产品
+   行为）。一期未决 4 修复（2026-10-06）前该机制是「channel 未注册 → 探测被 ChannelServer
+   排队挂起、停留 checking」——沉默关闭位会在 pendingRequests 里缓慢累积（每次打开
+   Automations 页 1-2 条、无上界）；stub 零业务状态，注册不改变「功能默认关闭」语义。
+   注意「未开启」（disabled，tab 隐藏）与「不支持」（unsupported，进 tab 展示旧 CLI/远程
+   解释面）是两个状态——stub 不得回答 supported:false，否则关闭态会多出一个 tab。版本
+   错配的旧 Host 无 stub 时由 renderer 探测超时（5 秒落定 unsupported）兜底。scheduler
+   对缺表旧库返回空查询、Host 唤醒处理器缺席时
    wake 回执失败并重发（无业务副作用）；CLI 侧 `continuousManagedCycles.enabled` 未开时
    `continuousManagedCycleExecution` 不暴露，v4 命令面回答能力不支持。
 2. 开启前置（装配清单，CT-08/09 记录的已知边界——CT-12 已实施 Host 侧装配）：

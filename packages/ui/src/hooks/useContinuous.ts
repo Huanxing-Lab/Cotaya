@@ -5,11 +5,15 @@
 // 全部在 Host 侧服务里。手机（web-remote-replayable）经同一 accessor 消费同一 snapshot，
 // 重连后的补状态由服务读面回答，renderer 不重放已接受命令。
 //
-// 可用性三分（E-24 与回滚位的判据）：
+// 可用性四分（E-24 与回滚位的判据）：
 //   service_missing —— accessor 没有 continuousService → tab 隐藏；
-//   checking        —— capability 未决（含 Host 未装配 channel：请求被服务端排队挂起，
-//                      永不返回）→ tab 隐藏（「功能默认关闭」的真实产品形态）；
-//   unsupported     —— 服务在但 capability 不支持（旧 CLI/远程）→ 页面明确展示不支持；
+//   disabled        —— Host 明确应答「功能未开启」（关闭态 stub，一期未决 4 修复后取代
+//                      「channel 未注册 → 探测挂起」的沉默关闭位）→ tab 隐藏——「未开启」是
+//                      正常产品形态，与「不支持」分开：后者才进 tab 展示解释面；
+//   checking        —— capability 未决（探测中；版本错配的旧 Host 无 stub 应答时由探测
+//                      超时落定 unsupported）→ tab 隐藏；
+//   unsupported     —— 服务在但 capability 不支持（旧 CLI/远程/版本错配超时）→ 页面明确
+//                      展示不支持；
 //   ready           —— 可以查询与操作。
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -47,16 +51,29 @@ export interface ContinuousCommandFailure {
 
 export type ContinuousAvailability =
   | { status: "service_missing" }
+  /** Host 关闭态 stub 的明确应答（未开启）；tab 隐藏，与 checking 同为隐藏态。 */
+  | { status: "disabled" }
   | { status: "checking" }
   | { status: "unsupported" }
   | { status: "ready"; capability: ContinuousCapabilityResult };
 
 /**
+ * 关闭态 capability 拒绝的消息标记（与 services 侧 ContinuousDisabledService 的
+ * CONTINUOUS_NOT_ENABLED_CODE 同一字符串；不 import 实现常量——@zcode/services/continuous
+ * 子路径会拉入 node:* 依赖，破坏 renderer 的 browser-safe 根入口约束）。
+ */
+const CONTINUOUS_NOT_ENABLED_MARKER = "continuous_not_enabled";
+
+/**
  * capability 门（评审修复拆出）：只判「服务在不在、支不支持」，不启动 snapshot/detail
  * 轮询。页面级 tab 门（AutomationsSection）与 useContinuous 共用同一探测语义，避免页面
- * 为了显隐判定挂一份完整轮询。channel 未注册（Host 未装配）时 capability 请求被服务端
- * 排队挂起 → 恒为 checking → tab 隐藏（默认关闭的真实产品形态，回滚位）。
+ * 为了显隐判定挂一份完整轮询。同版本 Host 未装配（功能关闭）时，关闭态 stub 立即以
+ * continuous_not_enabled 拒绝 → disabled → tab 隐藏（默认关闭的真实产品形态，回滚位；
+ * 一期未决 4 修复——此前是「channel 未注册 → 探测挂起」，pendingRequests 缓慢累积）。
+ * 版本错配的旧 Host 无 stub 应答时由 CAPABILITY_PROBE_TIMEOUT_MS 超时落定。
  */
+const CAPABILITY_PROBE_TIMEOUT_MS = 5_000;
+
 export function useContinuousAvailability(
   service: IContinuousServiceFacade | undefined,
 ): ContinuousAvailability {
@@ -69,13 +86,25 @@ export function useContinuousAvailability(
       return;
     }
     let disposed = false;
+    let settled = false;
     setAvailability((previous) =>
       previous.status === "service_missing" ? { status: "checking" } : previous,
     );
+    // 超时兜底只为版本错配（旧 Host 无关闭态 stub、未注册 channel 的请求被服务端永久
+    // 排队）：落定 unsupported，避免 availability 永久 checking、重复挂载持续累积
+    // 服务端 pending 请求（一期未决 4 的 renderer 半边）。
+    const timer = setTimeout(() => {
+      if (disposed || settled) return;
+      settled = true;
+      logger.warn("[continuous] capability 探测超时，按不支持落定（版本错配或 Host 未应答）");
+      setAvailability({ status: "unsupported" });
+    }, CAPABILITY_PROBE_TIMEOUT_MS);
     service
       .capability()
       .then((capability) => {
-        if (disposed) return;
+        clearTimeout(timer);
+        if (disposed || settled) return;
+        settled = true;
         setAvailability(
           supportsManagedCycles(capability)
             ? { status: "ready", capability }
@@ -83,11 +112,23 @@ export function useContinuousAvailability(
         );
       })
       .catch((error: unknown) => {
-        logger.warn("[continuous] capability 查询失败", { message: String(error) });
-        if (!disposed) setAvailability({ status: "unsupported" });
+        clearTimeout(timer);
+        if (disposed || settled) return;
+        settled = true;
+        const text = error instanceof Error ? error.message : String(error);
+        if (text.includes(CONTINUOUS_NOT_ENABLED_MARKER)) {
+          // Host 关闭态 stub 的明确应答（一期未决 4 修复）：正常产品形态，不打 warn；
+          // disabled ≠ unsupported——后者是「服务在不支持」要进 tab 展示解释面，
+          // 「未开启」保持 tab 缺席（回滚位）。
+          setAvailability({ status: "disabled" });
+          return;
+        }
+        logger.warn("[continuous] capability 查询失败", { message: text });
+        setAvailability({ status: "unsupported" });
       });
     return () => {
       disposed = true;
+      clearTimeout(timer);
     };
   }, [service]);
   return availability;
