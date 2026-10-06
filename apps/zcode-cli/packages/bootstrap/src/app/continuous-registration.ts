@@ -26,7 +26,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { platform } from "node:process";
 import type { z } from "zod";
-import type { ContinuousRegisterManagedRunCommand } from "@zcode/shared/continuous-protocol";
+import {
+  CONTINUOUS_CLI_MANAGED_OPERATIONS,
+  type ContinuousRegisterManagedRunCommand,
+} from "@zcode/shared/continuous-protocol";
 import {
   wireDecisionSink,
   wireLedger,
@@ -111,21 +114,6 @@ interface ManagedRunRegistration {
   budgetGate: ReturnType<typeof createContinuousModelBudgetGate>;
   decisionGate: ReturnType<typeof createContinuousDecisionGate>;
 }
-
-/** 能力协商回音词表（与 CONTINUOUS_CLI_MANAGED_OPERATIONS 同一份；含 interrupt）。 */
-const REGISTRATION_ECHO_OPERATIONS = [
-  "register",
-  "submitOnce",
-  "inspect",
-  "resume",
-  "stop",
-  "interrupt",
-  "waitForQuiescence",
-  "readReports",
-  "suspendAtSafeBoundary",
-  "resumeSuspended",
-  "inspectHealth",
-] as const;
 
 /**
  * 稳定序列化（键排序）：同轮重发的载荷比较必须不受字段顺序影响——Host 每次经
@@ -239,7 +227,9 @@ export function createContinuousManagedRunStore(deps: ContinuousManagedRunStoreD
       });
       return {
         type: "continuousRegisterManagedRun" as const,
-        operations: [...REGISTRATION_ECHO_OPERATIONS],
+        // 二期评审修复：回音直接引用 shared 唯一词表，消除本地复制漂移
+        // （新增 op 是协议变更，本地清单不会跟随）。
+        operations: [...CONTINUOUS_CLI_MANAGED_OPERATIONS],
         workflowRunId: payload.workflowRunId,
       };
     }
@@ -364,8 +354,8 @@ export function createContinuousManagedRunStore(deps: ContinuousManagedRunStoreD
       maxConcurrentActors: payload.maxConcurrentActors,
     });
     return {
-      // 能力协商回音：与 CONTINUOUS_CLI_MANAGED_OPERATIONS 同一份词表（含 interrupt）。
-      operations: [...REGISTRATION_ECHO_OPERATIONS],
+      // 二期评审修复：回音直接引用 shared 唯一词表，消除本地复制漂移。
+      operations: [...CONTINUOUS_CLI_MANAGED_OPERATIONS],
       type: "continuousRegisterManagedRun" as const,
       workflowRunId: payload.workflowRunId,
     };
