@@ -12,19 +12,19 @@
 
 ## 1. Ticket 实施状态
 
-| Ticket | 标题 | 状态 | 提交 | 轮次（含门禁修复轮） |
-| --- | --- | --- | --- | --- |
-| CT-00 | 锁定契约和测试入口 | 已提交 | `ebe2a64` | 1 |
-| CT-01 | 长期状态和事务 | 已提交 | `ba241cb` | 2 |
-| CT-02 | 独立工作区、操作范围和交付 | 已提交 | `09372a0` | 1 |
-| CT-03 | 受控 Run 身份、报告和停止 | 已提交 | `4acb75f` | 2 |
-| CT-04 | 预算、暂停确认、主动探活和模型准入 | 已提交 | `fceca4d` | 1 |
-| CT-05 | 手动完整 Cycle 与固定模板 | 已提交 | `1c3cf15` | 1 |
-| CT-06 | 非阻塞 Decision Queue | 已提交 | `53c790c` | 1 |
-| CT-07 | 周期、租约与恢复 | 已提交 | `a5e9d0a` | 2 |
-| CT-08 | 桌面与手机 UI | 已提交 | `1a389a6` | 1 |
-| CT-09 | 真实 E2E runner 和故障证据 | 已提交 | `fdcb953` | 2 |
-| CT-10 | 跨平台、兼容回归与发布 | 已提交 | `048aa89` | 2 |
+| Ticket | 标题                               | 状态   | 提交      | 轮次（含门禁修复轮） |
+| ------ | ---------------------------------- | ------ | --------- | -------------------- |
+| CT-00  | 锁定契约和测试入口                 | 已提交 | `ebe2a64` | 1                    |
+| CT-01  | 长期状态和事务                     | 已提交 | `ba241cb` | 2                    |
+| CT-02  | 独立工作区、操作范围和交付         | 已提交 | `09372a0` | 1                    |
+| CT-03  | 受控 Run 身份、报告和停止          | 已提交 | `4acb75f` | 2                    |
+| CT-04  | 预算、暂停确认、主动探活和模型准入 | 已提交 | `fceca4d` | 1                    |
+| CT-05  | 手动完整 Cycle 与固定模板          | 已提交 | `1c3cf15` | 1                    |
+| CT-06  | 非阻塞 Decision Queue              | 已提交 | `53c790c` | 1                    |
+| CT-07  | 周期、租约与恢复                   | 已提交 | `a5e9d0a` | 2                    |
+| CT-08  | 桌面与手机 UI                      | 已提交 | `1a389a6` | 1                    |
+| CT-09  | 真实 E2E runner 和故障证据         | 已提交 | `fdcb953` | 2                    |
+| CT-10  | 跨平台、兼容回归与发布             | 已提交 | `048aa89` | 2                    |
 
 各 ticket 要点（细节以 `docs/tickets/records/CT-XX.md` 为准）：
 
@@ -82,16 +82,16 @@
 
 退出码语义（`830bd17` 确立并回写 `docs/testing/continuous.md` §10）：failed/missing → 非零；**blocked → exit 0 且状态如实传播（blocked ≠ passed）**，由 release gate 消费；live 未显式 opt-in 的拒绝启动仍非零。
 
-| suite | 退出码 | 真实结果 |
-| --- | --- | --- |
-| unit | 0 | passed |
-| integration | 0 | passed |
-| recovery | 0 | passed |
-| e2e | 0 | suite 状态 **blocked**（非用例通过）：E-01…E-20、E-22、E-23、E-29…E-34 依赖 Host 装配，逐用例 blocked（`CAPABILITY_BLOCKED_REASON`，`e2e.test.mjs:268-269、341-348`）；E-24 blocked（capability 探测可能停在登录/欢迎页，blocked 理由按真实探测结论生成，`e2e.test.mjs:326-339`）；E-28 本 suite 半边的两个真实 Electron 断言（有 run ID bridge 暴露 / 无 run ID 不暴露）**已执行且通过**，但用例整体记 blocked（production 半边归 regression，`e2e.test.mjs:283-324`） |
-| mobile | 0 | E-21 blocked（浏览器不可用，或浏览器可用但配对/attachment 依赖 Host 装配，`mobile.test.mjs:78-107`）；exit 0 = failed 为 0，非用例通过 |
-| platform | —（无退出码） | **最终验证编排未提供该 suite**。历史 exit 0 记录两处：① 整体评审轮的验证记录（评审结论原文：「`node scripts/test-continuous.mjs --suite unit / integration / recovery / platform 全部 exit 0`」，见 §2 评审执行验证）；② `830bd17` 提交信息（`--suite all → 0`，其中 platform passed）。两处记录均未随数据保留 artifacts 路径（runner 证据写 os.tmpdir，现已不可查），本汇总无法复核，仅如实注明出处 |
-| regression | —（无退出码） | **最终验证编排未提供该 suite**。`830bd17` 提交信息记录 `--suite regression → 0`（stdout 13.9KB），按该提交时的代码与提交记录，最终用例状态为：E-26 **passed**（bootstrap 既有测试真实重跑 + mode 枚举 canary + 无并行 Goal 链）、E-27 **passed**（recovery 停止链重跑 + 回滚文档在场；`830bd17` 后不再附带未取证的「默认关闭探针」断言，`regression.test.mjs:360-363`）、E-28 **blocked**（登录/欢迎页阻挡 tab 缺席 canary；bridge 不暴露与测试符号不进产物两个真实断言已执行且通过，`regression.test.mjs:275-294`）。CT-10 轮记录的「E-26/E-27/E-28 全 passed」是导航 canary 加入**之前**的结果，其「tab 缺席」判定当时为空转探针（未导航即扫描），以 `830bd17` 后的如实状态为准；本汇总及修订会话均未复跑该 suite，以上为记录转述非本会话执行 |
-| live | 未执行 | 需真实测试凭据，未运行 `--allow-live`；未 opt-in 的拒绝启动语义为 exit 1 |
+| suite       | 退出码        | 真实结果                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ----------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| unit        | 0             | passed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| integration | 0             | passed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| recovery    | 0             | passed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| e2e         | 0             | suite 状态 **blocked**（非用例通过）：E-01…E-20、E-22、E-23、E-29…E-34 依赖 Host 装配，逐用例 blocked（`CAPABILITY_BLOCKED_REASON`，`e2e.test.mjs:268-269、341-348`）；E-24 blocked（capability 探测可能停在登录/欢迎页，blocked 理由按真实探测结论生成，`e2e.test.mjs:326-339`）；E-28 本 suite 半边的两个真实 Electron 断言（有 run ID bridge 暴露 / 无 run ID 不暴露）**已执行且通过**，但用例整体记 blocked（production 半边归 regression，`e2e.test.mjs:283-324`）                                                                                                                                                                                                                                                                         |
+| mobile      | 0             | E-21 blocked（浏览器不可用，或浏览器可用但配对/attachment 依赖 Host 装配，`mobile.test.mjs:78-107`）；exit 0 = failed 为 0，非用例通过                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| platform    | —（无退出码） | **最终验证编排未提供该 suite**。历史 exit 0 记录两处：① 整体评审轮的验证记录（评审结论原文：「`node scripts/test-continuous.mjs --suite unit / integration / recovery / platform 全部 exit 0`」，见 §2 评审执行验证）；② `830bd17` 提交信息（`--suite all → 0`，其中 platform passed）。两处记录均未随数据保留 artifacts 路径（runner 证据写 os.tmpdir，现已不可查），本汇总无法复核，仅如实注明出处                                                                                                                                                                                                                                                                                                                                            |
+| regression  | —（无退出码） | **最终验证编排未提供该 suite**。`830bd17` 提交信息记录 `--suite regression → 0`（stdout 13.9KB），按该提交时的代码与提交记录，最终用例状态为：E-26 **passed**（bootstrap 既有测试真实重跑 + mode 枚举 canary + 无并行 Goal 链）、E-27 **passed**（recovery 停止链重跑 + 回滚文档在场；`830bd17` 后不再附带未取证的「默认关闭探针」断言，`regression.test.mjs:360-363`）、E-28 **blocked**（登录/欢迎页阻挡 tab 缺席 canary；bridge 不暴露与测试符号不进产物两个真实断言已执行且通过，`regression.test.mjs:275-294`）。CT-10 轮记录的「E-26/E-27/E-28 全 passed」是导航 canary 加入**之前**的结果，其「tab 缺席」判定当时为空转探针（未导航即扫描），以 `830bd17` 后的如实状态为准；本汇总及修订会话均未复跑该 suite，以上为记录转述非本会话执行 |
+| live        | 未执行        | 需真实测试凭据，未运行 `--allow-live`；未 opt-in 的拒绝启动语义为 exit 1                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
 - 「Electron 探针最终到底过没过」的准确回答：bridge 探针（e2e E-28 半边的有/无 run ID 正反向、regression E-28 半边的 production 不暴露）与「测试专用符号不进产物」检查均**真实执行且通过**；「Continuous tab 缺席 = 默认关闭」的产品行为证据在无凭据隔离环境**不可得**（登录/欢迎页阻挡），相关用例（e2e E-24、regression E-28）如实记 blocked，不放水成 passed 也不误判 failed。
 - 编排层最终收敛标记 converged = true 来自编排产出数据（编排脚本不在本仓库、未随数据提供，其内部判定条件本会话**无法核实**）。就数据可见范围，该标记至多对应：最终轮 runner 实际提供的 5 个 suite（unit/integration/recovery/e2e/mobile）全部 exit 0、无 failed/missing，且 fmt/CLI lint 基线归属清点完成（finalNotes）；**platform/regression 未在最终轮提供，不在该标记可声明的覆盖范围内**——「收敛」不等于「全量 suite 验收完成」。
@@ -120,3 +120,117 @@
 
 - 功能默认关闭（capability 缺席 + accessor 可选字段 + CLI `continuousManagedCycles.enabled` 开关），开启装配清单与有序回滚步骤见 `docs/release/continuous.md` §2/§3（回滚不靠删表）。
 - 开启前必须逐项落实 §2.1 四项接线：CT-02 范围策略执行点、引擎侧预算挂起-继续语义、探活证据源、Host 预算闸门登记；建议一并处理 §2 未决项 4 的 pendingRequests 累积问题。
+
+---
+
+# 二期：CT-11 至 CT-16（分支 codex/continuous-release-gaps）
+
+- 修订日期：2026-10-06。
+- 依据：二期结构化执行数据（工作流编排产出：逐 ticket notes、reviewVerdict、reviewDispositions、outstandingReviewFindings、finalSuites、finalNotes、notRun）、`docs/tickets/records/CT-11.md`…`CT-16.md` 逐 ticket 记录（CT-15/CT-16 含同日「评审修复补记」）、`git log e9415266d58f2a4c0ffadf11ede61fd722b5f9e2..HEAD`。ticket 源为 `docs/tickets/continuous-release-gaps.md`。
+- 分支谱系与提交账目（本修订会话实测）：二期基线 `e941526`（一期终点 `830bd17` 之后依次为两个汇总文档提交、`a0b128c` 预算暂停/探活/受管执行检查修复、Node 版本下限放开）。`e941526..HEAD` 共 **7 个提交**：CT-11…CT-16 六个 ticket 提交 + `4bcf682` 二期评审处置提交（2026-10-05 至 10-06）。全量 diff `git diff --shortstat` 实测 110 文件 +15546/−1250；评审时点 `e941526..9ad735b` 实测 103 文件 +14366/−1013，与评审结论自述一致。
+- 二期主题（关闭一期遗留的 `docs/release/continuous.md` §2.1 开启前置）：安全操作与可信验证、window-scoped Local Host 装配、预算与 AskUserQuestion 真实通信、完整主动探活与正常阻塞、真实桌面/手机 E2E、固定运行时与安装包验收。
+- 状态词表沿用一期：passed / failed / blocked / planned / unverified；未执行或证据不可得一律如实标注，绝不写成通过。本修订会话实际复跑的检查在文中逐条注明命令与结果；其余结论注明出处（编排数据或逐 ticket 记录），二者不混写。
+
+## 1. Ticket 实施状态
+
+| Ticket | 标题                              | 状态   | 提交      | 轮次（含门禁修复轮） |
+| ------ | --------------------------------- | ------ | --------- | -------------------- |
+| CT-11  | 补齐安全操作与可信验证            | 已提交 | `6b9640d` | 1                    |
+| CT-12  | 装配 window-scoped Local Host     | 已提交 | `eddfa8d` | 2                    |
+| CT-13  | 预算与 AskUserQuestion 的真实通信 | 已提交 | `757893e` | 1                    |
+| CT-14  | 完整主动探活和正常阻塞            | 已提交 | `1e27cf3` | 1                    |
+| CT-15  | 真实桌面与手机 E2E                | 已提交 | `a28d941` | 2                    |
+| CT-16  | 固定运行时、安装包与真实模型验收  | 已提交 | `9ad735b` | 2                    |
+
+各 ticket 要点（细节以 `docs/tickets/records/CT-11.md`…`CT-16.md` 为准）：
+
+- **CT-11**：六项全部落地——①受限递归搜索（目录下行仅导航、逐实际目标过完整 Scope/forbidden/protected/角色/链接目标判定，不跟随目录符号链接）；②symlink 替换竞态收敛（O_NOFOLLOW + fstat/lstat/检查期 inode 三方绑定、IO 全在 fd 上，如实声明不宣称完整 OS 沙箱，先失败回归证明旧实现在准入窗口泄露受保护内容）；③受控 argv 测试端口 + darwin seatbelt 隔离（构造期三金丝雀自证，含无沙箱对照组排除离线误判，自证不过 fail closed；win32/linux 无隔离实现，observe_only 三层门拒绝一切写入/命令/提交）；④工具端口证据与提交门（tests/browser/diff/commit 关联 candidate/run/epoch、每阶段取最新；模型 exitCode:0/passed 只算报告不能授权提交）；⑤模板 v2 移除 `world.run` git add/commit 与模型转述结论路径，本地提交只经可信提交端口（只提交候选授权路径内改动，原仓库 HEAD 与工作树实测不变）；⑥文件/行数上限按相对起始 commit 累计口径核对，超限同轮挂起（继续只增额度不重置已消耗量）。开发中被测试捕获并修复 5 处真实缺陷（链接目标漏查、porcelain "??" 漏计、"." 前缀不覆盖全仓、执行器数据文件进 diff 口径、候选终局授权占用未释放）。绕过测试先失败实录 exit 1（pass 0/fail 2）；修复后 ct11-security 8/8（seatbelt 真实执行未 skip）。
+- **CT-12**：shared 新增登记协议（`continuousRegisterManagedRun` strict 载荷：冻结配置/价格快照/上限/角色/leaseEpoch/真实工作目录/并发上限；CLI→Host 四反向请求）+ 模板注册表下沉 shared（同一份 hash 绑定）；services wire 执行端口（恢复先重建登记、缺 interrupt→capability_missing）与装配工厂；CLI 登记处把载荷变进程内预算/决策/IO 端口（同轮重发幂等）；desktop env 门 `ZCODE_CONTINUOUS_HOST_ENABLED`（默认关闭=channel 未注册=tab 隐藏不变）+ shutdown 新增 continuous-interrupt 阶段。已知限制如实：Electron 真实链路归 CT-15；价格快照无真实定价来源（缺席 fail closed）；声明测试命令第一版为空→候选 fail closed；浏览器证据仍为注入接缝。开发中被测试捕获并修复 2 处真实缺陷（挂起等待忙等、缺 health 快照打崩监督循环）。
+- **CT-13**：账本传输严格校验（reserve 必带 leaseEpoch/workflowRunId/pricingVersion 核对、requestKey 同事实幂等/异事实拒绝；settle 归属三元组、旧 epoch 晚到 usage 幂等收尾）；denial 重构携带真实事实（limitKind 四词表、已用/预留/unknown 三分、currentLimit、本请求需求）；统一暂停路径（CLI 先本地冻结再通知；并发超限合并进同轮唯一 pending，两侧事实并集保留）；授权增量不重置已用量；尝试上限继续授权语义（pricing_missing/ledger_unreachable/lease_lost 结构化抛出不等待）；旧版 errored 预算轮经 `executionRecoverable` 呈现 + 用户显式结束旧轮/新开轮。新增 15 用例先红后绿（实现前 12 例失败）；修 4 处真实缺陷（领域/wire limitKind 词表不一致、并发挂起撞唯一索引、重复回答幂等断裂、wireSuspendForChangeLimit 漏 leaseEpoch）。
+- **CT-14**：CLI 操作等待登记处（每条带 owner/run/epoch/原因/真实期限，过期或低于执行权高水位永久移除）；normal_wait 聚合为「全部运行节点被有效等待覆盖才豁免，任一 actor 工作照计」；Host wire 读操作通信期限（默认 30s）超时/失败折算结构化 `execution_unreachable`（additive 错误码），写操作有意不加期限（ACK 语义不可安全重试）；失联冻结不发 wire 挂起，直接保存 interrupted + 证据事件 + Program paused（同 epoch 守卫，旧观察不覆盖新执行权）。先红后绿：services 期限用例实现前真实挂起（正是 ticket 描述的缺陷本身）。
+- **CT-15**：e2e 重写为真实 UI 驱动 + 三层事实断言（UI test id、tasks-index 只读 SQL、provider 计数/Git/worktree/进程日志）；终态 run15 exit 0：**9 passed / 0 failed / 21 blocked / 0 skipped**；regression E-26/E-27/E-28 真实通过；E-21 如实 blocked。修复 5 处真实产品缺陷（session id 守卫、store 漏传、金丝雀 Electron 形态与期限、父会话 FK、shutdown interrupt 顺序）+ runner 隔离缺口 1 处，产品代码 6 文件 +106/−22（低 diff；普通 Workflow/手动会话零行为变化）。
+- **CT-16**：Node 口径核实（`mise.toml` 为 `>=24` 下限——`e941526` 放开而非固定 24.14.0，本机无 mise、系统 Node 25.8.0 满足下限，本修订会话复核 mise.toml 为 `node = ">=24"`/`pnpm "10.33.2"`）；新增 packaged suite（electron-builder `--dir` unpacked .app 真实打包形态内 9 用例：暂停/退出/恢复/停止/本地提交边界/E-34/E-01/E-02/E-15/E-16/E-28，终态 9 passed/0 failed/0 blocked，spawn preflight 提供随包 `resources/glm/zcode.cjs` 的进程级解析证据——一并补上一期 §5 第 7 条的进程级指纹缺口）；platform（darwin-arm64）复核 exit 0；live `--allow-live` 真实执行 exit 0/状态 blocked（无凭据，三用例如实 blocked）。打包链暴露并修复 3 处真实缺陷（Host 启动核对未接线→`recoverAllOnStartup`、wire 会话路由实例内丢失→持久化解析+会话复活、租约接管防御性 stop 毒化同 Run 恢复→改 interrupt 语义）。
+
+### 门禁修复轮原因（轮次 > 1 的 ticket）
+
+- **CT-12（2 轮）**：唯一失败项 `docs/release/continuous.md` 表格管道未对齐的 oxfmt 格式；oxfmt 修复后 diff 仅格式，门禁同款 `oxfmt --check` 26 文件复验 exit 0，代码零改动。
+- **CT-15（2 轮）**：首轮 e2e exit 1，根因为 DWF actor 子会话创建报 FOREIGN KEY constraint failed（`session_task_link.parent_session_id` 对 session(id) 的 FK，Host 受控会话无用户轮、父行惰性缺席）→ 新增 `ensureParentSessionPersisted` 接缝（对已持久化普通会话为 no-op）；其后逐项打通 7 处真实断点（模型 404 双路径兼容、barrier 缺省期限、git log argv 模板拼接、停止确认框真实点击、E-11 静止等待、遗留模态遮罩收口、node:test 并发下 blocked 登记覆盖）。第二轮 e2e 真实通过。
+- **CT-16（2 轮）**：`repository.test.ts` 新增断言手工换行的 oxfmt 格式；折叠单行后门禁同款 22 文件复验 exit 0，语义零变化。
+
+## 2. 整体评审结论与处置
+
+评审范围：`e9415266d5..HEAD` 的 6 个 CT-11…16 提交（103 文件 +14366/−1013；处置落地后全量为 110 文件 +15546/−1250，均本修订会话实测复核）。对照四个基准：
+
+- **ticket 固定规则与 CT-11…16 验收**：预算额度/有效一小时/15s 探活/180 秒+3 次 hang/本地 only/自动本地提交边界/unknown 占预算/预算确认与 Decision Queue 分离均在代码与测试中落实；但「最多 10 个 actor 并发」未传入引擎 caps、CT-15/16 验收条款未全部达成（记录诚实、release gate 保持关闭）、CT-13 `executionRecoverable` UI 呈现落空、真实装配链路的候选实施回路断裂——四项均进入下述处置。
+- **spec §4/§5/§9/§10/§11 与 §2.1 修复边界**：达标（§4 所有者边界；§9 账本单一写入者/原子预留/严格传输校验/断联 fail closed/unknown 保留；§10 lease epoch 贯穿与 trigger key 幂等；§10.1 探活分类、读期限 30s、unreachable 冻结只写同 epoch running 行；§11 错误词表 additive；§2.1 六项修复边界全部有对应实现）。
+- **AGENTS.md 工程边界**：达标——services/continuous 外部依赖仅 `@zcode/shared`；Main（`packages/desktop/src/main`）零改动；二期 diff 内 UI 零改动（分支整体含一期 CT-08 的 UI 改动），上游邻近文件改动小而局部（zcodeAgentService.ts +58 可选 handler、node.ts +18 再导出、host/index.ts +104 env 门内装配），产品逻辑全在新文件；协议新命令经 shared strict schema。
+- **真实证据要求**：未发现把 blocked 占位或模拟当 passed——e2e 为真实 UI 驱动 + 三层断言；21 个 blocked 理由具体且引用真实约束；E-28 报告/退出码不一致缺陷已修（`recordCaseFailure` + 编排层状态交叉核对）；证据注明 base commit 与工作树差异。
+
+**评审人实际执行的验证**（出处：reviewVerdict）：services 130/130、bootstrap 83/83、`architecture-check` 0 violations、unit suite exit 0。未执行（评审人如实声明）：e2e/mobile/regression/packaged/platform/live（需 Electron 生产构建/浏览器/真实凭据，超出评审可承受规模），相关 passed 结论以代码结构审查与记录交叉核对为据。
+
+**处置 7 项全部成立并落地于 `4bcf682`**（本修订会话以 `git show --stat` 核对：25 文件 +1002/−59，含 v2 冻结副本 `ui-ux-v1-v2-script.ts`、`continuous-authorize` 端口、`ContinuousProgramFacts.tsx` 与 zh/en i18n、supervisorSettlement 竞态守卫、zcodeAgentService 错误应答、continuousHost clock 接缝、CT-15/CT-16 记录补记）：
+
+1. 【候选授权无产品调用点】trusted 端口新增保留命令 `continuous-authorize`（前一候选终局非撤销释放→授权、同候选幂等、revoked 终局拒绝、授权不扩张 Scope）；受管模板升 v3（骨架在每个候选实施 ask 前经该端口授权，v2 按版本化纪律冻结保留）；spec §7/§14 先行；bootstrap 85/85（含新用例，template 套件移除 fixture 手动 authorize、端到端经真实授权端口驱动）。
+2. 【并发上限 10 未接线】`ManagedRunSubmitRequest.maxConcurrency` → startNewRun 透传 + 执行适配器 `maxConcurrencyFor` 按 Run ID 现读传入引擎 caps（更低机器天花板仍按钳制语义）；registration 测试钉住；E-33 仍无法真实验证（多 actor 脚本序列未建），如实保留。
+3. 【CT-15/16 验收差距与时钟接缝说法】部分成立：装配级 clock 接缝补上（`createContinuousHostRuntime` 可选 clock 参数，生产调用点不传、恒真实系统时钟）——「产品决策冲突」说法不成立（ticket 实施段允许测试时钟注入，约束是生产构建不暴露）；CT-15/CT-16 记录追加「评审修复补记」不改写历史；跨进程 e2e 时钟注入仍需测试桥设计，时钟类用例维持如实 blocked；E-21 维持 blocked。
+4. 【传输前 reRegister 覆盖已登记端口】同 runId + 同 leaseEpoch + canonical 载荷深比较相等 → 幂等复用并保留已登记端口对象；同 epoch 载荷变化 → registration_invalid；更高 epoch → 完整重建；registration 测试扩展钉住。
+5. 【挂起写入整行覆盖竞态】落库前重读最新行，仅同 leaseEpoch 非 suspended 行合并挂起字段（游标/健康列保留最新事实）；services 131/131。**修复不完整的遗留见下文未决 1。**
+6. 【executionRecoverable 无 UI 消费】`ContinuousProgramFacts.tsx` 当前轮卡片在不可恢复时渲染 role=alert 提示（入口复用本页既有停止/Run now 按钮），新增稳定 test id 与 zh-CN/en-US 文案；该呈现的真实 E2E 驱动仍受候选路径/时钟类 blocked 约束（如实声明）。
+7. 【退出窗口 CLI 反向请求悬挂】`zcodeAgentService` 对已按词表认定却无 handler 的 Continuous 反向请求，由 handled=false 直接 return 改为立即 `respondError(-32603)`（原会悬挂到传输超时）；CLI 侧本就 fail closed 折算 ledger_unreachable，语义不变；未写专项单测（该文件无现存单测），如实说明。
+
+**遗留未决 2 项**（outstandingReviewFindings；本修订会话核实当前工作树代码均仍未修复）：
+
+1. 【medium】处置 5 的竞态守卫不完整：`supervisorSettlement.ts:134` 当前仍只排除 `latest.status !== "suspended"` 一种状态——终态（cancelled/completed/failed）与 interrupted 行在 wire 往返窗口内仍可被迟到的拒绝通知整行改写回 suspended。可达场景：CLI 挂起请求进入 Host 处理期间，用户并发的 stopCurrentCycle 链落地（stop 不 bump leaseEpoch，epoch 校验拦不住），随后挂起链重读到非 suspended 行被翻写。后果：违反 §6「立即停止→Cycle cancelled」终局性；completeCycle 已释放 lease，被复活的 suspended 行按部分唯一索引仍算开放轮，下一次 runNow 撞 open_cycle_exists 幽灵确认。新增竞态回归用例只覆盖游标/健康列保留，未覆盖终态改写。修法方向：仅非终态开放状态（running/preparing/settling）才合并（与 applyHealthAssessment 的 running-only 纪律对齐）。
+2. 【low】登记回音词表本地复制：`continuous-registration.ts:116` 的 `REGISTRATION_ECHO_OPERATIONS` 与 shared `CONTINUOUS_CLI_MANAGED_OPERATIONS`（`continuous-registration-protocol.ts:31-43`）逐项重复（本修订会话比对当前 11 项一致）；未来 shared 新增 op 时回音不跟随，漂移方向 fail closed（Host capability_missing）不会越权，只是把协议变更误报成 CLI 过旧；建议直接引用 shared 常量。
+
+**本修订会话复跑的验证**（命令原样照录）：`node scripts/test-continuous.mjs --suite unit` → exit 0（44/44）；`pnpm --dir packages/services exec tsx --test "test/continuous/*.test.ts"` → exit 0（131/131，与处置 5 记录的 131/131 一致）；`pnpm --dir apps/zcode-cli/packages/bootstrap exec tsx --test "test/continuous/*.test.ts"` → exit 0（85/85，与处置 1/2 记录的 85/85 一致）；`node scripts/architecture/architecture-check.mjs check` → OK（violations 0/baseline 0/new 0）。
+
+**release gate：自主实施 flag 保持关闭**（live 与手机链路未完成、验收差距未关闭——CT-15 评审修复补记重申这是当前唯一正确状态）。
+
+## 3. 最终验证各 suite 真实结果
+
+口径：下表前 7 行为二期最终验证轮编排数据 `finalSuites`（除 unit 外本修订会话均未复跑，如实注明出处）；packaged 为 CT-16 ticket 轮单独取证；live 最终轮未运行。suite note「passed」对 e2e/mobile 的准确含义是「runner 健康完成、failed=0」，用例级 blocked 仍如实存在，不写成「用例全部通过」。
+
+| suite                       | 退出码       | 真实结果                                                                                                                                          |
+| --------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| unit                        | 0            | passed（44/44；本修订会话原命令复跑实测 exit 0）                                                                                                  |
+| integration                 | 0            | passed（编排数据 finalSuites；末次计数记录为 CT-14 时点 161/161，最终轮未附计数；本修订会话未复跑）                                               |
+| recovery                    | 0            | passed（编排数据；CT-14 记录 17/17；本修订会话未复跑）                                                                                            |
+| e2e                         | 0            | runner 健康、failed=0；用例级 **9 passed / 21 blocked / 0 skipped**（run15，CT-15 记录与编排数据一致；21 个 blocked 理由见下）                    |
+| mobile                      | 0            | E-21 **blocked**（外部 relay + 凭据边界；blocked→exit 0 的 §10 语义，源码事实断言在场，不冒充通过）                                               |
+| platform                    | 0            | passed（darwin-arm64 真实机器复核，CT-16 记录；本修订会话未复跑）                                                                                 |
+| regression                  | 0            | passed（E-26/E-27/E-28 真实通过，含 production build 真实导航后 tab 缺席 canary，CT-15 记录；本修订会话未复跑）                                   |
+| packaged（CT-16 ticket 轮） | 0            | 9 passed / 0 failed / 0 blocked（unpacked .app 真实打包形态；全新构建轮 run3 与复核轮 run4/5/6 均通过；本修订会话未复跑）                         |
+| live                        | 最终轮未执行 | CT-16 ticket 轮 `--allow-live` 真实执行 exit 0 / 状态 **blocked**（无 `ZCODE_E2E_LIVE_PROVIDER_KEY`，三用例如实 blocked，不用模拟替代、不输凭据） |
+
+编排层 `finalConverged=true` 仅对应上表前 7 个 suite 全部 exit 0、无 failed/missing，及 fmt/CLI lint 基线归属清点完成；live/packaged 不在该轮清单内，「收敛」不等于「全量验收完成」。
+
+### e2e/mobile/regression：从一期 blocked/失败到二期真实断言的过程
+
+- 一期终点（上文一期 §3）：e2e suite 状态 blocked（E 用例逐个 blocked 于 Host 装配缺席，仅 E-28 半边两个探针真实执行）；mobile E-21 blocked；regression 最终验证轮未提供、仅有提交记录转述。
+- 转折点是 CT-12 落地 window-scoped Local Host 装配（env 门 `ZCODE_CONTINUOUS_HOST_ENABLED`，默认关闭形态不变）；CT-15 把 e2e 重写为**真实 UI 驱动**：窗口就绪预检三形态（欢迎/登录页、主界面、首次运行引导页）、稳定 test id 驱动、停止确认框与继续确认模态真实点击收口，断言升级为三层事实（UI test id、tasks-index 只读 SQL、provider 计数/Git/worktree/进程日志）。
+- run1…run15 的迭代失败全部定位为可修根因并逐项修复（欢迎页/引导页 gating、providerFamilyDomain 缺席、session id 守卫、store 漏传、金丝雀 Electron 形态与期限、父会话 FK、fixture 路径/barrier 缺省期限/git argv 拼接/确认框/并发 blocked 登记覆盖），终态 run15 exit 0。
+- regression：E-26/E-27/E-28 真实通过；此前「E-28 断言失败被 entryReport 漏记、报告显示 passed 而退出码 1」的缺陷由 `recordCaseFailure` + 编排层状态交叉核对修复，报告与退出码一致。
+- mobile：E-21 仍 blocked，但已从占位升级为逐项调查结论（外部 relay 不在仓库——`packages/server` remote/\* 为 SSH/Docker 远程 workspace；连真实 relay 需个人凭据被测试文档禁止）+ 真实源码事实断言，不冒充通过。
+- 21 个 e2e blocked 属实且由 release gate 消费：候选路径 10 个（E-03…E-07/E-12/E-13/E-14/E-20/E-33，需声明测试命令授权面与 builder/reviewer 完整脚本序列——授权面第一版为空，候选 fail closed 不 done/不提交）；时钟类 6 个（E-09/E-10/E-18/E-29/E-30/E-31，装配级 clock 接缝已就位，跨进程测试桥仍需设计且生产不暴露）；传输注入 2 个（E-17/E-19）；矩阵/历史 2 个（E-22/E-23）与回答链 1 个（E-32）依赖前述。
+
+## 4. 已知基线失败（与本 feature 无关，单列）
+
+- **`pnpm fmt:check`**：二期最终验证轮清点既有基线失败文件 **34 个**，属于本 feature 的 **0 个**（编排数据 finalNotes；一期汇总记录为 33，两处均为各自时点编排清点口径，本修订会话未复跑 fmt:check）。二期门禁以「全部改动文件逐个 `oxfmt --check`」覆盖，两轮门禁修复（CT-12/CT-16）均为纯格式，内容零变化。
+- **CLI lint（apps/zcode-cli）**：最终验证轮错误 **0 条**，属于本 feature 文件的 **0 条**；二期基线时点记录的 2 条既有 max-lines 错误按「与本 feature 无关、不新增」处理（编排数据 baseline/finalNotes；一期 `830bd17` 曾以 `apps/zcode-cli/.oxlintrc.json` 阻断根配置继承修复该类基线，本修订会话确认该文件仍在）。本修订会话未复跑 CLI lint。
+- **desktop scheduler/main tsconfig 基线错误**：沿用一期 §4（CT-16 记录确认未触碰，不在任何「通过」声明覆盖内）。
+
+## 5. 未覆盖范围（未执行，不视为通过）
+
+1. **live suite**：最终验证轮未运行 `--allow-live`（需真实测试模型凭据）。CT-16 ticket 轮曾真实执行并如实 blocked；真实模型质量（usage/compaction/sidecar/限流/unknown/无进展/同轮继续）全部未验证。
+2. **Windows/Linux 平台 suite**：无可用机器，observe_only 未验证，不外推（autonomous 登记只随真实机器 platform suite 证据）；平台执行验证仅 darwin-arm64，darwin-x64 亦未测。
+3. **安装器分发形态**：dmg/zip 未测（`--dir` unpacked .app 已测）；`ZCODE_SKIP_REMOTE_ASSETS=1`——远程资产不进打包产物（D4 第一版仅本地 workspace，远程执行不在验收面）。
+4. **正向本地提交链**（验证通过候选 → Program 分支提交）：未驱动——授权面声明测试命令第一版为空，候选 fail closed 不 done/不提交（已驱动边界为「无验证候选零提交 + 原仓库字节不变」）；`continuous-authorize` 端口与模板 v3 已在 `4bcf682` 接线，端到端正向提交仍待授权面扩展后真实验证。
+5. **e2e 时钟类/候选路径 21 个用例与 E-21 手机链路**：维持 blocked（理由与证据引用见二期 §3）。
+6. **真实 provider 定价来源**：仍缺席——价格快照为注入面（文件缺席 fail closed），CT-13 只增加版本严格校验。
+7. **本修订会话（汇总增补）的复核边界**：实际执行了 unit suite（44/44）、services 全量 continuous 测试（131/131）、bootstrap 全量 continuous 测试（85/85）、architecture check（0 violations）、git log/diff 与关键代码点核对；integration/recovery/e2e/mobile/platform/regression/packaged/live 均未复跑，其结论出处已在二期 §3 逐条注明。
+
+## 6. 当前状态与开启门槛（二期终点）
+
+- 功能默认关闭不变：`ZCODE_CONTINUOUS_HOST_ENABLED` 未开 → channel 未注册 → tab 隐藏；CLI 侧未登记 run 被守卫拒绝（fail closed）；**自主实施 flag（release gate）保持关闭**。
+- 开启前仍需处理：二期 §2 遗留未决 2 项（挂起终态改写竞态、登记回音词表重复）、声明测试命令授权面扩展（候选正向链）、跨进程测试时钟桥、E-21 手机链路（外部 relay/凭据）、live 真实模型验收。
