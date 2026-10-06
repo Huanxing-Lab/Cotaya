@@ -112,6 +112,36 @@ interface ManagedRunRegistration {
   decisionGate: ReturnType<typeof createContinuousDecisionGate>;
 }
 
+/** 能力协商回音词表（与 CONTINUOUS_CLI_MANAGED_OPERATIONS 同一份；含 interrupt）。 */
+const REGISTRATION_ECHO_OPERATIONS = [
+  "register",
+  "submitOnce",
+  "inspect",
+  "resume",
+  "stop",
+  "interrupt",
+  "waitForQuiescence",
+  "readReports",
+  "suspendAtSafeBoundary",
+  "resumeSuspended",
+  "inspectHealth",
+] as const;
+
+/**
+ * 稳定序列化（键排序）：同轮重发的载荷比较必须不受字段顺序影响——Host 每次经
+ * buildManagedRunRegistration 重新构造并序列化，跨进程往返后顺序不构成身份。
+ */
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, item]) => item !== undefined)
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+    return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
 export class ContinuousRegistrationError extends Error {
   constructor(
     readonly reason: "registration_invalid" | "capability_missing",
@@ -185,6 +215,33 @@ export function createContinuousManagedRunStore(deps: ContinuousManagedRunStoreD
         "registration_invalid",
         `登记的 leaseEpoch ${payload.leaseEpoch} 低于已登记的 ${existing.payload.leaseEpoch}`,
       );
+    }
+    // 评审修复（同轮重发不重建）：resume/resumeSuspended/interrupt 传输前 wire 端口都会重发
+    // 同轮登记（epoch 不变）。此前重发无条件新建 evidence registry 与 grant holder 并整体
+    // 覆盖——同轮挂起→用户继续后，挂起前已完成的 tests/browser/diff 证据被清空、候选占用
+    // 丢失，提交门必拒 tests_missing/diff_missing（违反 §6.1「允许已授权的在途操作到达安全
+    // 边界并保存结果」）。同 epoch 同载荷 → 幂等返回（保留已登记端口对象）；同 epoch 载荷
+    // 变化 → 拒绝（冻结事实不得中途变化，§6「resume 不换脚本/配置」）；更高 epoch（新执行
+    // 权接管）才允许重建。
+    if (existing && payload.leaseEpoch === existing.payload.leaseEpoch) {
+      if (canonicalJson(payload) !== canonicalJson(existing.payload)) {
+        throw new ContinuousRegistrationError(
+          "registration_invalid",
+          `同轮（leaseEpoch ${payload.leaseEpoch}）登记的冻结事实与已登记不一致，不能中途变化`,
+        );
+      }
+      deps.logger?.info?.("Continuous managed run re-registered (idempotent)", {
+        event: "continuous.registration.reapplied",
+        module: "bootstrap.app",
+        runId: payload.workflowRunId,
+        cycleId: payload.cycleId,
+        leaseEpoch: payload.leaseEpoch,
+      });
+      return {
+        type: "continuousRegisterManagedRun" as const,
+        operations: [...REGISTRATION_ECHO_OPERATIONS],
+        workflowRunId: payload.workflowRunId,
+      };
     }
     if (
       !Number.isSafeInteger(payload.requestCaps.inputTokenCap) ||
@@ -308,19 +365,7 @@ export function createContinuousManagedRunStore(deps: ContinuousManagedRunStoreD
     });
     return {
       // 能力协商回音：与 CONTINUOUS_CLI_MANAGED_OPERATIONS 同一份词表（含 interrupt）。
-      operations: [
-        "register",
-        "submitOnce",
-        "inspect",
-        "resume",
-        "stop",
-        "interrupt",
-        "waitForQuiescence",
-        "readReports",
-        "suspendAtSafeBoundary",
-        "resumeSuspended",
-        "inspectHealth",
-      ],
+      operations: [...REGISTRATION_ECHO_OPERATIONS],
       type: "continuousRegisterManagedRun" as const,
       workflowRunId: payload.workflowRunId,
     };
@@ -361,6 +406,9 @@ export function continuousManagedCyclesOptionFor(
     modelBudgetGateFor: (runId) => store.modelBudgetGateFor(runId),
     decisionGateFor: (runId) => store.decisionGateFor(runId),
     executionPolicyFor: (runId) => store.executionPolicyFor(runId),
+    // 评审修复（CT-12 遗留缺口）：冻结并发上限随装配传给执行适配器（submitOnce 前登记
+    // 已到，适配器按 Run ID 现读并传入引擎 caps，不能退回 CPU 默认值）。
+    maxConcurrentActorsFor: (runId) => store.maxConcurrentActorsFor(runId),
   };
 }
 

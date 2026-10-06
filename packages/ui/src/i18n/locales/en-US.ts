@@ -6945,6 +6945,8 @@ const enUS: Record<string, string> = {
   "continuous.usage.unsettled": "reserved",
   "continuous.currentCycle.title": "Current cycle",
   "continuous.currentCycle.openRun": "Open run timeline",
+  "continuous.currentCycle.notRecoverable":
+    "This cycle's execution is not recoverable (the run errored; continuation cannot resume the same run). You can end this cycle (stop current cycle) and explicitly start a new one; verified commits, ledger entries and history are all preserved.",
   "continuous.currentCycle.active": "Active execution",
   "continuous.currentCycle.blocked": "Confirmed normal wait",
   "continuous.currentCycle.lastProgress": "Last progress",

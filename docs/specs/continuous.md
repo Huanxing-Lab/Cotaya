@@ -366,6 +366,7 @@ Decision
  -> 结构化候选与证据
  -> 服务分类与依赖检查
  -> 选择最多3项自主候选
+ -> 逐项：可信授权端口取得写入许可
  -> 单builder逐项实施
  -> 可执行测试
  -> 浏览器/视觉验证
@@ -373,6 +374,8 @@ Decision
  -> 每项本地提交
  -> 最终报告
 ```
+
+候选写入许可的取得路径：固定版本骨架在每个候选实施 ask 之前经保留命令 `continuous-authorize`（可信工具端口）向 CLI 进程内的 grant holder 请求授权（candidateId + targetPaths）；授权是控制面事实——actor/模型不能自行声称或触发（`world.run` 只在骨架代码里调用，actor 只 respond ask）。端口先释放前一候选的非撤销占用（终局后让出，与 fixture/产品同一顺序 release → authorize），被 Decision 撤销的候选按终局拒绝（candidate_revoked）。授权路径不扩张 Scope：写路径仍在 allowed/forbidden/protected 与平台能力之下判定。
 
 模型不能直接声称验证通过：必须附命令、退出码、浏览器断言/截图和 reviewer 结果。目标应用无法启动或浏览器不可用时记录 unverified，该候选不能 done/提交；继续处理可独立验证的其他候选。
 
@@ -763,3 +766,31 @@ Host 完整装配、实际 UI 启动、手机恢复和 live 验收按新增后�
 此前只读调研：freshness 通过；lint 0 errors/70 warnings；typecheck --dry 只检查构建计划，不是类型通过。本次文档阶段不执行功能测试，不把计划标为通过。没有 Continuous 实现，E2E 状态均为 planned。
 
 验收完整清单、测试命令、故障注入和证据格式在 [测试文档](../testing/continuous.md)。所有第一版产品边界已由 D1-D4 和本文规则确定，无待定产品项。
+
+### 2026-10-06：二期装配的评审修复边界（独立评审发现，CT-11…16 之后）
+
+独立评审在 CT-16 后发现的装配缺口与修复后的固定规则：
+
+1. **候选授权的唯一产品入口**：受管模板骨架在每个候选实施 ask 之前经保留命令
+   `continuous-authorize`（可信工具端口）请求 CLI 进程内 grant holder 的写入许可
+   （candidateId + targetPaths）。端口先非撤销释放前一候选的占用（与提交端口的
+   releaseActive 同一语义）再授权；被 Decision 撤销的候选按终局拒绝。授权不扩张
+   Scope：写路径仍在 allowed/forbidden/protected 与平台能力之下判定。
+2. **冻结并发上限传入引擎 caps**：登记处按 Run ID 持有 budget.maxConcurrentActors
+   （默认 10），执行适配器在受控提交时现读并随 submitOnce 传入引擎；不得退回 CPU
+   天花板推导值。更低的机器天花板仍按钳制语义生效并在 UI 展示（上限不是保证）。
+3. **同轮登记重发幂等**：resume/resumeSuspended/interrupt 传输前的登记重发（同
+   runId、同 leaseEpoch、同载荷）不重建 evidence registry 与 grant holder——挂起前
+   已产出的验证证据与候选占用必须存活到继续之后（§6.1「保存结果」）；同 epoch 载荷
+   变化按 registration_invalid 拒绝（冻结事实不得中途变化）；更高 epoch（新执行权）
+   才允许重建。
+4. **CLI 拒绝通知的挂起落库**：`suspendAtSafeBoundary` wire 往返期间同一监督循环可能
+   已推进报告游标与健康列——挂起落库前重读最新行，仅当仍为同 leaseEpoch 的非挂起行时
+   合并挂起字段（与「探活持久化只更新健康列并以 running+同 leaseEpoch 为原子条件」
+   同一条写纪律）。
+5. **反向请求不得悬挂**：method 已按 Continuous 词表认定后没有第二个接收者——装配合
+   handler 缺席/dispose 后的 handled=false 必须立即按内部错误应答（CLI 侧折算
+   ledger_unreachable fail closed），不得让在飞请求悬挂到传输超时。
+6. **装配级时钟接缝**：桌面 Host 装配工厂接受可选 clock 注入（测试文档 §9 的既有
+   要求；生产调用点不传、恒为真实系统时钟）——这是测试组合注入面，与「生产构建不
+   暴露故障注入或测试桥」不冲突。

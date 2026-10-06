@@ -13,7 +13,7 @@ import {
   formatContinuousTokens,
   formatContinuousUsdMicros,
 } from "@/settings/continuous/continuousFormat.js";
-import { TID_CONTINUOUS_OPEN_RUN } from "@zcode/shared";
+import { TID_CONTINUOUS_CYCLE_NOT_RECOVERABLE, TID_CONTINUOUS_OPEN_RUN } from "@zcode/shared";
 
 export interface ContinuousProgramFactsProps {
   detail: ContinuousProgramDetailResult;
@@ -120,6 +120,17 @@ export function ContinuousProgramFacts({ detail, onOpenRun }: ContinuousProgramF
                 #{currentCycle.sequence} ·{" "}
                 {continuousCycleStatusLabel(intl.formatMessage, currentCycle.status)}
               </span>
+              {/* CT-13 验收（评审修复补齐，CT-15 委派项）：旧版已经 errored 的预算轮显示
+                  不可恢复；结束旧轮（立即停止）与新开轮（Run now）入口是本页既有按钮。 */}
+              {currentCycle.executionRecoverable === false ? (
+                <p
+                  role="alert"
+                  data-testid={TID_CONTINUOUS_CYCLE_NOT_RECOVERABLE}
+                  className="text-ui-sm leading-5 text-destructive"
+                >
+                  {intl.formatMessage({ id: "continuous.currentCycle.notRecoverable" })}
+                </p>
+              ) : null}
               <span className="text-ui-sm text-foreground-subtle">
                 {continuousHealthLabel(intl.formatMessage, currentCycle.healthState)}
               </span>

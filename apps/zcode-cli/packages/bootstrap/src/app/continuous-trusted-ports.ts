@@ -38,6 +38,10 @@ export const CONTINUOUS_TRUSTED_COMMANDS = [
   "continuous-diff",
   "continuous-browser",
   "continuous-commit",
+  // 评审修复（候选授权接线）：固定版本骨架在每个候选实施 ask 前经本命令取得写入许可
+  //（规格 §7「逐项：可信授权端口取得写入许可」）。此前产品装配里 grant holder 恒为空，
+  // 写路径全部 candidate_inactive——CT-11 的提交验收只在测试 fixture 手动 authorize 下成立。
+  "continuous-authorize",
 ] as const;
 
 /**
@@ -350,6 +354,40 @@ export function createContinuousTrustedPorts(
     return { status: "ok" as const, ...checked, widths, artifacts, ...identity };
   };
 
+  /**
+   * 可信候选授权（评审修复：候选授权接线）：固定版本骨架在实施每个候选前调用——授权是
+   * 控制面事实（grant holder 唯一所有者），actor/模型不能自行触发（world.run 只出现在
+   * 骨架代码，actor 只 respond ask）。
+   *
+   * 顺序与 CT-11 fixture 镜像的产品顺序一致：前一候选终局后先非撤销释放（releaseActive，
+   * 不进撤销集——被 Decision 撤销的候选按终局拒绝 candidate_revoked），再授权下一候选；
+   * 同一候选重发幂等。授权路径不扩张 Scope：写路径仍在 allowed/forbidden/protected 与
+   * 平台能力判定之下（continuous-execution-policy），本端口只持有「占用」事实。
+   */
+  const runAuthorize = async (candidateKey: string, targetPaths: string[]) => {
+    await deps.policy.waitForAdmission();
+    if (targetPaths.length === 0 || targetPaths.some((path) => path.length === 0)) {
+      return { status: "refused" as const, reason: "candidate_paths_required" };
+    }
+    const active = deps.grants.activeGrant();
+    if (active !== null && active.candidateId !== candidateKey) {
+      // 前一候选已按模板到达终局（提交完成/被拒路径由 commit 端口释放；拒绝路径不经
+      // commit，由这里释放）——非撤销让出占用后授权下一候选。
+      deps.grants.releaseActive();
+    }
+    const decision = deps.grants.authorize({ candidateId: candidateKey, targetPaths });
+    if (!decision.ok) {
+      return { status: "refused" as const, reason: decision.reason };
+    }
+    deps.logger?.info?.("Continuous candidate authorized by skeleton", {
+      event: "continuous.trusted.authorize",
+      module: "bootstrap.app",
+      candidateKey,
+      runId: deps.identity().runId,
+    });
+    return { status: "ok" as const, candidateKey, targetPaths };
+  };
+
   /** 可信本地提交：授权 + 三阶段证据门 + 工作区复查 + 变更量上限。 */
   const runCommit = async (
     candidateKey: string,
@@ -462,6 +500,17 @@ export function createContinuousTrustedPorts(
                 ? undefined
                 : (JSON.parse(args[2]) as { review?: { outcome?: string; findings?: string[] } });
             return envelope(await runCommit(candidateKey, message, payload), startedAt);
+          }
+          case "continuous-authorize": {
+            // args[1] = JSON.stringify({ targetPaths })（与 continuous-browser 的 JSON 参数同风格）。
+            const payload =
+              args[1] === undefined
+                ? undefined
+                : (JSON.parse(args[1]) as { targetPaths?: unknown });
+            const targetPaths = Array.isArray(payload?.targetPaths)
+              ? (payload!.targetPaths as unknown[]).map((path) => String(path))
+              : [];
+            return envelope(await runAuthorize(candidateKey, targetPaths), startedAt);
           }
           default:
             throw new Error("unreachable trusted command");

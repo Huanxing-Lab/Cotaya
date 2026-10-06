@@ -57,6 +57,14 @@ export interface ManagedRunSubmitRequest {
   parentSessionId: string;
   args?: Record<string, unknown>;
   name?: string;
+  /**
+   * 评审修复（CT-12 遗留缺口）：冻结配置的并发上限（budget.maxConcurrentActors，默认 10）
+   * 传入引擎 caps——此前 managed submit 不带并发请求，run 的 caps 起于 CPU 天花板
+   * （min(16, availableParallelism−2)），在 ≥12 核机器上会越过「最多 10 个 actor 并发」
+   * 的固定产品规则（ticket CT-12：「不能退回 CPU 默认值」）。机器天花板更低时仍按
+   * clampRunConcurrency 钳制（上限不是保证，§9「不能隐藏较低的机器限制」）。
+   */
+  maxConcurrency?: number;
   trace: TraceContext;
 }
 
@@ -148,6 +156,8 @@ export function submitManagedDynamicWorkflowRun(
     parentSessionId: request.parentSessionId,
     ...(request.args === undefined ? {} : { args: request.args }),
     ...(request.name === undefined ? {} : { name: request.name }),
+    // 冻结配置的并发上限（评审修复：不能退回 CPU 默认值，见 ManagedRunSubmitRequest 注释）。
+    ...(request.maxConcurrency === undefined ? {} : { maxConcurrency: request.maxConcurrency }),
     trace: request.trace,
   });
   return { ok: true, runId: request.runId, reused: false };

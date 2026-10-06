@@ -2135,6 +2135,9 @@ export function createZCodeAgentService(
         // CT-12：Continuous 反向请求（continuous/ledger/*、continuous/budget/suspend、
         // continuous/decision/escalate）先经装配的 handler——method 词表判断是同步的，
         // 普通会话请求零行为变化；handler 异常按内部错误应答（不吞成挂起）。
+        // 评审修复：method 已按词表认定为 Continuous 反向请求后没有第二个接收者，
+        // handler 缺席/handled=false（如 dispose 后的装配置空）同样必须立即按内部错误
+        // 应答——否则 CLI 侧在飞请求悬挂到传输超时（注释承诺的「不吞成挂起」同样适用）。
         if (
           options?.continuousAgentRequestHandler &&
           isContinuousAgentRequestMethod(request.method)
@@ -2159,7 +2162,15 @@ export function createZCodeAgentService(
                 },
               };
             }
-            if (!outcome.handled) return;
+            if (!outcome.handled) {
+              await client
+                .respondError(request.id, {
+                  code: -32603,
+                  message: `continuous agent request handler unavailable: ${request.method}`,
+                })
+                .catch(() => {});
+              return;
+            }
             if (outcome.error) {
               await client.respondError(request.id, outcome.error).catch(() => {});
               return;

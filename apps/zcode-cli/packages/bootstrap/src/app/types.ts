@@ -215,6 +215,12 @@ export interface ZCodeAppOptions {
      * （模型预算/IO/挂起等待共享同一本地准入）。登记在 submitOnce 前到达，恢复/继续前重建。
      */
     store?: import("./continuous-registration.js").ContinuousManagedRunStore;
+    /**
+     * 评审修复（CT-12 遗留缺口）：冻结配置的并发上限查询（登记处持有）。执行适配器在
+     * submitOnce 时按 Run ID 现读并传入引擎 caps——「10 并发上限来自冻结配置，不能退回
+     * CPU 默认值」（ticket CT-12）。缺省不传（天花板兜底），fixture 直连不受影响。
+     */
+    maxConcurrentActorsFor?: (runId: string) => number | undefined;
   };
   /** 首次真实用户执行或 cold-resume fallback 时解析一次，之后由 app 生命周期缓存。 */
   resolveInitialBashShellSelection?: () => Promise<ExecutionShellSelection | undefined>;

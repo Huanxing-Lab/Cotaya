@@ -39,6 +39,9 @@ export const TID_CONTINUOUS_RESUME = "continuous-resume";
 export const TID_CONTINUOUS_STOP_CURRENT = "continuous-stop-current";
 export const TID_CONTINUOUS_CYCLE_ROW = "continuous-cycle-row";
 export const TID_CONTINUOUS_OPEN_RUN = "continuous-open-run";
+// CT-13 委派 CT-15 的 UI 呈现（评审修复补齐）：旧版 errored 预算轮的不可恢复提示
+//（currentCycle.executionRecoverable === false；「结束旧轮/显式新开轮」入口为既有按钮）。
+export const TID_CONTINUOUS_CYCLE_NOT_RECOVERABLE = "continuous-cycle-not-recoverable";
 
 // Decision Queue（回答/驳回都带 version；E-04/E-06/E-07 的落点）
 export const TID_CONTINUOUS_DECISION_QUEUE = "continuous-decision-queue";

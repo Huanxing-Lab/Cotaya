@@ -25,9 +25,11 @@ import {
 } from "@zcode/shared/continuous-protocol";
 import { uiUxV1Template } from "@zcode/shared/continuous-templates";
 import { assembleContinuousHost } from "../../src/continuous/adapters/hostAssembly.js";
+import { suspendCycleForAgentNotification } from "../../src/continuous/application/supervisorSettlement.js";
 import type { ContinuousAgentTransport } from "../../src/continuous/application/agentTransport.js";
 import type { WorkspacePreparationPort } from "../../src/continuous/application/ports.js";
-import type { Program } from "../../src/continuous/domain/types.js";
+import type { Cycle, Program } from "../../src/continuous/domain/types.js";
+import { SqliteContinuousRepository } from "../../src/continuous/adapters/sqliteRepository.js";
 
 const TEMPLATE = uiUxV1Template();
 const PRICING = {
@@ -961,5 +963,101 @@ test("CT-13 旧版 errored 预算轮：显示不可恢复；用户结束旧轮�
     await waitFor(() => fixture.peer.commands.length > 0);
   } finally {
     fixture.dispose();
+  }
+});
+
+test("CT-13 拒绝通知挂起：wire 往返期间推进的游标/健康列不被旧快照整行覆盖（评审修复）", async () => {
+  // 手工 repo + running Cycle 行（不走 runNow/supervisor——本用例只验证挂起落库的写纪律，
+  // 不引入监督循环的异步尾巴）。
+  const repo = new SqliteContinuousRepository(migratedDatabasePath(), 30_000);
+  await repo.ensureReady();
+  try {
+    const now = Date.UTC(2026, 9, 5, 6, 0, 0);
+    const program: Program = {
+      id: nextId("program"),
+      workspaceKey: "/repos/app",
+      workspacePath: "/repos/app",
+      revision: 1,
+      goal: "持续改进桌面 UI",
+      timeZone: "Asia/Shanghai",
+      budget: { ...CONTINUOUS_DEFAULT_BUDGET },
+      cadence: { ...CONTINUOUS_DEFAULT_CADENCE },
+      scope: { allowedPaths: ["src"], forbiddenPaths: [], forbiddenCapabilities: [] },
+      decisionPolicy: { unknownToDecision: true },
+      authorization: {
+        revision: 1,
+        templateHash: TEMPLATE.scriptHash,
+        grantedAt: "2026-10-05T00:00:00Z",
+      },
+      templateId: TEMPLATE.templateId,
+      templateVersion: TEMPLATE.templateVersion,
+      templateHash: TEMPLATE.scriptHash,
+      status: "active",
+      consecutiveFailures: 0,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const cycle: Cycle = {
+      id: nextId("cycle"),
+      programId: program.id,
+      sequence: 1,
+      triggerKey: "manual-1",
+      trigger: { kind: "manual" },
+      status: "running",
+      configurationSnapshot: {},
+      scriptText: "return {}",
+      scriptHash: "b".repeat(64),
+      executionSessionId: nextId("session"),
+      workflowRunId: "run-race-1",
+      traceId: nextId("trace"),
+      leaseEpoch: 1,
+      resumeAttempts: 0,
+      activeDurationMs: 0,
+      normalBlockedDurationMs: 0,
+      healthState: "progressing",
+      reportCursor: 0,
+      startedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await repo.insertProgram(program);
+    await repo.insertCycle(cycle);
+    // 构造真实竞态窗口：suspendAtSafeBoundary 的 wire 往返（秒级）期间，同一监督循环
+    // 推进了 reportCursor（报告导入）与健康列（探活持久化，supervisorWatch 的
+    // ingest/probeOnce 写路径）。修复前：挂起落库用入口快照整行回写，游标回退、健康列
+    // 被旧值覆盖；修复后：落库前重读最新行合并挂起字段。
+    const raceExecution = {
+      suspendAtSafeBoundary: async () => {
+        const mid = (await repo.getCycle(cycle.id))!;
+        await repo.saveCycle({
+          ...mid,
+          reportCursor: 42,
+          healthState: "normal_wait",
+          lastProbeAt: 12345,
+          updatedAt: 12345,
+        });
+      },
+    };
+    const requestId = await suspendCycleForAgentNotification(
+      { repository: repo, execution: raceExecution, clock: { now: () => 99999 } },
+      {
+        cycle,
+        program,
+        code: "budget_denied",
+        message: "竞态窗口内的拒绝通知",
+      },
+    );
+    const suspended = (await repo.getCycle(cycle.id))!;
+    assert.equal(suspended.status, "suspended");
+    assert.equal(suspended.pendingContinuationRequestId, requestId);
+    assert.equal(
+      suspended.reportCursor,
+      42,
+      "挂起落库不回退报告游标（itemKey 去重兜底不应成为常态）",
+    );
+    assert.equal(suspended.healthState, "normal_wait", "挂起落库不覆盖健康列");
+    assert.equal(suspended.lastProbeAt, 12345, "挂起落库不回退探活时刻");
+  } finally {
+    repo.close();
   }
 });

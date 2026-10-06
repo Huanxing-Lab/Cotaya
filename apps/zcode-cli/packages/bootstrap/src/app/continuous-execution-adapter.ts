@@ -101,6 +101,12 @@ export interface ContinuousExecutionAdapterDeps {
     ref: ExecutionReference,
     executionPath: string | undefined,
   ) => void | Promise<void>;
+  /**
+   * 评审修复（CT-12 遗留缺口）：按 Run ID 查登记处冻结的并发上限，随 submitOnce 传入
+   * 引擎 caps（ticket CT-12「10 并发上限来自冻结配置并传入引擎 caps，不能退回 CPU 默认
+   * 值」）。缺省（未登记/未注入）不传——与既有 fixture 直连适配器的行为一致。
+   */
+  maxConcurrencyFor?: (runId: string) => number | undefined;
 }
 
 /** 单 Cycle 的适配器自有状态：epoch 高水位 + 准许状态。 */
@@ -208,12 +214,16 @@ export function createContinuousExecutionAdapter(
         );
       }
       await deps.beforeSubmit?.(input);
+      // 冻结并发上限（评审修复）：登记先于 submitOnce（wire 执行端口的固定顺序），
+      // 这里按 Run ID 现读登记处；未登记/未注入时不传（CPU 天花板兜底，fixture 同旧）。
+      const maxConcurrency = deps.maxConcurrencyFor?.(input.workflowRunId);
       const result = await deps.runService.submitOnce({
         runId: input.workflowRunId,
         scriptText: input.scriptText,
         cwd: input.executionPath,
         parentSessionId: input.executionSessionId,
         ...(input.args === undefined ? {} : { args: input.args }),
+        ...(maxConcurrency === undefined ? {} : { maxConcurrency }),
         name: `continuous-${input.programId}`,
         // traceId 的品牌转换沿用仓库惯例（server-operations 等 wire 边界同款）：
         // 字符串形状已在 wire schema（continuous-protocol 的 nonEmptyString）校验。

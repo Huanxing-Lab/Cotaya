@@ -124,13 +124,21 @@ export async function suspendCycleForAgentNotification(
   }
   const requestId = (existing ?? (await deps.repository.getPendingContinuationRequest(cycle.id)))!
     .id;
+  // 评审修复（挂起写入的整行覆盖竞态）：入口读取的 cycle 行在 suspendAtSafeBoundary 的
+  // wire 往返（秒级窗口）内可能已被同一监督循环推进（reportCursor 经报告导入、健康列经
+  // 探活持久化）——用入口快照整行回写会把游标/健康列打回旧值。与 applyHealthAssessment
+  // 同一纪律：落库前重读最新行，仅当仍为同 leaseEpoch 的非挂起行时合并挂起字段（保留
+  // 游标与健康列的最新事实；已被接管/已挂起的行不重复写）。
   if (cycle.status !== "suspended") {
-    await deps.repository.saveCycle({
-      ...cycle,
-      status: "suspended",
-      pendingContinuationRequestId: requestId,
-      updatedAt: now,
-    });
+    const latest = await deps.repository.getCycle(cycle.id);
+    if (latest && latest.leaseEpoch === cycle.leaseEpoch && latest.status !== "suspended") {
+      await deps.repository.saveCycle({
+        ...latest,
+        status: "suspended",
+        pendingContinuationRequestId: requestId,
+        updatedAt: now,
+      });
+    }
   }
   if (program.status !== "paused") {
     await deps.repository.saveProgram({

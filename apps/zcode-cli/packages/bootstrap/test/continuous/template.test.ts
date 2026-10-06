@@ -59,13 +59,20 @@ test("模板定义：版本化注册表、稳定 hash、只经本文件暴露（
   assert.equal(template.templateVersion, CONTINUOUS_TEMPLATE_UI_UX_V1_VERSION);
   assert.match(template.scriptHash, /^[0-9a-f]{64}$/);
   assert.equal(template.scriptHash, uiUxV1Template().scriptHash);
-  assert.equal(CONTINUOUS_TEMPLATES.length, 1);
+  // 评审修复（候选授权接线）：注册表保留 v3（现行）与 v2（冻结副本）两个条目——
+  // 授权绑定 v2 hash 的既有 Program 按旧条目继续 resolve（规格 §6 不静默换脚本）。
+  assert.equal(CONTINUOUS_TEMPLATES.length, 2);
   assert.equal(
     resolveContinuousTemplate({
       templateId: "ui-ux-v1",
       templateVersion: CONTINUOUS_TEMPLATE_UI_UX_V1_VERSION,
     })?.scriptHash,
     template.scriptHash,
+  );
+  assert.notEqual(
+    resolveContinuousTemplate({ templateId: "ui-ux-v1", templateVersion: "2" }),
+    null,
+    "v2 冻结条目保留（旧 Program 按原 hash resolve）",
   );
   assert.equal(resolveContinuousTemplate({ templateId: "ui-ux-v1", templateVersion: "9" }), null);
   assert.equal(resolveContinuousTemplate({ templateId: "missing", templateVersion: "1" }), null);
@@ -104,8 +111,6 @@ interface ProviderHarness {
   createdSessions: Array<{ actorName: string; sessionId: string; instructions?: string }>;
   /** 浏览器证据提供方的脚本化状态（candidateKey → outcome）。 */
   setBrowserOutcome(candidateKey: string, outcome: "passed" | "failed" | "unverified"): void;
-  /** 候选写入许可（builder 实施 ask 时授权——与产品装配同一顺序）。 */
-  authorizeCandidate(candidateId: string, targetPaths: string[]): void;
   dispose(): void;
 }
 
@@ -143,9 +148,8 @@ function runArgv(cwd: string, file: string, args: string[]): ScriptedExecutionRe
   }
 }
 
-/** fixture 控制面：脚本化 actor 在实施 ask 时驱动（授权/浏览器证据/期望退出码）。 */
+/** fixture 控制面：脚本化 actor 在实施 ask 时驱动（浏览器证据/期望退出码）。 */
 interface FixtureControl {
-  authorizeCandidate(candidateId: string, targetPaths: string[]): void;
   setBrowserOutcome(candidateKey: string, outcome: "passed" | "failed" | "unverified"): void;
   setTestExitCode(code: number): void;
 }
@@ -249,12 +253,8 @@ function makeProviderHarness(
   const worldPorts = guardContinuousActorIo(policy, { trusted, testRunner });
 
   const control: FixtureControl = {
-    // 产品 Host（CT-12 装配）在候选终局后释放占用、再授权下一个；fixture 在实施
-    // ask 时镜像同一顺序（release → authorize），builder 严格串行所以无并发窗口。
-    authorizeCandidate: (candidateId, targetPaths) => {
-      grants.releaseActive();
-      grants.authorize({ candidateId, targetPaths });
-    },
+    // 评审修复（候选授权接线）：授权由模板骨架经 continuous-authorize 可信端口驱动
+    //（fixture 与产品同一 trusted 端口装配）——fixture 不再手动 authorize。
     setBrowserOutcome: (candidateKey, outcome) => browserStates.set(candidateKey, outcome),
     setTestExitCode: (code) =>
       writeFileSync(join(root, "ct11-test-exit.json"), JSON.stringify({ code })),
@@ -324,12 +324,6 @@ function makeProviderHarness(
     adapter,
     createdSessions,
     setBrowserOutcome: (candidateKey, outcome) => browserStates.set(candidateKey, outcome),
-    // 产品 Host（CT-12 装配）在候选终局后释放占用、再授权下一个；fixture 在实施
-    // ask 时镜像同一顺序（release → authorize），builder 严格串行所以无并发窗口。
-    authorizeCandidate: (candidateId, targetPaths) => {
-      grants.releaseActive();
-      grants.authorize({ candidateId, targetPaths });
-    },
     dispose: () => {
       rmSync(root, { recursive: true, force: true });
       rmSync(outsideRoot, { recursive: true, force: true });
@@ -455,9 +449,9 @@ function scriptedActorsFor(
         const candidate = forKey(instructions);
         if (!candidate) throw new Error(`builder: 无法识别候选: ${instructions.slice(0, 120)}`);
         if (instructions.includes("实施候选")) {
-          // 实施 ask：授权该候选（与产品装配同一顺序：授权先于实施），真实写入目标
-          // 文件（可信 diff/提交端口据此看到真实改动），并布置本候选的验证结局。
-          control.authorizeCandidate(candidate.itemKey, [candidate.targetFile]);
+          // 实施 ask：授权已由骨架在 ask 之前经 continuous-authorize 端口完成（评审修复
+          // 后的产品路径）；这里真实写入目标文件（可信 diff/提交端口据此看到真实改动），
+          // 并布置本候选的验证结局。
           control.setTestExitCode(candidate.testsExitCode);
           control.setBrowserOutcome(candidate.itemKey, candidate.browserOutcome);
           if (candidate.implement) {

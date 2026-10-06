@@ -461,6 +461,61 @@ async function trustedRun(
   return JSON.parse(result.stdout.text) as Record<string, unknown>;
 }
 
+test("CT-11 候选授权端口（评审修复）：骨架经 continuous-authorize 取得/让出写入许可", async (t) => {
+  const harness = await makeTrustedHarness(t);
+  // ① 授权生效：builder 的写路径（activeCandidate）从该端口取得占用。
+  const granted = await trustedRun(harness, "continuous-authorize", [
+    "cand-auth-1",
+    JSON.stringify({ targetPaths: ["src"] }),
+  ]);
+  assert.equal(granted.status, "ok", JSON.stringify(granted));
+  assert.equal(harness.grants.activeGrant()?.candidateId, "cand-auth-1");
+  // 同一候选重发幂等（骨架重试不得自锁）。
+  const again = await trustedRun(harness, "continuous-authorize", [
+    "cand-auth-1",
+    JSON.stringify({ targetPaths: ["src"] }),
+  ]);
+  assert.equal(again.status, "ok");
+  // ② 空路径拒绝（授权必须有明确边界）。
+  const noPaths = await trustedRun(harness, "continuous-authorize", [
+    "cand-auth-1",
+    JSON.stringify({ targetPaths: [] }),
+  ]);
+  assert.equal(noPaths.status, "refused");
+  assert.equal(noPaths.reason, "candidate_paths_required");
+  // ③ 前一候选终局让出：授权下一候选时端口先非撤销释放再授权（与 fixture/产品同一顺序）。
+  const next = await trustedRun(harness, "continuous-authorize", [
+    "cand-auth-2",
+    JSON.stringify({ targetPaths: ["extra.ts"] }),
+  ]);
+  assert.equal(next.status, "ok", JSON.stringify(next));
+  assert.equal(harness.grants.activeGrant()?.candidateId, "cand-auth-2");
+  assert.equal(harness.grants.activeGrant()?.targetPaths[0], "extra.ts");
+  // ④ Decision 撤销是终局：被撤销候选不得再经端口授权。
+  harness.grants.revokeActive("deferred to decision fixture");
+  const revoked = await trustedRun(harness, "continuous-authorize", [
+    "cand-auth-2",
+    JSON.stringify({ targetPaths: ["extra.ts"] }),
+  ]);
+  assert.equal(revoked.status, "refused");
+  assert.equal(revoked.reason, "candidate_revoked");
+  // ⑤ 授权不扩张 Scope：写路径仍按 allowed/forbidden/protected 判定（越界路径照拒）。
+  const wide = await trustedRun(harness, "continuous-authorize", [
+    "cand-auth-3",
+    JSON.stringify({ targetPaths: ["not-covered.ts"] }),
+  ]);
+  assert.equal(wide.status, "ok", "授权本身只登记占用");
+  await writeFile(join(harness.worktree, "not-covered.ts"), "x\n", "utf8");
+  await assert.rejects(
+    harness.guard.fileSystemPort.writeTextFile({
+      path: join(harness.worktree, "not-covered.ts"),
+      content: "y",
+    }),
+    /not_in_allowed_paths/,
+    "授权路径之外的写入仍被 Scope 拒绝",
+  );
+});
+
 test("CT-11 提交门：缺任一阶段工具证据拒绝提交；模型/转述的 exitCode 0 不构成授权", async (t) => {
   const harness = await makeTrustedHarness(t);
   const key = "cand-1";

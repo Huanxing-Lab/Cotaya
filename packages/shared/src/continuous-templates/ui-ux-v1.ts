@@ -16,10 +16,16 @@
 
 import { createHash } from "node:crypto";
 import { CONTINUOUS_TEMPLATE_UI_UX_V1_SCRIPT } from "./ui-ux-v1-script.js";
+import { CONTINUOUS_TEMPLATE_UI_UX_V1_V2_SCRIPT } from "./ui-ux-v1-v2-script.js";
 
-/** 模板身份（Program.templateId/templateVersion 的值）。CT-11 起版本为 "2"（可信工具端口版）。 */
+/**
+ * 模板身份（Program.templateId/templateVersion 的值）。评审修复（候选授权接线）起版本为
+ * "3"（骨架授权端口版）；v2（可信工具端口版）按版本化纪律保留冻结条目。
+ */
 export const CONTINUOUS_TEMPLATE_UI_UX_V1_ID = "ui-ux-v1";
-export const CONTINUOUS_TEMPLATE_UI_UX_V1_VERSION = "2";
+export const CONTINUOUS_TEMPLATE_UI_UX_V1_VERSION = "3";
+/** v2（CT-11 可信工具端口版）的冻结版本号：授权绑定 v2 hash 的 Program 继续按旧条目 resolve。 */
+export const CONTINUOUS_TEMPLATE_UI_UX_V1_V2_VERSION = "2";
 
 /**
  * 模板脚本文本（实现在 ./ui-ux-v1-script.ts——max-file-lines 拆分，非边界变化）。
@@ -50,7 +56,7 @@ function defineTemplate(
   };
 }
 
-/** ui-ux-v1 模板（每次调用重算 hash，或缓存均可——内容是常量，hash 稳定）。 */
+/** ui-ux-v1 模板 v3（现行；每次调用重算 hash，或缓存均可——内容是常量，hash 稳定）。 */
 export function uiUxV1Template(): ContinuousTemplateDefinition {
   return defineTemplate(
     CONTINUOUS_TEMPLATE_UI_UX_V1_ID,
@@ -59,8 +65,20 @@ export function uiUxV1Template(): ContinuousTemplateDefinition {
   );
 }
 
+/** ui-ux-v1 模板 v2（冻结副本：内容升 v3 后按纪律保留，不改旧条目内容）。 */
+export function uiUxV1V2Template(): ContinuousTemplateDefinition {
+  return defineTemplate(
+    CONTINUOUS_TEMPLATE_UI_UX_V1_ID,
+    CONTINUOUS_TEMPLATE_UI_UX_V1_V2_VERSION,
+    CONTINUOUS_TEMPLATE_UI_UX_V1_V2_SCRIPT,
+  );
+}
+
 /** Host 注入 supervisor.templateSource 的注册表（新版本在此追加，不改旧条目内容）。 */
-export const CONTINUOUS_TEMPLATES: readonly ContinuousTemplateDefinition[] = [uiUxV1Template()];
+export const CONTINUOUS_TEMPLATES: readonly ContinuousTemplateDefinition[] = [
+  uiUxV1Template(),
+  uiUxV1V2Template(),
+];
 
 export function resolveContinuousTemplate(ref: {
   templateId: string;

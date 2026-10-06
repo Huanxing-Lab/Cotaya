@@ -6622,6 +6622,8 @@ const zhCN: Record<string, string> = {
   "continuous.usage.unsettled": "已保留",
   "continuous.currentCycle.title": "当前轮",
   "continuous.currentCycle.openRun": "打开 Run 时间线",
+  "continuous.currentCycle.notRecoverable":
+    "本轮执行已不可恢复（运行已 errored，继续确认无法恢复同一 Run）。可结束本轮（立即停止本轮）后显式新开一轮；已验证提交、账本与历史全部保留。",
   "continuous.currentCycle.active": "有效执行",
   "continuous.currentCycle.blocked": "已确认正常等待",
   "continuous.currentCycle.lastProgress": "最近进展",

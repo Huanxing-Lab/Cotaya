@@ -832,6 +832,13 @@ export async function createZCodeApp(options: ZCodeAppOptions): Promise<ZCodeApp
             runService: dynamicWorkflowRunPort,
             journal: dynamicWorkflowJournal,
             reportReader: dynamicWorkflowJournal,
+            // 评审修复（CT-12 遗留缺口）：冻结配置的并发上限传入引擎 caps——登记先于
+            // submitOnce（wire 执行端口固定顺序），这里按 Run ID 现读登记处。
+            ...(options.continuousManagedCycles?.maxConcurrentActorsFor === undefined
+              ? {}
+              : {
+                  maxConcurrencyFor: options.continuousManagedCycles.maxConcurrentActorsFor,
+                }),
             beforeSubmit: (input) =>
               requireContinuousManagedGuards(options.continuousManagedCycles, input),
             beforeResume: (ref, cwd) =>

@@ -139,8 +139,21 @@ export interface ContinuousHostRuntime {
   ): Promise<{ handled: boolean; result?: unknown; error?: { code: number; message: string } }>;
 }
 
+/**
+ * 装配级时钟注入面（评审修复）：测试文档 §9 早已规定「用可注入 Clock 控制 Supervisor 和
+ * 预算窗口」——这是代码级装配接缝（测试组合注入），不是生产运行时的故障注入开关：生产
+ * 调用点（host/index.ts）不传，恒为真实系统时钟，行为零变化。CT-15 记录曾把该接缝的缺席
+ * 归因于「生产不得暴露故障注入」的产品决策——与 ticket「允许测试时钟/故障注入（生产构建
+ * 不暴露）」和测试文档冲突，本接缝即两者的正确分界。
+ */
+interface ContinuousHostClock {
+  now(): number;
+  timeZone(): string;
+}
+
 export async function createContinuousHostRuntime(
   agentRef: AgentServiceRef,
+  options: { clock?: ContinuousHostClock } = {},
 ): Promise<ContinuousHostRuntime> {
   // tasks-index 迁移先于 continuous 表访问（TaskIndexRepo 的迁移幂等 additive；
   // 旧库既有表不受影响）。数据库路径与 Host 其它 Repo 同源。
@@ -148,12 +161,13 @@ export async function createContinuousHostRuntime(
   const migrationRepo = new TaskIndexRepo(databasePath);
   await migrationRepo.ensureReady();
   const pricing = await readContinuousPricingSnapshot();
+  const clock: ContinuousHostClock = options.clock ?? {
+    now: () => Date.now(),
+    timeZone: () => Intl.DateTimeFormat().resolvedOptions().timeZone,
+  };
   const assembled = await assembleContinuousHost({
     databasePath,
-    clock: {
-      now: () => Date.now(),
-      timeZone: () => Intl.DateTimeFormat().resolvedOptions().timeZone,
-    },
+    clock,
     transport: createAgentTransport(agentRef),
     pricing: () => pricing,
     requestCaps: () => REQUEST_CAPS,

@@ -231,9 +231,79 @@ test("CT-12 CLI：载荷校验拒绝（上限非正/价格表为空/leaseEpoch �
     (error: unknown) => (error as { reason?: string }).reason === "registration_invalid",
     "leaseEpoch 回退拒绝（旧执行权不可写）",
   );
-  // 同轮重发（恢复/继续前 Host 重建登记）：幂等成功。
+  // 同轮重发（恢复/继续前 Host 重建登记）：幂等成功，且已登记的 IO 端口对象保持同一
+  //（评审修复：此前重发整体覆盖 registrations，evidence registry 与 grant holder 被重建
+  // ——挂起前已产出的验证证据/候选占用丢失，继续后提交门必拒 tests_missing）。
+  const ioBefore = store.executionPolicyFor(payload.workflowRunId);
   const again = await store.applyRegistration(makePayload({ ...payload }));
   assert.equal(again.workflowRunId, payload.workflowRunId);
+  assert.equal(
+    store.executionPolicyFor(payload.workflowRunId),
+    ioBefore,
+    "同轮重发不重建 evidence/grants（幂等保留已产出事实）",
+  );
+  // 同 epoch 不同载荷：冻结事实不得中途变化（§6 resume 不换配置）。
+  await assert.rejects(
+    store.applyRegistration(makePayload({ ...payload, changeLimits: { maxFiles: 99, maxChangedLines: 400 } })),
+    (error: unknown) => (error as { reason?: string }).reason === "registration_invalid",
+    "同轮冻结事实变化拒绝",
+  );
+  // 更高 epoch（新执行权接管）：允许重建登记（回音同 runId）。
+  const next = await store.applyRegistration(
+    makePayload({ ...payload, leaseEpoch: payload.leaseEpoch + 1 }),
+  );
+  assert.equal(next.workflowRunId, payload.workflowRunId);
+  store.dispose();
+});
+
+test("CT-12 CLI：冻结并发上限随 submitOnce 传入引擎 caps（评审修复：不能退回 CPU 默认值）", async () => {
+  const wire = makeWire({});
+  const store = createContinuousManagedRunStore({ request: wire.request });
+  const submitted: Array<Record<string, unknown>> = [];
+  const stub = {
+    view: {
+      submitOnce: async (request: Record<string, unknown>) => {
+        submitted.push(request);
+        return { ok: true, runId: request.runId, reused: false };
+      },
+      cancel: async () => true,
+      waitForQuiescence: async () => {},
+      isLiveRun: () => false,
+    } as unknown as ContinuousRunServiceView,
+  };
+  const { createHash } = await import("node:crypto");
+  const scriptText = "return {};";
+  const scriptHash = createHash("sha256").update(scriptText, "utf8").digest("hex");
+  const adapter = createContinuousExecutionAdapter({
+    runService: stub.view,
+    journal: { getRun: () => undefined } as never,
+    reportReader: { listSequencedReportItems: () => [] } as never,
+    maxConcurrencyFor: (runId) => store.maxConcurrentActorsFor(runId),
+    beforeSubmit: (input) =>
+      requireContinuousManagedGuards(
+        {
+          modelBudgetGateFor: (runId) => store.modelBudgetGateFor(runId),
+          decisionGateFor: (runId) => store.decisionGateFor(runId),
+          executionPolicyFor: (runId) => store.executionPolicyFor(runId),
+        },
+        input,
+      ),
+  });
+  const payload = makePayload({ maxConcurrentActors: 10 });
+  await store.applyRegistration(payload);
+  await adapter.submitOnce({
+    programId: payload.programId,
+    cycleId: payload.cycleId,
+    executionSessionId: payload.executionSessionId,
+    workflowRunId: payload.workflowRunId,
+    traceId: payload.traceId,
+    executionPath: payload.executionPath,
+    scriptText,
+    scriptHash,
+    configurationSnapshot: {},
+  });
+  assert.equal(submitted.length, 1);
+  assert.equal(submitted[0]!.maxConcurrency, 10, "冻结配置的 10 并发上限必须随受控提交传入");
   store.dispose();
 });
 

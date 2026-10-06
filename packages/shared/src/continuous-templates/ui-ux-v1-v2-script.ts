@@ -1,8 +1,13 @@
-// ui-ux-v1 模板脚本文本（CT-05；CT-11 修订为可信工具端口版 v2；评审修复升 v3）。独立成
-// 文件是架构 max-file-lines 400 上限的拆分结果，不是边界变化：注册表/解析器在 ./ui-ux-v1.ts，
-// 脚本内容只经 CONTINUOUS_TEMPLATE_UI_UX_V1_SCRIPT 一个名字暴露（v2 冻结副本在
-// ./ui-ux-v1-v2-script.ts）。脚本书写约束（拼接而非模板字面量、空数组用显式类型常量）
-// 见 ./ui-ux-v1.ts 文件头。
+// ui-ux-v1 模板 v2 脚本文本（冻结副本）：评审修复（候选授权接线）把模板升到 v3（骨架
+// 在每个候选实施前经 continuous-authorize 取得写入许可）。版本化纪律要求内容变更必须
+// 升 templateVersion 并保留旧条目——授权绑定 v2 hash 的既有 Program 按本副本继续 resolve
+//（规格 §6「旧模板不可用则明确失败，不静默换脚本」的另一半：旧模板可用时不静默换脚本）。
+// 本文件内容 = v2 原文（自 ui-ux-v1-script.ts 冻结，勿再修改）；v3 是现行条目。
+
+// ui-ux-v1 模板脚本文本（CT-05；CT-11 修订为可信工具端口版 v2）。独立成文件是架构
+// max-file-lines 400 上限的拆分结果，不是边界变化：注册表/解析器在 ./ui-ux-v1.ts，
+// 脚本内容只经 CONTINUOUS_TEMPLATE_UI_UX_V1_SCRIPT 一个名字暴露。脚本书写约束
+//（拼接而非模板字面量、空数组用显式类型常量）见 ./ui-ux-v1.ts 文件头。
 //
 // v2（CT-11）安全边界：
 //   - 测试执行/浏览器验证/Git diff/本地提交只经可信工具端口（world.run 的保留命令
@@ -10,15 +15,8 @@
 //     退出码、输出、文件/行数、commit hash 全部来自工具端口返回值，模型转述不算证据；
 //   - 移除 world.run("git", add/commit) 直接路径——actor 无任意 Git 写能力；
 //   - 验证不可用（缺隔离实现/缺浏览器端口）如实上报 unverified，不 done 不提交。
-//
-// v3（评审修复：候选授权接线）：骨架在每个候选实施 ask 之前经保留命令
-// continuous-authorize 取得写入许可（规格 §7「逐项：可信授权端口取得写入许可」）。
-// 修复依据：v2 及此前的产品装配中 CLI 登记处的候选 grant holder 恒为空（无 authorize
-// 调用点），写路径全部 candidate_inactive、提交门恒拒 candidate_inactive——自主实施主
-// 回路在真实装配下不可用。授权是控制面事实：world.run 只在骨架代码调用（actor 只
-// respond ask），模型不能自行触发或声称。
 
-export const CONTINUOUS_TEMPLATE_UI_UX_V1_SCRIPT = `
+export const CONTINUOUS_TEMPLATE_UI_UX_V1_V2_SCRIPT = `
 interface ReportEvidence {
   kind: string;
   detail: string;
@@ -112,13 +110,6 @@ interface TrustedCommitResult {
   reason?: string;
   runId: string;
   epoch: number;
-}
-
-// v3：可信授权端口结果（candidateKey + 授权路径；refused 携带结构化原因）。
-interface TrustedAuthorizeResult {
-  status: "ok" | "refused";
-  reason?: string;
-  candidateKey: string;
 }
 
 // 空数组字面量会推断为 never[]（schema 合成拒绝）；统一经显式类型的空常量上报。
@@ -230,27 +221,6 @@ let cycleSuspended = false;
 for (const candidate of selected) {
   if (cycleSuspended) {
     break;
-  }
-  // v3（评审修复）：先经可信授权端口取得该候选的写入许可，再发起实施 ask——授权是
-  // 控制面事实，模型不能自行声称；被拒（Decision 撤销的终局候选等）时如实跳过并上报。
-  const authorizeRun = await world.run("continuous-authorize", [
-    candidate.itemKey,
-    JSON.stringify({ targetPaths: candidate.targetPaths }),
-  ]);
-  const authorize: TrustedAuthorizeResult = parseTrusted<TrustedAuthorizeResult>(authorizeRun.stdout);
-  if (authorize.status !== "ok") {
-    attemptedCount += 1;
-    report({
-      kind: "candidate_result",
-      itemKey: candidate.itemKey + ":result",
-      candidateKey: candidate.itemKey,
-      status: "rejected",
-      changedFiles: noFiles,
-      commits: noCommits,
-      summary: "候选未获得写入许可：" + (authorize.reason ?? authorize.status),
-      reason: authorize.reason ?? "candidate authorization refused",
-    });
-    continue;
   }
   const impl: ImplementationResult = await builder.ask<ImplementationResult>(
     "实施候选 " + candidate.title + "（itemKey " + candidate.itemKey + "）。rationale: " +
