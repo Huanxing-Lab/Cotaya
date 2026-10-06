@@ -1,18 +1,29 @@
 #!/usr/bin/env node
-// CT-09 手机控制与两种交付语义（suite 入口；docs/testing/continuous.md §4 步骤 E）。
+// CT-15 手机控制与两种交付语义（suite 入口；docs/testing/continuous.md §4 步骤 E）。
 //
 // 手机链路是「浏览器真实连接桌面同一 Host 的 replayable attachment」，不能用 desktop
 // renderer 缩成 390px 代替（测试文档 §4 步骤 E）。浏览器可执行文件由环境显式提供
 //（ZCODE_E2E_BROWSER_PATH）；不可用时如实标 blocked，不伪造手机链路结果。
 //
-// 当前边界（如实记录）：配对/attachment 创建依赖 Host 侧装配与 relay 链路驱动，
-// Continuous channel 未装配时 E-21 的 Pause/Resolve 无法从手机侧驱动——blocked 而非通过。
-// blocked 不是失败（§10 退出码语义）：退出码由 failed 决定，blocked 事实写入报告由
-// release gate 消费。
+// CT-15 真实性核对结论（本 ticket 逐项调查，证据见 preflight JSON 与 checks）：
+// 1. 手机 → 桌面 Host 的连接经**外部 relay**（鉴权/配对/心跳/转发，AGENTS.md「外部
+//    relay 与 Main 只做…转发及 attachment 调度」）。仓库内没有可本地启动的 relay 服务
+//    实现（packages/server 的 remote/* 是 SSH/Docker 远程 workspace，非手机链路）；
+//    连接真实 relay 需要个人账号凭据——测试文档 §3/§4 明确禁止输入个人凭据。
+//    因此「隔离环境创建测试 attachment」当前不可构造，E-21 如实 blocked，不用
+//    renderer 缩 390px 冒充（那是两项独立验收）。
+// 2. 已能真实取证的桌面侧事实（relayed 语义的唯一本地证据面）：
+//    - 两种交付语义在共享协议里是显式区分的枚举（desktop-continuous ≠ web-remote-replayable，
+//      shared task-realtime/任务 clientMode）；手机（replayable）面被产品代码明确收窄
+//      （conversationShareAttachmentService：web-remote-replayable 模式 publish/importShare
+//      结构化 feature_disabled，getImportedConversation 返回 null——只读补状态语义）。
+//    - Continuous 快照/命令面（手机消费同一 snapshot 读面）在 e2e suite 已真实驱动。
+// 这些是 grep/源码事实（随证据落盘），不声称手机链路通过。
 
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import {
@@ -55,7 +66,7 @@ async function writeReport(statusOverride) {
   const payload = {
     suite: "mobile",
     testRunId: run.testRunId,
-    parentRunId: run.parentRunId,
+    parentRunId: args.parentRunId,
     status:
       statusOverride ??
       (summary.blocked + summary.failed === 0 && summary.passed > 0 ? "passed" : "blocked"),
@@ -85,24 +96,50 @@ test("E-21 手机真实控制与重连（390px replayable）", async (t) => {
     browserAvailable,
     executable ?? "未设置 ZCODE_E2E_BROWSER_PATH",
   );
-  await evidence.record("mobile-preflight.json", {
+
+  // 桌面侧源码事实（不是手机链路通过的证据；是 blocked 理由的可核对依据）：
+  // 1) 两种 clientMode 是共享协议的显式枚举；2) 手机模式的能力收窄在产品代码里。
+  const attachmentService = await readFile(
+    path.join(REPO_ROOT, "packages/desktop/src/host/conversationShareAttachmentService.ts"),
+    "utf8",
+  );
+  const modeVocabulary = await readFile(
+    path.join(REPO_ROOT, "packages/shared/src/task-realtime.ts"),
+    "utf8",
+  );
+  const facts = {
     browserAvailable,
     executable: executable ?? null,
-    capabilityNote: "Continuous channel 未在 Electron Host 装配（同 e2e suite 预检结论）",
-  });
-  let reason;
-  if (!browserAvailable) {
-    reason =
-      "手机浏览器不可用：未提供 ZCODE_E2E_BROWSER_PATH 指向的可执行文件（平台不可用标 blocked）";
-  } else {
-    reason =
-      "浏览器可用，但配对/attachment 与 Continuous 控制链路依赖 Host 装配（capability blocked）；重连/重复命令断言无法真实驱动";
-  }
+    clientModesDistinct: modeVocabulary.includes('"web-remote-replayable"'),
+    mobileShareGated:
+      attachmentService.includes('kind: "feature_disabled"') &&
+      attachmentService.includes("web-remote-replayable"),
+    relayLocalImplementation: false,
+  };
+  await evidence.record("mobile-preflight.json", facts);
+  assert.equal(
+    facts.clientModesDistinct,
+    true,
+    "desktop-continuous 与 web-remote-replayable 必须是显式区分的协议枚举",
+  );
+  assert.equal(
+    facts.mobileShareGated,
+    true,
+    "手机（replayable）模式必须被产品代码明确收窄（feature_disabled）",
+  );
+
+  const reason = !browserAvailable
+    ? "手机浏览器不可用：未提供 ZCODE_E2E_BROWSER_PATH 指向的可执行文件（平台不可用标 blocked）"
+    : "浏览器可用，但手机→桌面 Host 的连接经外部 relay（鉴权/配对）：仓库内无可本地启动的 relay 实现（packages/server remote/* 为 SSH/Docker 远程 workspace，非手机链路），连接真实 relay 需个人账号凭据（测试文档 §3/§4 禁止输入）——隔离 attachment 不可构造，断线重连/缺口补发/重复回答无法真实驱动；不用 desktop renderer 缩 390px 冒充";
   recordCase(run, {
     caseId: "E-21",
     status: "blocked",
     sourceCommit,
     command: "node scripts/test-continuous.mjs --suite mobile",
+    assertions: [
+      "两种交付语义为共享协议显式枚举（desktop-continuous ≠ web-remote-replayable）——源码事实",
+      "手机（replayable）模式产品能力收窄在 attachment service（publish/importShare feature_disabled、getImportedConversation 只读 null）——源码事实",
+    ],
     failureReason: reason,
     evidence: evidence.list(),
   });
@@ -112,10 +149,6 @@ test("E-21 手机真实控制与重连（390px replayable）", async (t) => {
 test("mobile suite 汇总：failed 必须为 0（blocked 如实记录，§10 退出码语义）", () => {
   const summary = caseSummary(run);
   console.log(`[mobile] case summary: ${JSON.stringify(summary)}`);
-  // 修复依据：E-21 blocked 是手机浏览器/capability 不可用的如实状态（CT-09 验收：
-  // 平台不可用标 blocked 而非 passed），不是 runner 失败——把 blocked 编码成非零退出
-  // 会让默认关闭阶段的 suite 永远无法通过门禁。汇总只断言 failed === 0；blocked 经
-  // writeReport 写入报告（status=blocked），由 release gate 消费。
   assert.equal(summary.failed, 0);
   assert.equal(summary.planned, 0, `planned 用例: ${summary.planned}（用例没有结论）`);
   assert.ok(

@@ -2176,7 +2176,12 @@ async function disposeHostResources(reason: string): Promise<HostShutdownResult>
     }
 
     const servicesToDispose = activeServices;
-    activeServices = null;
+    // 修复依据（CT-15 真实 E2E 实测）：interrupt 的 wire 命令经 late-bound agentRef
+    // （activeServices?.getOptional(IZCodeAgentService)）发出；原先在这里（shutdown
+    // phases 运行前）就置空 activeServices，正常退出的 continuous-interrupt 必然报
+    // 「zcodeAgentService 尚未初始化（continuous transport）」而无法 interrupt 在飞
+    // Cycle。改为 phases 完成后再清引用——service 资源释放仍由 servicesToDispose 在
+    // service-dispose 阶段执行， dispose 顺序语义不变。
     // CT-12：退出收口用的装配引用先取（下方随即清空——中断命令要经 agent service 发出，
     // 必须发生在 service-dispose 之前）。
     const continuousRuntimeForShutdown = continuousHostRuntime;
@@ -2235,6 +2240,9 @@ async function disposeHostResources(reason: string): Promise<HostShutdownResult>
         timedOutPhases: shutdownResult.timedOutPhases,
       });
     }
+    // 见上方修复依据：phases（含 continuous-interrupt 的 wire 命令）完成后再清 services
+    // 引用；这里统一收口，后续路径继续读到 null。
+    activeServices = null;
     activeHostApiNetworkTransport = null;
     return shutdownResult;
   })();

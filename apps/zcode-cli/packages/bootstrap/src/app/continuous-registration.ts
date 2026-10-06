@@ -351,6 +351,13 @@ export function continuousManagedCyclesOptionFor(
 ): NonNullable<import("./types.js").ZCodeAppOptions["continuousManagedCycles"]> {
   return {
     enabled: true,
+    // 修复依据（CT-15 真实 E2E 暴露的装配缺陷）：create-app 只在
+    // options.continuousManagedCycles.store 在场时注册 continuousManagedRunRegistration
+    //（v4 登记命令收件人，types.ts 的 store 字段文档）；本工厂此前漏传 store，
+    // workspace-model-runtime 装配的 CLI 永远回答 capabilityUnsupported
+    //（fault.command.capabilityUnsupported: continuousManagedRunRegistration），
+    // Host 的登记命令在真实桌面链路上无法到达——集成测试用注入 store 绕过了本路径。
+    store,
     modelBudgetGateFor: (runId) => store.modelBudgetGateFor(runId),
     decisionGateFor: (runId) => store.decisionGateFor(runId),
     executionPolicyFor: (runId) => store.executionPolicyFor(runId),

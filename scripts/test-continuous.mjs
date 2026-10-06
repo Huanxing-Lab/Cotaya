@@ -286,11 +286,21 @@ async function runScriptSuite(name, definition, timeoutMs, allowLive, parentRunI
   // blocked（capability/平台/凭据不可用的如实状态）时，suite 状态传播 blocked 而非
   // 记 passed——退出码仍由子进程决定（0），报告层不丢失「未验收通过」的事实。
   const runnerHealthyBlocked = result.exitCode === 0 && entryReport?.status === "blocked";
+  // CT-15 修复依据：regression E-28 曾出现「case 报告漏记失败 → entryReport 标 passed、
+  // Node 退出码 1」的不一致（故障被改写成通过）。统一报告必须与退出码一致——状态判定
+  // 永远以子进程退出码为准；两侧不一致时把矛盾显式写进 failureReason，不静默取信
+  // entryReport 的乐观结论。
+  const statusMismatchNote =
+    entryReport?.status !== undefined &&
+    ((result.exitCode !== 0 && entryReport.status === "passed") ||
+      (result.exitCode === 0 && entryReport.status === "failed"))
+      ? `；entryReport 状态 ${entryReport.status} 与退出码 ${result.exitCode} 不一致（以退出码为准——entry runner 的 case 记录存在漏记/错记）`
+      : "";
   const failureReason = runnerHealthyBlocked
     ? "runner 如实完成但存在 blocked 用例（release gate 消费：自主实施 flag 保持关闭）"
     : result.exitCode === 0
       ? null
-      : `runner 退出码 ${result.exitCode}`;
+      : `runner 退出码 ${result.exitCode}${statusMismatchNote}`;
   return {
     ...base,
     status: result.exitCode === 0 ? (runnerHealthyBlocked ? "blocked" : "passed") : "failed",

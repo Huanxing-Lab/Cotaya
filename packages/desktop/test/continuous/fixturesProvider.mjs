@@ -39,7 +39,13 @@ export function createScriptedProvider(run, { name = "scripted-provider" } = {})
     request.on("end", () => {
       const body = Buffer.concat(chunks).toString("utf8");
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
-      if (request.method === "POST" && url.pathname === "/v1/chat/completions") {
+      // CT-15：openai-compatible 适配器把 baseUrl 的路径段规范化后可能直接拼
+      // /chat/completions（实测请求打到了无 /v1 前缀的路径，返回本 fixture 的 404）。
+      // fixture 两条路径都接——测试面兼容两种拼接，不约束产品侧的 URL 规范化行为。
+      if (
+        request.method === "POST" &&
+        (url.pathname === "/v1/chat/completions" || url.pathname === "/chat/completions")
+      ) {
         handleCompletion(body, response);
         return;
       }
@@ -61,14 +67,22 @@ export function createScriptedProvider(run, { name = "scripted-provider" } = {})
   async function handleCompletion(body, response) {
     sequence += 1;
     const step = script.steps[(sequence - 1) % Math.max(script.steps.length, 1)] ?? {};
+    // CT-15：真实 agent（openai-chat-completions 适配器）默认以 SSE 流式请求；记录流式
+    // 标记并按其期望的 content-type 应答（非流式 JSON 会被流式解析器拒收）。
+    const streaming = /"stream"\s*:\s*true/.test(body);
     appendFileSync(
       commandsFile,
-      `${JSON.stringify({ at: Date.now(), sequence, bodyBytes: body.length })}\n`,
+      `${JSON.stringify({ at: Date.now(), sequence, bodyBytes: body.length, streaming })}\n`,
       "utf8",
     );
-    requests.push({ sequence, at: Date.now() });
+    requests.push({ sequence, at: Date.now(), streaming });
     if (step.barrier) {
-      const barrier = barriers.get(step.barrier) ?? createBarrier(step.barrier);
+      // CT-15：barrier 缺省期限必须长于用例的注入等待窗口——createBarrier 的 30s 缺省
+      // 会把「挂住在飞请求等测试注入」变成 503（E-11 实测：30s 超时→503→三次重试→
+      // retry_limit 挂起，把「停止在飞轮」用例变成了别的场景）。step 可显式覆盖。
+      const barrier =
+        barriers.get(step.barrier) ??
+        createBarrier(step.barrier, { timeoutMs: step.barrierTimeoutMs ?? 600_000 });
       barriers.set(step.barrier, barrier);
       barrier.arrive();
       try {
@@ -81,8 +95,7 @@ export function createScriptedProvider(run, { name = "scripted-provider" } = {})
     if (step.fault) {
       if (step.fault.kind === "drop-usage") {
         // 请求成功但不发布 usage：晚到/缺失 usage 的注入点（账本必须保留 unknown 预留）。
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify(completionPayload(step, null)));
+        respondCompletion(response, step, null, streaming);
         return;
       }
       const status = step.fault.status ?? (step.fault.kind === "transient" ? 502 : 401);
@@ -105,8 +118,70 @@ export function createScriptedProvider(run, { name = "scripted-provider" } = {})
         appendFileSync(usageFile, `${JSON.stringify({ ...record, duplicate: true })}\n`, "utf8");
       }
     }
-    response.writeHead(200, { "content-type": "application/json" });
-    response.end(JSON.stringify(completionPayload(step, usage)));
+    respondCompletion(response, step, usage, streaming);
+  }
+
+  /** 按 client 期望的形态返回完成结果：SSE chunk 流或普通 JSON。 */
+  function respondCompletion(response, step, usage, streaming) {
+    const payload = completionPayload(step, usage);
+    if (!streaming) {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify(payload));
+      return;
+    }
+    response.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      connection: "keep-alive",
+    });
+    const delta = payload.choices[0].message;
+    const chunks = [
+      {
+        id: payload.id,
+        object: "chat.completion.chunk",
+        created: payload.created,
+        model: payload.model,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              role: delta.role,
+              ...(delta.content ? { content: delta.content } : {}),
+              ...(delta.tool_calls ? { tool_calls: delta.tool_calls } : {}),
+            },
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: payload.id,
+        object: "chat.completion.chunk",
+        created: payload.created,
+        model: payload.model,
+        choices: [{ index: 0, delta: {}, finish_reason: payload.choices[0].finish_reason }],
+      },
+    ];
+    for (const chunk of chunks) {
+      response.write(`data: ${JSON.stringify(chunk)}\n\n`);
+    }
+    if (usage) {
+      // OpenAI 流式 usage 需要 include_usage；带 prompt_object 的 chunk 在 [DONE] 前下发。
+      response.write(
+        `data: ${JSON.stringify({
+          id: payload.id,
+          object: "chat.completion.chunk",
+          created: payload.created,
+          model: payload.model,
+          choices: [],
+          usage: {
+            prompt_tokens: usage.inputTokens,
+            completion_tokens: usage.outputTokens,
+            total_tokens: usage.inputTokens + usage.outputTokens,
+          },
+        })}\n\n`,
+      );
+    }
+    response.end("data: [DONE]\n\n");
   }
 
   function completionPayload(step, usage) {

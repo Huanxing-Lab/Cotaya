@@ -674,6 +674,45 @@ Host 侧装配与登记协议的固定规则（实施记录见 tickets/records/C
    新；健康写入只更新同 epoch 的 running 行（updateCycleHealth）；实例内计时基线保证重
    启不累计离线时间；模型重试 backoff 等待沿用既有落库事件。
 
+### 2026-10-06：CT-15 真实桌面 E2E 边界
+
+真实产品链路的装配事实与本次修复（实施记录见 tickets/records/CT-15.md）：
+
+1. **窗口就绪语义**：隔离实例首屏有三种真实形态——欢迎/登录页（provider 可用性守卫：
+   `!providerFamilyDomain || (!user && !hasUsableProvider)`）、首次运行职业引导整页
+   （OccupationOnboarding，跳过是显式答案）、主界面侧栏。E2E 预检必须先判定形态再驱动
+   （登录页如实报告、引导页真实点击「跳过」、主界面真实导航 Automations）；「等首个窗口
+   出现就点入口」不是就绪。
+2. **隔离实例的应用配置种子**：provider_config.json（个人 provider + 手动模型规则 +
+   defaultModelSelection，Host 与 agent CLI 同源同路径）、setting.json
+   （providerFamilyDomain 三字段 + lastWorkspaceSession/recentProjects 还原 workspace）、
+   continuous/pricing-snapshot.json 全部经产品自身 codec/schema 校验写入隔离数据根——
+   配置面 fixture，不是向 UI store 塞目标状态。HOME 必须一并指进临时根
+   （settingService 按 process.env.HOME 解析，不读 ZCODE_DESKTOP_HOME_DIR）。
+3. **创建即自动首轮**（§2「初次执行到期立即执行一次」）在 E2E 的后果：createProgram
+   后首轮 Cycle 立即执行；用例必须先布 provider 脚本再创建、断言按 program_id 圈定；
+   资源暂停不释放 workspace 执行占用（§10），保留 suspended 轮的用例必须排在同
+   workspace 其它用例之后。
+4. **真实链路缺陷修复**（E2E 暴露、此前集成测试用替身未覆盖）：
+   - CLI v4 `session/create` 对外部 sessionId 的拒绝改为「id 已存在（active 或持久）才
+     拒绝」——全新 id 的宿主受控创建放行（§10 执行身份在提交前固定的唯一实现路径），
+     接管运行中会话的原防护语义保留；
+   - `continuousManagedCyclesOptionFor` 补传 `store` 字段（types.ts 既有文档）：此前
+     workspace-model-runtime 装配的 CLI 永远回答 capabilityUnsupported，登记命令在真实
+     桌面链路不可达；
+   - 隔离金丝雀子进程补 `ELECTRON_RUN_AS_NODE` 并加每步硬期限：桌面 Host 下 execPath 是
+     Electron 二进制，不带该变量 spawn `-e` 会拉起完整 Electron 应用不退出，登记命令
+     悬挂到协议超时；黑网环境的 TCP 悬挂同样按期限收口（fail closed）；
+   - DWF actor 会话 task link 前经 `ensureParentSessionPersisted` 接缝确保持久化父会话
+     行：`session_task_link.parent_session_id` 对 session(id) 有 FK，Host 受控创建的执行
+     会话没有用户轮、持久化是惰性的，行缺席时 managed run 首个 actor 会话必报
+     FOREIGN KEY constraint failed；对已持久化的普通会话为 no-op（普通 Workflow 零变化）；
+   - Host shutdown 的 `activeServices` 引用清空移到 shutdown phases（含
+     continuous-interrupt 的 wire 命令）之后：此前正常退出的 interrupt 必然报「agent
+     service 尚未初始化」。
+5. **用例报告一致性**：断言失败必须先落 failed case 记录与证据再上抛（recordCaseFailure），
+   entryReport 状态与 Node 退出码由编排层交叉核对，不一致显式标注——不把故障改写成通过。
+
 ### 2026-10-05：发布文档 §2.1 修复边界
 
 退出使用独立 `interrupt(ref, epoch)`：冻结准入、以 interrupted 原因取消引擎、等待工具收尾；不能只冻结后等待永不结束的预算调用。已经 suspended 的轮保留确认和暂停状态，但同样终止进程内执行。恢复和继续都先核对已登记的保护；Host 先保存 running，再解除 CLI 等待。

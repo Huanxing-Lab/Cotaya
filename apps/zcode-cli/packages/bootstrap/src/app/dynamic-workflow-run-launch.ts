@@ -482,6 +482,14 @@ async function persistActorSession(input: {
 
   await runtime.ensureSessionPersistedForExternalActivity(title);
 
+  // CT-15 修复依据：parent_session_id 对 session(id) 有 FK；managed run 的父会话
+  // （Host 受控创建、无用户轮）尚未落库时先补落——ensureSessionPersisted 对已持久化
+  // 会话是 no-op，普通 Workflow 路径行为零变化。不补落则 link 插入报
+  // FOREIGN KEY constraint failed，整个 managed run 在首个 actor 会话处失败。
+  if (parentSessionId !== undefined && deps.taskLinkStore !== undefined) {
+    await deps.ensureParentSessionPersisted?.();
+  }
+
   if (deps.taskLinkStore) {
     await deps.taskLinkStore.createSessionTaskLink({
       childSessionId: sessionId,

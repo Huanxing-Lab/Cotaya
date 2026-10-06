@@ -788,6 +788,15 @@ export async function createZCodeApp(options: ZCodeAppOptions): Promise<ZCodeApp
             ...(isDynamicWorkflowTaskLinkStore(sessionStore)
               ? { taskLinkStore: sessionStore }
               : {}),
+            // CT-15 修复依据（真实 E2E 暴露）：session_task_link.parent_session_id 对
+            // session(id) 有 FK；普通会话的首条用户输入已把父会话落库，而 Host 受控创建的
+            // Continuous 执行会话（ctexec-*）没有任何用户轮——持久化是惰性的，行不存在，
+            // actor 会话建 link 时报 FOREIGN KEY constraint failed，managed run 必然失败。
+            // 这里给出「建 link 前确保持久化父会话」的接缝：managed run 属于父会话的外部
+            // 活动，落库语义正确；已持久化的普通会话走 ensureSessionPersisted 的既有
+            // no-op 分支，行为零变化。
+            ensureParentSessionPersisted: () =>
+              getRuntime().ensureSessionPersistedForExternalActivity("dynamic workflow run"),
             // CT-04 预算闸门接缝（规格 §11「最小接缝」）：只有 Host 登记过闸门的 managed run
             // 会被包装；其余 runId 原样返回，普通 Workflow 行为零改动。
             ...(options.continuousManagedCycles?.modelBudgetGateFor === undefined

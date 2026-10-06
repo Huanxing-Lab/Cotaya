@@ -63,15 +63,47 @@ interface SpawnOutcome {
   exitCode: number | null;
 }
 
+/** 金丝雀单步硬期限：网络被黑洞（DROP 而非 REJECT）时 fetch/TCP connect 可悬挂数分钟，
+ * 登记命令（applyRegistration 构造隔离提供方）会跟着悬挂到 Host 侧 v4/command 超时
+ * （CT-15 真实 E2E 实测：runNow 180s 传输超时→run errored→resume 次数耗尽→resume_limit
+ * 挂起）。金丝雀必须有界——超时按「未验证」收口（fail closed），不允许阻塞登记。 */
+const CANARY_STEP_TIMEOUT_MS = 8_000;
+
+/**
+ * 金丝雀子进程环境：桌面 Host 以 ELECTRON_RUN_AS_NODE 跑 agent 时 process.execPath 是
+ * Electron 二进制——不带该变量 spawn `-e` 脚本会拉起完整 Electron 应用，脚本不执行、
+ * 进程不退出（CT-15 真实 E2E 实测：登记命令内的隔离自证因此悬挂 180s 到协议超时，
+ * watchdog 回收 CLI，Cycle 只能 interrupted）。给子进程补 RUN_AS_NODE（纯 node 忽略该
+ * 变量，无副作用），桌面形态也能真实自证，而不是恒定「未验证」。
+ */
+function canaryChildEnv(): NodeJS.ProcessEnv {
+  return {
+    PATH: process.env.PATH ?? "/usr/bin:/bin",
+    ELECTRON_RUN_AS_NODE: "1",
+  };
+}
+
 function runArgvWithProfile(profile: string, argv: string[], cwd: string): Promise<SpawnOutcome> {
   return new Promise((resolve) => {
     const child = spawn("/usr/bin/sandbox-exec", ["-p", profile, ...argv], {
       cwd,
       stdio: ["ignore", "ignore", "ignore"],
-      env: { PATH: process.env.PATH ?? "/usr/bin:/bin" },
+      env: canaryChildEnv(),
     });
-    child.once("error", () => resolve({ exitCode: null }));
-    child.once("close", (code) => resolve({ exitCode: code }));
+    // 有界收口：到期限强杀，按 spawn 失败（exitCode null → 未验证）处理。
+    const timer = setTimeout(() => {
+      child.removeAllListeners("close");
+      child.kill("SIGKILL");
+      resolve({ exitCode: null });
+    }, CANARY_STEP_TIMEOUT_MS);
+    child.once("error", () => {
+      clearTimeout(timer);
+      resolve({ exitCode: null });
+    });
+    child.once("close", (code) => {
+      clearTimeout(timer);
+      resolve({ exitCode: code });
+    });
   });
 }
 
@@ -136,22 +168,35 @@ export async function createDarwinSeatbeltProvider(options: {
     );
     const outsideWriteDenied = !(await pathExists(deniedFile));
     // ③ 出网必须被拒绝：成功连接 exit 0（隔离失效），任何非 0（DNS 被拒/连接被拒）为已拒。
+    // fetch 带 AbortSignal.timeout：黑网环境的 TCP 悬挂按超时收口（exit 3），不悬挂金丝雀。
     const networkCanary = [
       process.execPath,
       "-e",
-      "fetch('https://example.com/').then(()=>process.exit(0)).catch(()=>process.exit(3))",
+      "fetch('https://example.com/',{signal:AbortSignal.timeout(5000)}).then(()=>process.exit(0)).catch(()=>process.exit(3))",
     ];
     const network = await runArgvWithProfile(profile, networkCanary, allowedDir);
     // 对照组（无沙箱）：对照组都连不上（离线环境）时，金丝雀无法证明任何事——
     // 不能把「离线导致 fetch 失败」当成「沙箱拒绝了网络」，按未验证处理（fail closed）。
+    // 对照组同样有界（同 CANARY_STEP_TIMEOUT_MS 强杀）。
     const control = await new Promise<SpawnOutcome>((resolve) => {
       const child = spawn(networkCanary[0]!, networkCanary.slice(1), {
         cwd: allowedDir,
         stdio: ["ignore", "ignore", "ignore"],
-        env: { PATH: process.env.PATH ?? "/usr/bin:/bin" },
+        env: canaryChildEnv(),
       });
-      child.once("error", () => resolve({ exitCode: null }));
-      child.once("close", (code) => resolve({ exitCode: code }));
+      const timer = setTimeout(() => {
+        child.removeAllListeners("close");
+        child.kill("SIGKILL");
+        resolve({ exitCode: null });
+      }, CANARY_STEP_TIMEOUT_MS);
+      child.once("error", () => {
+        clearTimeout(timer);
+        resolve({ exitCode: null });
+      });
+      child.once("close", (code) => {
+        clearTimeout(timer);
+        resolve({ exitCode: code });
+      });
     });
     const networkDenied = network.exitCode !== 0 && control.exitCode === 0;
     const verification = { insideWriteAllowed, outsideWriteDenied, networkDenied };

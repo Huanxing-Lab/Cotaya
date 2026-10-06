@@ -532,6 +532,26 @@ UI用accessibility和稳定test IDs定位，不靠翻译文本或像素坐标。
 
 ## 本次实际结果
 
+CT-15 增补（2026-10-06，见 tickets/records/CT-15.md）：e2e/regression/mobile suite 重写为
+真实驱动并多轮真实执行（run1…run15）。**e2e suite 真实通过（exit 0：9 passed / 0 failed /
+21 blocked / 0 skipped / 0 planned）**：E-01/E-02/E-15/E-16（首轮执行链：空候选轮经真实
+UI→Host→CLI→脚本 provider 完成 no_changes、重复 Run now 被 open_cycle_exists 幂等吸收、
+原仓库用户改动与工作树字节不变、零提交）、E-08（单轮 USD1：超额请求未发 provider、
+suspended+paused+唯一 pending 确认、继续确认对话框真实出现）、E-11（Pause 静止态不新开轮；
+停止确认框→cancelled、lease 释放）、E-34（表单默认值/超安全整数拒绝/微美元落库）、E-24
+（装配开/关双实例的 tab 门与零副作用）、E-28（双条件桥正反实例）；regression E-26/E-27/
+E-28（production 无 flag build 真实导航后 tab 缺席 canary 通过；此前记录的「E-28 断言失败
+被 entryReport 漏记」已修复——失败先落 failed+证据，编排层交叉核对退出码）；mobile E-21
+如实 blocked（外部 relay 不在仓库，连真实 relay 需个人凭据）。E2E 暴露并修复的真实产品
+缺陷 5 处（session/create 外部 sessionId 守卫改为「已存在才拒绝」、
+continuousManagedCyclesOptionFor 漏传 store、金丝雀子进程缺 ELECTRON_RUN_AS_NODE 且无
+期限、DWF actor 会话 task link 的父会话 FK（Host 受控会话无用户轮未落库，新增
+ensureParentSessionPersisted 接缝）、Host shutdown 先清 activeServices 致 interrupt 必
+失败）。如实 blocked 的 21 个用例：候选路径需完整 builder/reviewer 脚本序列与授权面声明
+测试命令（第一版为空）；时钟类（E-09/E-10/E-18/E-29/E-30/E-31）需测试时钟注入——与
+「生产不得暴露故障注入」冲突，需产品决策。Node 25.8.0（mise 固定 24.14.0 未装——CT-16
+重跑）。
+
 CT-14 增补（2026-10-06，见 tickets/records/CT-14.md）：integration suite 新增两份测试
 （services `ct14-probe-communication.test.ts` 6 用例、bootstrap `ct14-probe-waits.test.ts`
 6 用例）登记进 runner manifest（integration 161/161）。覆盖：读操作通信期限（超时/传输

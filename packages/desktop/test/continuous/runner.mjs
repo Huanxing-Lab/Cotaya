@@ -117,6 +117,14 @@ export function buildIsolationEnv(
     ZCODE_ENV: "test",
     ZCODE_DATA_BASE_DIR: run.dirs.data,
     ZCODE_DESKTOP_HOME_DIR: run.dirs.home,
+    // CT-15 修复依据：services 的 settingService 按 process.env.HOME 解析
+    // <HOME>/.cotaya/v2/setting.json（settingService.ts resolveUserHomeDir），不读
+    // ZCODE_DESKTOP_HOME_DIR——不覆盖 HOME 时，测试实例会把 setting.json、凭据缓存
+    // 等读到/写到开发者真实 home（隔离缺口）。这里把 HOME 一并指进临时根，
+    // 并加入下方逐项校验。Electron 主进程只消费 ZCODE_DESKTOP_* 覆盖，不受影响。
+    HOME: run.dirs.home,
+    // Windows 的 Node homedir() 读 USERPROFILE（services 同一解析顺序）；一并隔离。
+    ...(process.platform === "win32" ? { USERPROFILE: run.dirs.home } : {}),
     ZCODE_DESKTOP_APPLICATION_NAME: `Cotaya Continuous E2E ${run.testRunId.slice(0, 8)}${appNameSuffix}`,
     ZCODE_DESKTOP_USER_DATA_DIR: userDataDir,
     ZCODE_DESKTOP_SESSION_DATA_DIR: path.join(userDataDir, "session"),
@@ -132,6 +140,8 @@ export function buildIsolationEnv(
   for (const name of [
     "ZCODE_DATA_BASE_DIR",
     "ZCODE_DESKTOP_HOME_DIR",
+    "HOME",
+    ...(process.platform === "win32" ? ["USERPROFILE"] : []),
     "ZCODE_DESKTOP_USER_DATA_DIR",
     "ZCODE_DESKTOP_SESSION_DATA_DIR",
     "ZCODE_E2E_RUNTIME_LOG_DIR",
@@ -301,6 +311,40 @@ export function recordCase(run, entry) {
   };
   run.cases.set(entry.caseId, record);
   return record;
+}
+
+/**
+ * CT-15 修复依据（docs/testing/continuous.md「本次实际结果」记录的 E-28 缺陷）：用例断言
+ * 在 recordCase 之前抛出时，case 报告漏记失败——summary 无 failed、entryReport 显示
+ * passed，而 Node 退出码是 1，报告与退出码不一致（故障被改写成通过）。所有 suite 入口的
+ * 用例体必须经本助手包裹：失败先落 failed 记录（含已收集证据），再原样上抛让 Node 判非零；
+ * 已有 failed 记录时保留首份（不覆盖成第二次错误），已有终态记录时只补充 evidence。
+ */
+export function recordCaseFailure(run, { caseId, sourceCommit, command, error, evidence = [] }) {
+  const existing = run.cases.get(caseId);
+  const message = error instanceof Error ? error.message : String(error);
+  if (existing) {
+    if (existing.status === "failed") return existing;
+    const updated = {
+      ...existing,
+      status: "failed",
+      failureReason: existing.failureReason
+        ? `${existing.failureReason}；后续步骤失败: ${message}`
+        : message,
+      evidence: [...existing.evidence, ...evidence],
+      finishedAt: Date.now(),
+    };
+    run.cases.set(caseId, updated);
+    return updated;
+  }
+  return recordCase(run, {
+    caseId,
+    status: "failed",
+    sourceCommit,
+    command,
+    failureReason: message,
+    evidence,
+  });
 }
 
 export function caseSummary(run) {

@@ -226,6 +226,13 @@ export interface DynamicWorkflowRunServiceDeps {
   /** actor 会话的 task link 落库面；缺席则跳过建 link（会话本身仍落库）。 */
   taskLinkStore?: DynamicWorkflowTaskLinkStore;
   /**
+   * CT-15：建 task link 前确保持久化父会话行。session_task_link.parent_session_id 对
+   * session(id) 有 FK——普通会话首条用户输入已落库（此处为 no-op），Host 受控创建的
+   * Continuous 执行会话没有用户轮、行缺席，不补落会让 managed run 的 actor 会话
+   * link 全部 FOREIGN KEY constraint failed。缺省不调用（旧装配行为不变）。
+   */
+  ensureParentSessionPersisted?: () => Promise<void>;
+  /**
    * actor 会话的转录存取面（生产就是 session store 本身）。driver 用它做两件事：ask 边界记账的
    * 计数，与 amend-resume 分歧 actor 的转录截断复制。
    *

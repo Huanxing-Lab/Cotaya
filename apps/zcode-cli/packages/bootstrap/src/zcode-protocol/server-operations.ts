@@ -1246,12 +1246,26 @@ async function createSessionWithProjection<T>(
   const params = parseParams(zcodeSessionCreateParamsSchema, rawParams);
   const startedAt = Date.now();
   if (params.sessionId && !params.importedHistory) {
-    // 普通 session/create 若允许外部指定 id，会覆盖 context.sessions 里的 active record，
-    // 造成运行中会话被接管、runtime 泄漏或后续 setModel/sendPrompt 路由错位。
-    throw new ProtocolRequestError(
-      -32602,
-      "sessionId is only supported for imported history creates",
-    );
+    // 修复依据（CT-15 真实 E2E 暴露的集成缺陷）：Host 侧 Continuous 的执行会话必须在
+    // 提交前固定身份并跨恢复幂等复用（规格 §10「执行 ID 在提交前保存」——
+    // continuousHost.ensureExecutionSession 以 executionSessionId 创建/resume），而旧守卫
+    // 无条件拒绝外部 sessionId，managed run 在真实桌面链路上永远无法启动（runNow 报
+    // "sessionId is only supported for imported history creates"，Cycle 只能 interrupted）。
+    // 守卫本身防的是「外部 id 覆盖既有会话」（运行中接管、runtime 泄漏、路由错位）——
+    // 保留该安全性：仅当 id 全新（不在本进程 active 池、也不在持久 store）才放行；
+    // 同 id 会话已存在时仍拒绝，importedHistory 导入路径语义不变。
+    const existingActive = context.sessions.has(params.sessionId);
+    const existingPersisted = existingActive
+      ? null
+      : await context.deps.sessionStore
+          ?.getSession(params.sessionId as SessionId)
+          .catch(() => null);
+    if (existingActive || existingPersisted) {
+      throw new ProtocolRequestError(
+        -32602,
+        "sessionId conflicts with an existing session; external sessionId is only allowed for fresh host-authority creates",
+      );
+    }
   }
   const sessionId = (params.sessionId ?? createSessionId()) as SessionId;
   const workspace = params.workspace;
