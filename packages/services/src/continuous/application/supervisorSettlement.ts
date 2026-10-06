@@ -4,6 +4,7 @@
 
 import { randomUUID } from "node:crypto";
 import type { ContinuationRequestReason, Cycle, CycleResult, Program } from "../domain/types.js";
+import { isTerminalCycleStatus } from "../domain/types.js";
 import type { ContinuousBudgetDenial } from "@zcode/shared/continuous-protocol";
 import {
   continuationFactsOf,
@@ -126,12 +127,24 @@ export async function suspendCycleForAgentNotification(
     .id;
   // 评审修复（挂起写入的整行覆盖竞态）：入口读取的 cycle 行在 suspendAtSafeBoundary 的
   // wire 往返（秒级窗口）内可能已被同一监督循环推进（reportCursor 经报告导入、健康列经
-  // 探活持久化）——用入口快照整行回写会把游标/健康列打回旧值。与 applyHealthAssessment
-  // 同一纪律：落库前重读最新行，仅当仍为同 leaseEpoch 的非挂起行时合并挂起字段（保留
-  // 游标与健康列的最新事实；已被接管/已挂起的行不重复写）。
+  // 探活持久化）——用入口快照整行回写会把游标/健康列打回旧值。落库前重读最新行、保留
+  // 游标与健康列的最新事实（与 applyHealthAssessment 同一写纪律）。
+  // 二期评审遗留修复：仅排除 suspended 不够——往返窗口内并发的「立即停止」链
+  // （supervisorControl 的 stopCurrentCycle：execution.stop→waitForQuiescence→
+  // completeCycle(cancelled)＋releaseLease，全程不 bump leaseEpoch）可能已把本轮结算为
+  // 终态，桌面退出也可能已保存 interrupted。终态行有终局性（§6「立即停止→cancelled」），
+  // interrupted 由恢复流程接管；迟到的拒绝通知把它们翻写回 suspended 会制造幽灵开放轮
+  // （部分唯一索引仍算未结束，下一次 runNow 撞 open_cycle_exists）。因此仅非终态开放轮
+  // （running/preparing/settling）才合并挂起字段；suspended 仍排除（幂等不重复写）。
   if (cycle.status !== "suspended") {
     const latest = await deps.repository.getCycle(cycle.id);
-    if (latest && latest.leaseEpoch === cycle.leaseEpoch && latest.status !== "suspended") {
+    if (
+      latest &&
+      latest.leaseEpoch === cycle.leaseEpoch &&
+      !isTerminalCycleStatus(latest.status) &&
+      latest.status !== "suspended" &&
+      latest.status !== "interrupted"
+    ) {
       await deps.repository.saveCycle({
         ...latest,
         status: "suspended",

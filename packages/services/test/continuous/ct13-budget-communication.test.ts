@@ -1061,3 +1061,118 @@ test("CT-13 拒绝通知挂起：wire 往返期间推进的游标/健康列不�
     repo.close();
   }
 });
+
+test("CT-13 拒绝通知挂起：往返窗口内已被停止/退出收尾的轮不被翻写回 suspended（二期评审修复）", async () => {
+  // 复现竞态：CLI 的 budgetSuspension 通知进入 Host 后，在 suspendAtSafeBoundary 的 wire
+  // 往返窗口内，用户并发的「立即停止」链把 Cycle 结算为 cancelled（或桌面退出保存
+  // interrupted）。修复前：守卫只排除 suspended，迟到的通知仍会把终态/interrupted 行整行
+  // 翻写回 suspended——违反 §6「立即停止→cancelled」终局性，且被复活的 suspended 行按
+  // 部分唯一索引仍算开放轮，下一次 runNow 撞 open_cycle_exists。修复后：仅
+  // running/preparing/settling 开放轮才合并挂起字段。
+  // interrupted 在部分唯一索引里也算开放轮，两个用例各用独立 Program 避免撞
+  // continuous_one_open_cycle。
+  const repo = new SqliteContinuousRepository(migratedDatabasePath(), 30_000);
+  await repo.ensureReady();
+  try {
+    const now = Date.UTC(2026, 9, 6, 6, 0, 0);
+    const makeProgram = (key: string): Program => ({
+      id: nextId("program"),
+      workspaceKey: key,
+      workspacePath: key,
+      revision: 1,
+      goal: "持续改进桌面 UI",
+      timeZone: "Asia/Shanghai",
+      budget: { ...CONTINUOUS_DEFAULT_BUDGET },
+      cadence: { ...CONTINUOUS_DEFAULT_CADENCE },
+      scope: { allowedPaths: ["src"], forbiddenPaths: [], forbiddenCapabilities: [] },
+      decisionPolicy: { unknownToDecision: true },
+      authorization: {
+        revision: 1,
+        templateHash: TEMPLATE.scriptHash,
+        grantedAt: "2026-10-06T00:00:00Z",
+      },
+      templateId: TEMPLATE.templateId,
+      templateVersion: TEMPLATE.templateVersion,
+      templateHash: TEMPLATE.scriptHash,
+      status: "active",
+      consecutiveFailures: 0,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const makeCycle = (program: Program, runId: string): Cycle => ({
+      id: nextId("cycle"),
+      programId: program.id,
+      sequence: 1,
+      triggerKey: `manual-${program.id}`,
+      trigger: { kind: "manual" },
+      status: "running",
+      configurationSnapshot: {},
+      scriptText: "return {}",
+      scriptHash: "c".repeat(64),
+      executionSessionId: nextId("session"),
+      workflowRunId: runId,
+      traceId: nextId("trace"),
+      leaseEpoch: 1,
+      resumeAttempts: 0,
+      activeDurationMs: 0,
+      normalBlockedDurationMs: 0,
+      healthState: "progressing",
+      reportCursor: 0,
+      startedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const settleDuringWire = (target: Cycle, finalStatus: "cancelled" | "interrupted") => ({
+      suspendAtSafeBoundary: async () => {
+        const mid = (await repo.getCycle(target.id))!;
+        await repo.saveCycle({
+          ...mid,
+          status: finalStatus,
+          ...(finalStatus === "cancelled" ? { completedAt: 12345 } : {}),
+          updatedAt: 12345,
+        });
+      },
+    });
+
+    // 用例一：立即停止链先落 cancelled。
+    const programA = makeProgram("/repos/stopped");
+    const cycle = makeCycle(programA, "run-race-cancelled");
+    await repo.insertProgram(programA);
+    await repo.insertCycle(cycle);
+    await suspendCycleForAgentNotification(
+      {
+        repository: repo,
+        execution: settleDuringWire(cycle, "cancelled"),
+        clock: { now: () => 99999 },
+      },
+      { cycle, program: programA, code: "budget_denied", message: "停止竞态内的拒绝通知" },
+    );
+    const stopped = (await repo.getCycle(cycle.id))!;
+    assert.equal(stopped.status, "cancelled", "迟到通知不得把 cancelled 翻写回 suspended");
+    assert.equal(
+      stopped.pendingContinuationRequestId ?? null,
+      null,
+      "终局轮不挂继续确认指针（无幽灵确认）",
+    );
+    assert.equal(stopped.completedAt, 12345, "终局时间不被覆盖");
+
+    // 用例二：桌面退出先保存 interrupted，恢复流程接管，通知同样不得翻写。
+    const programB = makeProgram("/repos/interrupted");
+    const cycleB = makeCycle(programB, "run-race-interrupted");
+    await repo.insertProgram(programB);
+    await repo.insertCycle(cycleB);
+    await suspendCycleForAgentNotification(
+      {
+        repository: repo,
+        execution: settleDuringWire(cycleB, "interrupted"),
+        clock: { now: () => 99999 },
+      },
+      { cycle: cycleB, program: programB, code: "budget_denied", message: "退出竞态内的拒绝通知" },
+    );
+    const interrupted = (await repo.getCycle(cycleB.id))!;
+    assert.equal(interrupted.status, "interrupted", "迟到通知不得把 interrupted 翻写回 suspended");
+    assert.equal(interrupted.pendingContinuationRequestId ?? null, null);
+  } finally {
+    repo.close();
+  }
+});
