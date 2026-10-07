@@ -100,6 +100,11 @@ import {
   type DynamicWorkflowRunEntryContext,
 } from "./dynamic-workflow-run-submit.js";
 import {
+  submitManagedDynamicWorkflowRun,
+  type ManagedRunSubmitRequest,
+  type ManagedRunSubmitResult,
+} from "./dynamic-workflow-run-managed-submit.js";
+import {
   listWorkspaceNodesFrom,
   readWorkspaceNodeResultFrom,
 } from "./dynamic-workflow-run-workspace.js";
@@ -202,6 +207,10 @@ export interface DynamicWorkflowRunServiceDeps {
   fileSystemPort: FileSystemPort;
   /** git.* world-read 落到的子进程执行端口（cwd = run 的工作区）。 */
   executionPort: ExecutionPort;
+  /** 受管 Run 的 world IO；普通 Run 缺省沿用原端口。 */
+  worldPortsFor?: (
+    runId: string,
+  ) => { fileSystemPort: FileSystemPort; executionPort: ExecutionPort } | undefined;
   /**
    * 用户面产物（`artifact.file` / `artifact.markdown`）的字节落点，原样转交 driver。⚠ 这里的 artifact 指**交付给用户看的
    * 产出**，不是引擎内部那个顶层返回值。
@@ -216,6 +225,13 @@ export interface DynamicWorkflowRunServiceDeps {
   createActorRuntime: (input: DynamicWorkflowActorRuntimeInput) => AgentRuntime;
   /** actor 会话的 task link 落库面；缺席则跳过建 link（会话本身仍落库）。 */
   taskLinkStore?: DynamicWorkflowTaskLinkStore;
+  /**
+   * CT-15：建 task link 前确保持久化父会话行。session_task_link.parent_session_id 对
+   * session(id) 有 FK——普通会话首条用户输入已落库（此处为 no-op），Host 受控创建的
+   * Continuous 执行会话没有用户轮、行缺席，不补落会让 managed run 的 actor 会话
+   * link 全部 FOREIGN KEY constraint failed。缺省不调用（旧装配行为不变）。
+   */
+  ensureParentSessionPersisted?: () => Promise<void>;
   /**
    * actor 会话的转录存取面（生产就是 session store 本身）。driver 用它做两件事：ask 边界记账的
    * 计数，与 amend-resume 分歧 actor 的转录截断复制。
@@ -251,6 +267,34 @@ export interface DynamicWorkflowRunServiceDeps {
    */
   concurrency?: WorkflowConcurrencyPort;
   /**
+   * 模型请求准入的 per-run 包装点（CT-04，规格 §11「最小接缝」）：driver 为每个 actor 组装出
+   * 准入端口（治理器 + 座位闸门）之后、下传 runtime 之前经过这里。Continuous 的预算闸门经它
+   * 接入——先过既有座位/治理器，再向 Host 账本原子预留。
+   *
+   * **可选且只影响返回的包装**：缺席即行为逐字不变（普通 Workflow 零改动）；在场但对某
+   * runId 返回原 admission（或 undefined）时该 run 也不受影响——只有 managed cycle 的 run
+   * 被登记进闭包（create-app 的 continuousManagedCycles.modelBudgetGateFor）。
+   */
+  wrapModelRequestAdmission?: (input: {
+    runId: string;
+    admission: ModelRequestAdmission | undefined;
+  }) => ModelRequestAdmission | undefined;
+  /**
+   * 会话级 escalate 端口的 per-run 包装点（CT-06，规格 §8「普通 Workflow 的 escalation 不
+   * 改变」+ §11「需要普通 driver 增加接缝时，只做无默认行为变化的可选接口」）：driver 为
+   * 每个 actor 铸出的升级端口在下传 runtime 之前经过这里。Continuous 的决策适配器经它
+   * 接入——managed cycle 的 escalate 变成「持久化 Decision + 撤销候选许可 + 结构化 defer」，
+   * 不停驻等待主代理/人类。
+   *
+   * **可选且只影响返回的包装**：缺席即行为逐字不变（普通 Workflow 的 escalation 零改动）；
+   * 在场但对某 runId 返回原端口时该 run 也不受影响——只有 managed cycle 的 run 被登记进
+   * 闭包（create-app 的 continuousManagedCycles.decisionGateFor）。
+   */
+  wrapEscalatePort?: (input: {
+    runId: string;
+    escalatePort: WorkflowEscalatePort;
+  }) => WorkflowEscalatePort;
+  /**
    * 把一次启动登记为父 runtime 的**常驻阻塞工作**。
    *
    * 引擎活在会话 App 的闭包里、不进 runtime task registry，而常驻池当时
@@ -272,6 +316,7 @@ export {
   isDynamicWorkflowTaskLinkStore,
   resolveDynamicWorkflowJournalStore,
   supportsRunIntrospection,
+  supportsSequencedReportReads,
   type DynamicWorkflowTaskLinkStore,
 } from "./dynamic-workflow-run-journal.js";
 
@@ -295,6 +340,23 @@ interface DynamicWorkflowRunService extends DynamicWorkflowRunPort {
    * 幂等——第二次调用返回同一个 promise，不再 abort 任何东西。
    */
   close(): Promise<void>;
+  /**
+   * 受控 submitOnce（CT-03，规格 §10/§11）：调用方（Continuous 执行适配器）指定稳定 runId 与
+   * 执行会话身份的提交入口。同 ID 同内容复用、不同 hash/args/owner 结构化拒绝；普通
+   * {@link DynamicWorkflowRunPort.submit} 的随机 ID 语义不变。实现体在
+   * dynamic-workflow-run-managed-submit.ts。
+   */
+  submitOnce(request: ManagedRunSubmitRequest): Promise<ManagedRunSubmitResult>;
+  /**
+   * 等待一个 run 的执行停止与统计收尾（结算 + 被中止 turn 的收尾写完，I-06）。实现体在
+   * dynamic-workflow-run-lifecycle.ts。
+   */
+  waitForQuiescence(runId: string): Promise<void>;
+  /**
+   * 注册表活条目探测（CT-03 managed cycle 的健康快照用）：journal 的 running 行不含
+   * 「引擎在本进程活着」这一事实（死进程的遗物也停在 running），注册表是唯一真相。
+   */
+  isLiveRun(runId: string): boolean;
 }
 
 /**
@@ -348,6 +410,7 @@ export function createDynamicWorkflowRunService(
     subscribeRunSettled,
     trackSettlement,
     close,
+    waitForRunQuiescence,
     assertOpen,
     noteForeignTerminalRow,
   } = createRunServiceLifecycle({
@@ -374,6 +437,14 @@ export function createDynamicWorkflowRunService(
     countLiveRuns,
     subscribeRunSettled,
     close,
+    // 等待执行停止与统计收尾：managed cycle 的 settling 收尾（I-06）经它等「结算 + 收尾」，
+    // 普通调用方不受影响（它只读注册表与结算 promise，无副作用、幂等）。
+    waitForQuiescence: waitForRunQuiescence,
+    // 注册表活条目探测（接口注释见上）：只读，无副作用。
+    isLiveRun: (runId: string): boolean => {
+      const entry = runs.get(runId);
+      return entry !== undefined && entry.terminal === undefined;
+    },
 
     // 三条入口的关闭门。`async` 只为把这个接线错误变成 rejection 而不是同步抛；门与随后的
     // 委托之间没有 await，所以不变式 6 的「登记与 launch 同一同步片」不受影响。
@@ -382,6 +453,16 @@ export function createDynamicWorkflowRunService(
     ): Promise<DynamicWorkflowRunSubmitResult> {
       assertOpen();
       return submitDynamicWorkflowRun(entryContext, request);
+    },
+
+    /**
+     * 受控 submitOnce（接口注释见上）。与三条入口同一个关闭门：service 关闭后受控提交同样是
+     * 接线错误（managed cycle 的宿主在 App 关闭链路里先走 close）。`async` 只为把拒绝变成
+     * rejection；裁决与启动全程同步，`assertOpen` 与 startNewRun 之间没有 await。
+     */
+    async submitOnce(request: ManagedRunSubmitRequest): Promise<ManagedRunSubmitResult> {
+      assertOpen();
+      return submitManagedDynamicWorkflowRun(entryContext, request);
     },
 
     async amend(request: DynamicWorkflowRunAmendRequest): Promise<DynamicWorkflowRunAmendResult> {

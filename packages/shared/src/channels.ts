@@ -149,6 +149,8 @@ export const ServiceChannels = {
   OffPeakTask: "off-peak-task",
   /** Onboarding 完成记录服务（本地持久化，后续上传服务器） */
   OnboardingRecord: "onboarding-record",
+  /** Continuous 长期自主改进服务（CT-08；Host 装配后经 ProxyChannel 暴露给 renderer） */
+  Continuous: "continuous",
 } as const;
 
 export type ServiceChannelName = (typeof ServiceChannels)[keyof typeof ServiceChannels];
@@ -553,6 +555,12 @@ export const HostMessageTypes = {
   CronRun: "cron-run",
   /** main → host：闲时任务派发；首跑 createTask 新建 session，续跑带 conversationId/sessionId resume */
   OffPeakRun: "off-peak-run",
+  /**
+   * main → host：Continuous Program 到期唤醒（只转发，不派发）。scheduler 只做只读到期查询并
+   * 请求唤醒；Host 侧 Supervisor/恢复流程再核对状态与未结束 Cycle、原子创建 Cycle 并取得
+   * workspace lease（CT-07；不复制 automation 的 claim-派发-释放锁语义）。
+   */
+  ContinuousWake: "continuous-wake",
   /** main → host：browser-use 命令执行结果（CDP 执行完回传，按 requestId 关联） */
   BrowserExecuteResult: "browser-execute-result",
   /** main → host：本地视频 canonical path 授权结果 */
@@ -644,6 +652,8 @@ export const HostResponseTypes = {
   FeedbackLogArchiveRequest: "feedback-log-archive-request",
   /** host → main：定时任务派发结果（成功回填 taskId/sessionId，失败带 transient/permanent） */
   CronRunResult: "cron-run-result",
+  /** host → main：Continuous 到期唤醒的送达回执（只表示 wake 已被处理，不携带业务结果） */
+  ContinuousWakeResult: "continuous-wake-result",
   /** host → main：闲时任务派发结果（成功回填 conversationId/sessionId，失败带 transient/permanent） */
   OffPeakRunResult: "off-peak-run-result",
   /** host → main：manual run 已落库，请立即唤醒 scheduler 认领派发 */

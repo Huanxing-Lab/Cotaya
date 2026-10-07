@@ -112,6 +112,8 @@ import {
   type ZCodeToolExecResource,
   type ZCodePluginOperationProgressNotification,
   type ZCodeTaskMode,
+  // CT-12：Continuous CLI→Host 反向请求的 method 词表（shared 根入口经 zcode-protocol 再导出）。
+  CONTINUOUS_AGENT_REQUEST_METHODS,
 } from "@zcode/shared";
 import { createServiceLogger } from "#src/logger/serviceLogger.js";
 import { createOfficialMcpIssuanceAudit } from "#src/official-mcp/officialMcpIssuanceAudit.js";
@@ -858,12 +860,32 @@ function createRuntimeUnavailableError(params: ZCodeAgentWorkspaceTarget): Error
   return error;
 }
 
+/**
+ * CT-12：Continuous CLI→Host 反向请求的 method 词表。词表唯一来源是 shared 的
+ * CONTINUOUS_AGENT_REQUEST_METHODS（与 CLI 侧 requestClient 用同一份，不手写第二套）。
+ */
+const continuousAgentRequestMethodSet = new Set<string>(
+  Object.values(CONTINUOUS_AGENT_REQUEST_METHODS),
+);
+function isContinuousAgentRequestMethod(method: string): boolean {
+  return continuousAgentRequestMethodSet.has(method);
+}
+
 interface CreateZCodeAgentServiceOptions extends Omit<
   ZCodeAgentProcessManagerOptions,
   "idleTimeoutMs"
 > {
   /** 仅供 MCP 状态探测进程使用，不能把空闲回收传给 chat。 */
   mcpStatusIdleTimeoutMs?: number;
+  /**
+   * CT-12：Continuous CLI→Host 反向请求（预算预留/结算/拒绝通知/决策持久化）的宿主侧
+   * 拦截。desktop host 装配 continuous 栈后注入；缺席时这些 method 走默认
+   * method-not-found（旧装配零行为变化）。handler 返回 handled=false 也交回默认路径。
+   */
+  continuousAgentRequestHandler?: (
+    method: string,
+    params: unknown,
+  ) => Promise<{ handled: boolean; result?: unknown; error?: { code: number; message: string } }>;
   accountProviderConfigSource?: ProviderSource<AccountProviderConfigSnapshot>;
   accountRequestAuthService?: IAccountRequestAuthService;
   /** Desktop Host 请求 Main 登记 Agent 已授权的精确本地视频路径。 */
@@ -2110,6 +2132,53 @@ export function createZCodeAgentService(
         }
       }),
       client.onRequest((request) => {
+        // CT-12：Continuous 反向请求（continuous/ledger/*、continuous/budget/suspend、
+        // continuous/decision/escalate）先经装配的 handler——method 词表判断是同步的，
+        // 普通会话请求零行为变化；handler 异常按内部错误应答（不吞成挂起）。
+        // 评审修复：method 已按词表认定为 Continuous 反向请求后没有第二个接收者，
+        // handler 缺席/handled=false（如 dispose 后的装配置空）同样必须立即按内部错误
+        // 应答——否则 CLI 侧在飞请求悬挂到传输超时（注释承诺的「不吞成挂起」同样适用）。
+        if (
+          options?.continuousAgentRequestHandler &&
+          isContinuousAgentRequestMethod(request.method)
+        ) {
+          void (async () => {
+            let outcome: {
+              handled: boolean;
+              result?: unknown;
+              error?: { code: number; message: string };
+            };
+            try {
+              outcome = (await options?.continuousAgentRequestHandler?.(
+                request.method,
+                request.params,
+              )) ?? { handled: false };
+            } catch (error) {
+              outcome = {
+                handled: true,
+                error: {
+                  code: -32603,
+                  message: error instanceof Error ? error.message : String(error),
+                },
+              };
+            }
+            if (!outcome.handled) {
+              await client
+                .respondError(request.id, {
+                  code: -32603,
+                  message: `continuous agent request handler unavailable: ${request.method}`,
+                })
+                .catch(() => {});
+              return;
+            }
+            if (outcome.error) {
+              await client.respondError(request.id, outcome.error).catch(() => {});
+              return;
+            }
+            await client.respond(request.id, outcome.result ?? {}).catch(() => {});
+          })();
+          return;
+        }
         if (request.method === zcodeProtocolMethods.sessionRequestRuntimePreferences) {
           const reportResponseFailure = (error: unknown): void => {
             logger.debug(undefined, "运行时偏好响应发送失败", {

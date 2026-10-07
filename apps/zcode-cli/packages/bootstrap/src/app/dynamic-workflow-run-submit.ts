@@ -270,8 +270,11 @@ interface StartNewRunInput {
 /**
  * submit 与 amend 共用的启动尾：编译 → 锚点 → 注册表条目 → fire-and-forget launch。
  * 返回 runId（同步：注册表条目在本函数返回前就已存在，见下面的注释）。
+ *
+ * 导出给受控 submitOnce（dynamic-workflow-run-managed-submit.ts）共用：两条入口必须共享
+ * 同一条启动路（编译一次、注册先于启动、fire-and-forget、常驻登记），各持一份迟早漂移。
  */
-function startNewRun(ctx: DynamicWorkflowRunEntryContext, input: StartNewRunInput): string {
+export function startNewRun(ctx: DynamicWorkflowRunEntryContext, input: StartNewRunInput): string {
   const { deps, runs, escalations } = ctx;
   const { imported, runId } = input;
   const compiled = compileOnce(input.scriptText);

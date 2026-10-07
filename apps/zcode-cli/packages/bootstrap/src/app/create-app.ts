@@ -80,11 +80,23 @@ import {
   createDynamicWorkflowRunService,
   isDynamicWorkflowTaskLinkStore,
   resolveDynamicWorkflowJournalStore,
+  supportsSequencedReportReads,
 } from "./dynamic-workflow-run-service.js";
+import { createContinuousExecutionAdapter } from "./continuous-execution-adapter.js";
+import { dispatchContinuousManagedCycleCommand } from "./continuous-execution-command.js";
 import { getWorkflowConcurrencyGovernor } from "./workflow-concurrency-governor.js";
 import { createDynamicWorkflowSnippetService } from "./dynamic-workflow-snippet-service.js";
 import { createModelCatalogPort } from "./model-catalog-port.js";
 import { createDynamicWorkflowRunProgressSink } from "./dynamic-workflow-run-progress-sink.js";
+import { guardContinuousActorIo, continuousActorToolAllowlist } from "./continuous-io-guards.js";
+import {
+  requireContinuousManagedGuards,
+  requireContinuousRunRegistration,
+} from "./continuous-managed-guards.js";
+import {
+  ContinuousRegistrationError,
+  registrationAdapterViewOf,
+} from "./continuous-registration.js";
 import { createScriptWorkflowAgentRuntime } from "./script-workflow-child-runtime.js";
 import {
   WorkflowActorPersonaModelError,
@@ -619,6 +631,7 @@ export async function createZCodeApp(options: ZCodeAppOptions): Promise<ZCodeApp
         : createDynamicWorkflowRunService({
             concurrency: workflowConcurrencyGovernor,
             createActorRuntime: ({
+              runId,
               persona,
               pinnedModel,
               runSubagentModel,
@@ -627,8 +640,20 @@ export async function createZCodeApp(options: ZCodeAppOptions): Promise<ZCodeApp
               submitProfile,
               escalatePort,
               modelRequestAdmission,
-            }) =>
-              createScriptWorkflowAgentRuntime({
+            }) => {
+              const registration = options.continuousManagedCycles?.executionPolicyFor?.(runId);
+              const policy = registration?.actorPolicyFor(persona.name);
+              // CT-11：受检文件/命令执行由守卫自身完成（fd 绑定 + 受限搜索 + 受控命令），
+              // 不再包底层端口；actor 端口不注入可信命令面——actor 无 Git 写能力。
+              const ports = policy
+                ? guardContinuousActorIo(
+                    policy,
+                    registration?.testRunner === undefined
+                      ? {}
+                      : { testRunner: registration.testRunner },
+                  )
+                : { fileSystemPort, executionPort };
+              return createScriptWorkflowAgentRuntime({
                 childSessionId: actorSessionId,
                 configOverrides: {
                   // persona 的身份（有效名 + system）→ context builder 的工作流子代理路径。
@@ -640,6 +665,7 @@ export async function createZCodeApp(options: ZCodeAppOptions): Promise<ZCodeApp
                   // actor 的工具面是减法（全集减去会悬挂/越权的交互工具），只能经 configOverrides
                   // 表达（request.opts.tools 只有 allowlist）。
                   ...workflowActorToolPolicy(),
+                  ...(policy ? { toolAllowlist: continuousActorToolAllowlist(policy.role) } : {}),
                   // 模型面四级链（整表见 workflow-actor-model.ts）：persona.model 声明（脚本
                   // 作者点名，就在下面第三参的位置解析）> `runSubagentModel`（本 run 的
                   // `subagent_model`，只覆盖**未声明模型的**子代理——主代理也不受它影响）>
@@ -666,11 +692,12 @@ export async function createZCodeApp(options: ZCodeAppOptions): Promise<ZCodeApp
                   appVersion,
                   artifactStore,
                   configResult,
-                  fileSystemPort,
+                  fileSystemPort: ports.fileSystemPort,
+                  executionPort: ports.executionPort,
                   httpClientPort,
                   imageProcessorPort,
                   logger,
-                  mcpPort,
+                  mcpPort: policy ? undefined : mcpPort,
                   // 父会话的 model factory：actor 与主 turn 从同一份 Registry 视图造 Model，
                   // 不各自冻结一份。
                   modelFactory,
@@ -680,7 +707,7 @@ export async function createZCodeApp(options: ZCodeAppOptions): Promise<ZCodeApp
                   sessionId,
                   sessionStore,
                   storageRoot,
-                  workingDirectory,
+                  workingDirectory: registration?.executionPath ?? workingDirectory,
                 },
                 // persona 不再经 request.opts.systemPrompt 整段替换子代理的系统提示，而是经
                 // workflowActor 叠加到基座之上。
@@ -702,7 +729,8 @@ export async function createZCodeApp(options: ZCodeAppOptions): Promise<ZCodeApp
                 workflowEscalatePort: escalatePort,
                 // 请求级准入端口：driver 在治理器在场时给出，runner 每次尝试先过闸门。
                 ...(modelRequestAdmission === undefined ? {} : { modelRequestAdmission }),
-              }),
+              });
+            },
             // 边界记账与转录截断都读写 actor 会话的消息，走的必须是同一个 store。
             actorTranscriptStore: sessionStore,
             // 用户面产物的字节落点：与主会话、workflow 子
@@ -710,6 +738,21 @@ export async function createZCodeApp(options: ZCodeAppOptions): Promise<ZCodeApp
             artifactStore,
             executionPort,
             fileSystemPort,
+            worldPortsFor: (runId) => {
+              const registration = options.continuousManagedCycles?.executionPolicyFor?.(runId);
+              return registration
+                ? guardContinuousActorIo(registration.worldPolicy, {
+                    // 可信工具命令（continuous-test/-diff/-browser/-commit）只进入
+                    // world 端口（模板骨架面）；actor 端口拿不到提交能力。
+                    ...(registration.trusted === undefined
+                      ? {}
+                      : { trusted: registration.trusted }),
+                    ...(registration.testRunner === undefined
+                      ? {}
+                      : { testRunner: registration.testRunner }),
+                  })
+                : undefined;
+            },
             journal: dynamicWorkflowJournal,
             logger,
             // 进度投影的接缝：一条引擎事件 → 一条父会话的会话事件 → v4 的 workflowRuns 状态键。
@@ -745,7 +788,68 @@ export async function createZCodeApp(options: ZCodeAppOptions): Promise<ZCodeApp
             ...(isDynamicWorkflowTaskLinkStore(sessionStore)
               ? { taskLinkStore: sessionStore }
               : {}),
+            // CT-15 修复依据（真实 E2E 暴露）：session_task_link.parent_session_id 对
+            // session(id) 有 FK；普通会话的首条用户输入已把父会话落库，而 Host 受控创建的
+            // Continuous 执行会话（ctexec-*）没有任何用户轮——持久化是惰性的，行不存在，
+            // actor 会话建 link 时报 FOREIGN KEY constraint failed，managed run 必然失败。
+            // 这里给出「建 link 前确保持久化父会话」的接缝：managed run 属于父会话的外部
+            // 活动，落库语义正确；已持久化的普通会话走 ensureSessionPersisted 的既有
+            // no-op 分支，行为零变化。
+            ensureParentSessionPersisted: () =>
+              getRuntime().ensureSessionPersistedForExternalActivity("dynamic workflow run"),
+            // CT-04 预算闸门接缝（规格 §11「最小接缝」）：只有 Host 登记过闸门的 managed run
+            // 会被包装；其余 runId 原样返回，普通 Workflow 行为零改动。
+            ...(options.continuousManagedCycles?.modelBudgetGateFor === undefined
+              ? {}
+              : {
+                  wrapModelRequestAdmission: ({ runId, admission }) =>
+                    options.continuousManagedCycles?.modelBudgetGateFor?.(runId)?.wrap(admission) ??
+                    admission,
+                }),
+            // CT-06 决策闸门接缝（规格 §8）：同一条登记模式——只有 Host 登记过决策闸门的
+            // managed run 的 escalate 被替换为「持久化决策 + defer」；其余 runId 原端口，
+            // 普通 Workflow 的 escalation 逐字不变。
+            ...(options.continuousManagedCycles?.decisionGateFor === undefined
+              ? {}
+              : {
+                  wrapEscalatePort: ({ runId, escalatePort }) =>
+                    options.continuousManagedCycles?.decisionGateFor?.(runId)?.wrap(escalatePort) ??
+                    escalatePort,
+                }),
           });
+    // Continuous managed cycle 的执行适配器（CT-03 专用组装）：只在三件事同时成立时构造——
+    //   1. 开关（continuousManagedCycles.enabled，默认关闭，规格 §13；Host 接线属 CT-05+）；
+    //   2. dwf run service 在场（journal 窄化失败即不构造，与普通 Workflow 同一条降级）；
+    //   3. journal 带按序报告读面（报告导入的取数源；缺席即不装配，绝不退回有界化读面）。
+    // 适配器持有的是 run service 与 journal 的窄视图，不建第二个业务状态源；未构造时
+    // app 不暴露 continuousManagedCycleExecution，v4 命令面回答能力不支持（回滚位）。
+    const continuousManagedCyclePort =
+      options.continuousManagedCycles?.enabled === true &&
+      dynamicWorkflowRunPort !== undefined &&
+      dynamicWorkflowJournal !== undefined &&
+      supportsSequencedReportReads(dynamicWorkflowJournal)
+        ? createContinuousExecutionAdapter({
+            runService: dynamicWorkflowRunPort,
+            journal: dynamicWorkflowJournal,
+            reportReader: dynamicWorkflowJournal,
+            // 评审修复（CT-12 遗留缺口）：冻结配置的并发上限传入引擎 caps——登记先于
+            // submitOnce（wire 执行端口固定顺序），这里按 Run ID 现读登记处。
+            ...(options.continuousManagedCycles?.maxConcurrentActorsFor === undefined
+              ? {}
+              : {
+                  maxConcurrencyFor: options.continuousManagedCycles.maxConcurrentActorsFor,
+                }),
+            beforeSubmit: (input) =>
+              requireContinuousManagedGuards(options.continuousManagedCycles, input),
+            beforeResume: (ref, cwd) =>
+              requireContinuousRunRegistration(
+                options.continuousManagedCycles,
+                ref.workflowRunId,
+                cwd,
+              ),
+            logger,
+          })
+        : undefined;
     // dwf snippet service：EvalWorkflowSnippet 的执行面。刻意**不**依赖 dwf journal——
     // snippet 完全瞬态（内存 journal），不该被 run service 的 durability 前提连坐；
     // 所以即使 run 端口因 journal 缺席而不构造，实验通道仍然可用。
@@ -754,6 +858,14 @@ export async function createZCodeApp(options: ZCodeAppOptions): Promise<ZCodeApp
       fileSystemPort,
       logger,
     });
+    // CT-12：登记处绑定执行适配器——预算闸门/IO 守卫/挂起等待共享适配器的同一本地准入
+    //（模型预算与 IO 绑定同一执行准入，ticket CT-12）。登记命令经 app 方法进入 store。
+    const continuousManagedRunStore = options.continuousManagedCycles?.store;
+    if (continuousManagedCyclePort !== undefined && continuousManagedRunStore !== undefined) {
+      continuousManagedRunStore.bindExecutionAdapter(
+        registrationAdapterViewOf(continuousManagedCyclePort),
+      );
+    }
     // 模型目录：工具层把用户说的模型名解析成 workflow run 的子代理选型（model-catalog-port.ts）。
     const modelCatalogPort = createModelCatalogPort({
       registry: options.providerRegistry,
@@ -1299,6 +1411,37 @@ export async function createZCodeApp(options: ZCodeAppOptions): Promise<ZCodeApp
             ) => {
               await prepareUserExecutionBoundary({ traceContext });
               return await getRuntime().amendWorkflowRunSettings({ ...input, traceContext });
+            },
+          }),
+      // Continuous managed cycle 执行面（CT-03）：分派器把 wire 命令折叠到适配器端口；
+      // 适配器缺席（开关关闭/装配条件不满足）时整个能力不注册，v4 命令面回能力不支持。
+      ...(continuousManagedCyclePort === undefined
+        ? {}
+        : {
+            continuousManagedCycleExecution: (
+              command: Parameters<NonNullable<ZCodeApp["continuousManagedCycleExecution"]>>[0],
+            ) => dispatchContinuousManagedCycleCommand(continuousManagedCyclePort, command),
+          }),
+      // CT-12：登记命令面。store 缺席（宿主未装配反向请求面/功能关闭）时不注册——
+      // v4 命令回能力不支持，Host 不给自主实施 capability（fail closed）。
+      ...(continuousManagedRunStore === undefined || continuousManagedCyclePort === undefined
+        ? {}
+        : {
+            continuousManagedRunRegistration: async (
+              payload: Parameters<NonNullable<ZCodeApp["continuousManagedRunRegistration"]>>[0],
+            ) => {
+              try {
+                return {
+                  ok: true as const,
+                  result: await continuousManagedRunStore.applyRegistration(payload),
+                };
+              } catch (error) {
+                if (error instanceof ContinuousRegistrationError) {
+                  return { ok: false as const, reason: error.reason, message: error.message };
+                }
+                // 非结构化异常按接线故障原样上抛（不折叠成业务拒绝）。
+                throw error;
+              }
             },
           }),
       ...createPluginFacadeForApp({ configResult, options, workingDirectory }),

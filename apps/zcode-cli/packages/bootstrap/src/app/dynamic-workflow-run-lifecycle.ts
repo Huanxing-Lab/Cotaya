@@ -8,6 +8,7 @@
 
 import type { Logger } from "@zcode/contracts";
 import type { JournalStorePort, RunSettlement } from "@zcode/dynamic-workflow";
+import type { ActorSessionQuiescence } from "./workflow-driver-quiescence.js";
 import {
   TERMINAL_RUN_STATUSES,
   type RunRegistryEntry,
@@ -46,6 +47,13 @@ interface RunServiceLifecycle {
   ): Promise<RunSettlement>;
   /** 见 {@link createRunServiceLifecycle} 的 close 说明。幂等。 */
   close(): Promise<void>;
+  /**
+   * 等待执行停止与统计收尾（CT-03 managed cycle）：**不只等 run-settled**。
+   * 结算 promise 落地后，再等 driver 的会话静默探针把被中止 turn 的尾巴（最后的消息持久化、
+   * 工具收尾）写完——有界（{@link ActorSessionQuiescence} 内部的上界），到点未静默也放行：
+   * 引擎结算是停止的权威证据，静默面是收尾证据，两者缺一不可、后者尽力而为。
+   */
+  waitForRunQuiescence(runId: string): Promise<void>;
   /** 关闭之后的 launch 是接线错误：抛，而不是给 contracts 的拒绝枚举加成员。 */
   assertOpen(): void;
   /** 活条目下出现终态行 ⇒ 外来写入，每个条目记一条 warn。 */
@@ -190,6 +198,35 @@ export function createRunServiceLifecycle(deps: RunServiceLifecycleDeps): RunSer
   };
 
   /**
+   * 等待执行停止与统计收尾（接口注释见上）。三个事实合成一条顺序：
+   *   1. 注册表没有条目（冷行 / 未知 run）→ 立即返回：本进程没有引擎，没有本地尾巴可等；
+   *      调用方（Host 的 settling 流程）按 journal 事实继续，晚到 usage 走账本的幂等结算（CT-04）。
+   *   2. `await entry.settlement`：引擎结算（永不 reject，见 {@link RunServiceLifecycle.trackSettlement}）。
+   *      绝不用定时器替代状态——这是 amend 等 supersede、close 等停机早已共用的那条纪律。
+   *   3. `await entry.quiescence?.quietSessions()`：被中止 turn 的收尾写完（有界；吞错——到点
+   *      未静默的会话只是拿不到转录接续证据，不是执行还活着的证明，引擎结算才是）。
+   *
+   * 幂等：settlement 与 quietSessions 都是可重复 await 的事实快照，重复调用不产生新副作用。
+   */
+  const waitForRunQuiescence = async (runId: string): Promise<void> => {
+    const entry = deps.runs.get(runId);
+    if (entry === undefined) return;
+    await entry.settlement;
+    const probe: ActorSessionQuiescence | undefined = entry.quiescence;
+    if (probe === undefined) return;
+    try {
+      await probe.quietSessions();
+    } catch (error: unknown) {
+      deps.logger?.warn?.("Dynamic workflow run quiescence probe failed", {
+        errorMessage: error instanceof Error ? error.message : String(error),
+        event: "dynamic_workflow.run.quiescence_probe_failed",
+        module: "bootstrap.app",
+        runId,
+      });
+    }
+  };
+
+  /**
    * 活条目下出现终态行 ⇒ 外来写入，每个条目记一条 warn。
    *
    * 第二个桌面实例冷恢复了同一个会话，它的孤儿收敛把本
@@ -220,6 +257,7 @@ export function createRunServiceLifecycle(deps: RunServiceLifecycleDeps): RunSer
     subscribeRunSettled,
     trackSettlement,
     close,
+    waitForRunQuiescence,
     assertOpen,
     noteForeignTerminalRow,
   };

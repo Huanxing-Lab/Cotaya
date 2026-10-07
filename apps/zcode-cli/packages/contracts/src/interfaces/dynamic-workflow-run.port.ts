@@ -194,7 +194,12 @@ export type DynamicWorkflowRunAmendResult =
  * 取消的发起方。`user` / `model` 是两条停止入口的 initiator；`{ superseded }` 是 amend 路径
  * 停下在飞前驱时传的：新 run 的 id 随原因一起落进前驱的结算袋（`supersededBy`）。
  */
-export type DynamicWorkflowRunCancelInitiator = "user" | "model" | { superseded: string };
+// interrupted 由宿主退出发起，保留恢复语义，不冒充用户取消。
+export type DynamicWorkflowRunCancelInitiator =
+  | "user"
+  | "model"
+  | "interrupted"
+  | { superseded: string };
 
 /**
  * run 快照：沿用 {@link WorkflowTaskSnapshot} 的形状（后台任务追踪器与通知管线按它读），

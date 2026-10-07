@@ -16,6 +16,13 @@ export type {
   DwfRunIntrospectionQueries,
   DwfRunLifeSpan,
 } from "./session-store/repositories/dwf-journal.js";
+// 按序报告读面（Continuous managed cycle 的报告导入取数源，CT-03）：类型出口与上组同处，
+// 能力探测（supportsSequencedReportReads）在 bootstrap 侧按同一签名判断。
+export type {
+  DwfSequencedReportItem,
+  DwfSequencedReportQueries,
+  DwfSequencedReportQuery,
+} from "./session-store/repositories/dwf-journal.js";
 export type {
   DwfRunDetailRow,
   DwfRunListItem,

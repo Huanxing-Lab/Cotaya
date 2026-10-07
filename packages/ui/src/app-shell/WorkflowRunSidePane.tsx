@@ -14,6 +14,7 @@ import {
   WorkflowRunResultSections,
   WorkflowRunStatusHeader,
 } from "@/app-shell/WorkflowRunSidePaneSections.js";
+import { WorkflowRunContinuousCycleSummary } from "@/app-shell/WorkflowRunContinuousCycleSummary.js";
 import {
   useWorkflowRunPaneSettings,
   workflowRunTabScope,
@@ -370,6 +371,10 @@ const WorkflowRunContent = memo(function WorkflowRunContent({
           open={settings.popover.open}
           run={run}
         />
+      )}
+
+      {tab.continuousCycle === undefined ? null : (
+        <WorkflowRunContinuousCycleSummary summary={tab.continuousCycle} />
       )}
 
       {provenance === undefined ? null : (

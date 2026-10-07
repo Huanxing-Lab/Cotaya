@@ -1,0 +1,11 @@
+// 修复依据：CLI 子 workspace 的包（telemetry/debug 等）此前没有自己的 oxlint 配置，
+// oxlint 会沿目录向上发现仓库根 .oxlintrc.json 并意外继承其 max-lines 等规则——而根配置
+// 的 ignorePatterns 已明确列出 "apps/zcode-cli"（意图是 CLI 不受根配置约束），该意图在
+// 子目录运行 lint script 时无法生效（--no-ignore 的包显式绕过；普通模式下 ignorePatterns
+// 相对 cwd 解析也不匹配）。这里放一份显式的空规则配置阻断向上继承，恢复根配置的既有
+// 边界：CLI 各包沿用 oxlint 默认规则集（与根配置出现前一致）。若未来要给 CLI 加规则，
+// 在本文件显式声明，不再依赖意外的配置继承。
+{
+  "$schema": "../node_modules/oxlint/configuration_schema.json",
+  "rules": {}
+}

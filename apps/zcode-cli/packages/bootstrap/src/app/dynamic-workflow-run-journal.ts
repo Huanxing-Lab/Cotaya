@@ -8,7 +8,11 @@
 // 这里的每一条探测都遵守同一条纪律：store 是端口、实现可替换，所以按能力探测而不是 instanceof；
 // 缺席即**可见降级**（对应读面不实现 / 回空 / 不构造），绝不静默退回内存实现。
 
-import type { DwfRunIntrospectionQueries, DwfRunSessionListItem } from "@zcode/adapters/storage";
+import type {
+  DwfRunIntrospectionQueries,
+  DwfRunSessionListItem,
+  DwfSequencedReportQueries,
+} from "@zcode/adapters/storage";
 import type { CreateSessionTaskLinkInput, Logger, SessionStorePort } from "@zcode/contracts";
 import type { JournalStorePort, RunRecord } from "@zcode/dynamic-workflow";
 
@@ -131,5 +135,20 @@ export function supportsRunIntrospection(
     typeof candidate.getRunRow === "function" &&
     typeof candidate.listRecentLogEvents === "function" &&
     typeof candidate.listRuns === "function"
+  );
+}
+
+/**
+ * journal 是否带**按序报告读面**（Continuous managed cycle 的报告导入取数源，CT-03）。
+ * 签名的唯一来源是 adapters 的 {@link DwfSequencedReportQueries}（`import type`，运行时零依赖），
+ * 与 {@link supportsRunIntrospection} 同一条纪律：这条查询不在引擎的 {@link JournalStorePort} 上，
+ * 只能靠能力探测接上，签名漂移要在这里被探测到而不是静默降级。缺席即 managed 执行适配器
+ * 不组装（可见降级：Continuous 的报告导入无取数源），绝不退回有界化的 listEvents 读面。
+ */
+export function supportsSequencedReportReads(
+  journal: JournalStorePort,
+): journal is JournalStorePort & DwfSequencedReportQueries {
+  return (
+    typeof (journal as Partial<DwfSequencedReportQueries>).listSequencedReportItems === "function"
   );
 }

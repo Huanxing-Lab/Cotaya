@@ -181,6 +181,47 @@ export interface ZCodeAppOptions {
   onWorkflowEvent?: (event: WorkflowEvent) => void | Promise<void>;
   automationPort?: AutomationPort;
   offPeakPort?: OffPeakPort;
+  /**
+   * Continuous managed cycle 执行面的装配开关（CT-03）：默认关闭（规格 §13「功能默认关闭」），
+   * Host/桌面接线（CT-05+）显式打开。关闭时 app 不暴露 continuousManagedCycleExecution，
+   * v4 命令面回答能力不支持——这是「关闭 managed capability」的回滚位，不触碰普通 Workflow。
+   */
+  continuousManagedCycles?: {
+    enabled: boolean;
+    executionPolicyFor?: (
+      runId: string,
+    ) => import("./continuous-managed-guards.js").ContinuousManagedIoRegistration | undefined;
+    /**
+     * CT-04 预算闸门登记处：Host（CT-05 装配）在 submitOnce 前按 workflowRunId 登记该轮的
+     * 闸门；run service 经 wrapModelRequestAdmission 接缝为该 run 的每个 actor 准入端口包上
+     * 预算边界。缺席/未登记的 runId 不受影响（普通 Workflow 逐字不变）。
+     */
+    modelBudgetGateFor?: (
+      runId: string,
+    ) => import("./continuous-model-budget.js").ContinuousModelBudgetGate | undefined;
+    /**
+     * CT-06 决策闸门登记处：Host 装配（CT-07/08）在 submitOnce 前按 workflowRunId 登记该轮
+     * 的决策适配器；run service 经 wrapEscalatePort 接缝为该 run 的每个 actor 升级端口包上
+     * 「持久化 Decision + 撤销候选写入许可 + 结构化 defer」。缺席/未登记的 runId 的
+     * escalation 逐字不变（普通 Workflow 不受影响）。
+     */
+    decisionGateFor?: (
+      runId: string,
+    ) => import("./continuous-decision-adapter.js").ContinuousDecisionGate | undefined;
+    /**
+     * CT-12 登记处实例：协议宿主（workspace-model-runtime）创建并注入——它持有 CLI→Host
+     * 反向请求面（context.requestClient）。在场且 enabled 时 app 暴露
+     * continuousManagedRunRegistration（v4 登记命令的收件人），并把执行适配器绑给它
+     * （模型预算/IO/挂起等待共享同一本地准入）。登记在 submitOnce 前到达，恢复/继续前重建。
+     */
+    store?: import("./continuous-registration.js").ContinuousManagedRunStore;
+    /**
+     * 评审修复（CT-12 遗留缺口）：冻结配置的并发上限查询（登记处持有）。执行适配器在
+     * submitOnce 时按 Run ID 现读并传入引擎 caps——「10 并发上限来自冻结配置，不能退回
+     * CPU 默认值」（ticket CT-12）。缺省不传（天花板兜底），fixture 直连不受影响。
+     */
+    maxConcurrentActorsFor?: (runId: string) => number | undefined;
+  };
   /** 首次真实用户执行或 cold-resume fallback 时解析一次，之后由 app 生命周期缓存。 */
   resolveInitialBashShellSelection?: () => Promise<ExecutionShellSelection | undefined>;
   /** Trusted embedder policy; workspace/project files cannot populate this field. */
@@ -447,6 +488,60 @@ export interface ZCodeApp {
   amendWorkflowRunSettings?(
     input: Omit<AmendWorkflowRunSettingsInput, "traceContext">,
   ): Promise<AmendWorkflowRunSettingsResult>;
+  /**
+   * Continuous managed cycle 的受控执行命令面（CT-03；v4 命令 continuousManagedCycle 的收件人）。
+   * 可选能力：`continuousManagedCycles.enabled` 未开、dwf journal/run service 缺席、或 journal
+   * 不带按序报告读面时不注册——网关回结构化的能力不支持错误，绝不退回普通 prompt 自主执行。
+   * 业务拒绝以结构化 reason 返回（不是 throw）；分派器在 continuous-execution-command.ts。
+   */
+  continuousManagedCycleExecution?(command: {
+    op: import("@zcode/shared/continuous-protocol").ContinuousManagedCycleOp;
+    cycleId: string;
+    executionSessionId: string;
+    workflowRunId: string;
+    traceId: string;
+    epoch?: number;
+    reason?: string;
+    afterSequence?: number;
+    input?: import("@zcode/shared/continuous-protocol").ContinuousManagedCycleInput;
+  }): Promise<
+    | { ok: true; result: import("@zcode/shared/continuous-protocol").ContinuousManagedCycleResult }
+    | { ok: false; reason: string; message: string }
+  >;
+  /**
+   * Continuous managed run 的登记命令面（CT-12；v4 命令 continuousRegisterManagedRun 的
+   * 收件人）。可选能力：continuousManagedCycles.store 缺席（未装配/功能关闭/stub 宿主）时
+   * 不注册——网关回结构化的能力不支持，Host 不给自主实施 capability。成功回能力协商词表
+   * （含 interrupt）；登记失败以结构化 reason 拒绝（registration_invalid 等）。载荷字段与
+   * shared continuousRegisterManagedRunCommandSchema 一一对应（wire 层已 strict 校验）。
+   */
+  continuousManagedRunRegistration?(payload: {
+    programId: string;
+    cycleId: string;
+    executionSessionId: string;
+    workflowRunId: string;
+    traceId: string;
+    executionPath: string;
+    workspacePath: string;
+    leaseEpoch: number;
+    scope: import("@zcode/shared/continuous-protocol").ContinuousScopePolicy;
+    roles: Record<string, import("@zcode/shared/continuous-protocol").ContinuousActorRoleWire>;
+    builderRole?: string;
+    declaredTestCommands: Array<{ argv: string[] }>;
+    changeLimits: { maxFiles: number; maxChangedLines: number };
+    pricing: import("@zcode/shared/continuous-protocol").ContinuousPriceSnapshot;
+    requestCaps: import("@zcode/shared/continuous-protocol").ContinuousRequestCaps;
+    maxAttemptsPerRequest: number;
+    maxConcurrentActors: number;
+    baseCommit: string;
+    outputRoot?: string;
+  }): Promise<
+    | {
+        ok: true;
+        result: import("@zcode/shared/continuous-protocol").ContinuousRegisterManagedRunResult;
+      }
+    | { ok: false; reason: string; message: string }
+  >;
   /**
    * workflow run 的枚举面（重启后的发现查询）。可选能力，缺席条件同
    * {@link listDynamicWorkflowRunEvents}；journal 无枚举窄查询时回空列表（诚实答案——

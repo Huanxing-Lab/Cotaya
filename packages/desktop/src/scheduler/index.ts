@@ -23,6 +23,7 @@ import {
 } from "@zcode/shared";
 import type { MainToSchedulerMessage, SchedulerToMainMessage } from "./schedulerProtocol.js";
 import { settleManualClaimForDispatchResult } from "./manualClaimRelease.js";
+import { createContinuousWakeDispatcher } from "./continuousWake.js";
 import { settleOffPeakDispatchResult } from "./offPeakDispatchSettlement.js";
 import {
   startSchedulerResourceTelemetry,
@@ -56,6 +57,13 @@ const offPeakRetryAt = new Map<string, number>();
 const offPeakRetryAttempts = new Map<string, number>();
 /** 在途派发集合：仅用于退出时释放认领；迟到结果凭 offPeakTaskId 即可结算，不依赖它。 */
 const offPeakInFlight = new Set<string>();
+
+// ---- Continuous 到期唤醒（CT-07；只查询和唤醒，不派发）----
+// 只记投递事实（同窗口只送一次、失败重发）；查询/投递逻辑在 continuousWake.ts。
+const continuousWake = createContinuousWakeDispatcher({
+  log,
+  postMessage: (message) => parentPort?.postMessage(message),
+});
 
 let ticking = false;
 let tickRequested = false;
@@ -104,6 +112,8 @@ async function tick(): Promise<void> {
         for (const task of offPeakClaimed) {
           await handleOffPeakClaimed(task, now);
         }
+        // Continuous：只读到期查询 + 唤醒转发（不认领、不写业务表）。
+        await continuousWake.pollDue(now);
         // keep-awake：上报执行中计数，main 据此 + 设置决定 powerSaveBlocker。
         await reportOffPeakActiveCount();
       } catch (error) {
@@ -362,6 +372,7 @@ async function dispose(): Promise<void> {
   } catch {
     // 忽略。
   }
+  continuousWake.close();
   process.exit(0);
 }
 
@@ -409,6 +420,9 @@ parentPort?.on("message", (event: Electron.MessageEvent) => {
   if (msg.type === "scheduler-wake") {
     log("info", `manual run wake requested automation=${msg.automationId}`);
     requestTick();
+  }
+  if (msg.type === "continuous-wake-result") {
+    continuousWake.handleResult(msg);
   }
 });
 

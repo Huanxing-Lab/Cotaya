@@ -355,7 +355,58 @@ nodes:
     codeSeeds:
       - file: apps/zcode-cli/packages/core/src/runtime/methods/turn-model.ts
         symbol: applySubmissionExecutionState
+  - id: capability.continuous
+    kind: capability
+    label: Continuous managed improvement cycles
+    aliases:
+      - continuous
+      - managed cycle
+      - continuous program
+      - continuous cycle
+      - 持续改进
+      - 自主改进
+    codeSeeds:
+      - file: packages/services/src/continuous/contract.ts
+        symbol: IContinuousService
+      - file: packages/shared/src/continuous-protocol.ts
+        symbol: CONTINUOUS_MANAGED_CYCLE_CAPABILITY
+    invariants:
+      - Managed cycle capability is independent; legacy host capabilities (nativeDialogs,
+        workflowRunDeltas, etc.) must never enable it, and unsupported hosts get structured
+        capability_missing instead of a prompt-based fallback.
+      - workspacePath is the original repo for identity/display; executionPath is the Program
+        worktree for actual execution. They must not be mixed.
+  - id: service.continuous
+    kind: service
+    label: Continuous service contract (single business writer)
+    codeSeeds:
+      - symbol: IContinuousService
+        file: packages/services/src/continuous/contract.ts
+      - symbol: continuousModule
+        file: packages/services/src/continuous/module.ts
+  - id: shared.continuous-protocol
+    kind: service
+    label: Continuous wire protocol contract
+    codeSeeds:
+      - symbol: CONTINUOUS_METHODS
+        file: packages/shared/src/continuous-protocol.ts
+      - symbol: continuousCommandContextSchema
+        file: packages/shared/src/continuous-protocol.ts
 edges:
+  - from: capability.continuous
+    to: service.continuous
+    type: exposed-by
+    rank: must-inspect
+  - from: capability.continuous
+    to: shared.continuous-protocol
+    type: validated-by
+    rank: should-inspect
+  - from: capability.workspace-identity
+    to: shared.continuous-protocol
+    type: shares-identity-rule
+    rank: invariant-only
+    condition: continuousCommandContextSchema reuses resolveWorkspaceKey (workspaceIdentity
+      trimmed fallback) instead of a second identity rule.
   - from: capability.model-selection
     to: surface.conversation-model-control
     type: renders-in

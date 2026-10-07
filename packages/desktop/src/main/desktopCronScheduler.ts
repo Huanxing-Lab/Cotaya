@@ -31,6 +31,14 @@ export interface OffPeakRunResultPayload {
   failureKind?: "transient" | "permanent";
 }
 
+/** host → main 的 Continuous wake 送达回执（仅投递事实，不携带业务结果；CT-07）。 */
+export interface ContinuousWakeResultPayload {
+  programId: string;
+  dueAt: number;
+  ok: boolean;
+  error?: string;
+}
+
 interface CronSchedulerDeps {
   hostProcessLocalEnv: Record<string, string>;
   logger: {
@@ -49,6 +57,8 @@ export interface CronSchedulerHandle {
   handleCronRunResult: (result: CronRunResultPayload) => void;
   /** host 回报闲时任务派发结果时调用，转交给 scheduler 结算。 */
   handleOffPeakRunResult: (result: OffPeakRunResultPayload) => void;
+  /** host 回报 Continuous wake 送达结果时调用，转交 scheduler 记录投递事实。 */
+  handleContinuousWakeResult: (result: ContinuousWakeResultPayload) => void;
   /** manual run 落库后立即唤醒 scheduler，不等待下一次轮询。 */
   wake: (automationId: string) => void;
   /** app 退出前优雅收尾（通知 scheduler 释放认领 + 关库，兜底强杀）。 */
@@ -153,6 +163,52 @@ export function spawnCronScheduler(deps: CronSchedulerDeps): CronSchedulerHandle
       return;
     }
 
+    if (msg.type === "continuous-wake-request") {
+      // Continuous 到期唤醒（CT-07）：main 只按身份转发给本地 Host，不派发、不保存业务
+      // 状态（Cycle 创建/lease 归 Host 侧 Supervisor）。送达结果由 Host 异步回执。
+      if (isDisposing) {
+        postToScheduler({
+          type: "continuous-wake-result",
+          programId: msg.programId,
+          dueAt: msg.dueAt,
+          ok: false,
+          error: "app is shutting down",
+        });
+        return;
+      }
+      const host = deps.resolveDispatchHost();
+      if (!host) {
+        // 无可用 Host：如实回执失败（scheduler 在仍到期时重发）；不另起 Agent/Host。
+        postToScheduler({
+          type: "continuous-wake-result",
+          programId: msg.programId,
+          dueAt: msg.dueAt,
+          ok: false,
+          error: "no local host available",
+        });
+        return;
+      }
+      try {
+        host.postMessage({
+          type: HostMessageTypes.ContinuousWake,
+          programId: msg.programId,
+          workspacePath: msg.workspacePath,
+          ...(msg.workspaceIdentity ? { workspaceIdentity: msg.workspaceIdentity } : {}),
+          ...(msg.dueAt !== undefined ? { dueAt: msg.dueAt } : {}),
+        });
+      } catch (error) {
+        deps.logger.warn("[cron-scheduler] forward ContinuousWake to host failed:", error);
+        postToScheduler({
+          type: "continuous-wake-result",
+          programId: msg.programId,
+          dueAt: msg.dueAt,
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return;
+    }
+
     if (msg.type === "offpeak-dispatch-request") {
       const host = deps.resolveDispatchHost();
       if (!host) {
@@ -203,6 +259,9 @@ export function spawnCronScheduler(deps: CronSchedulerDeps): CronSchedulerHandle
     },
     handleOffPeakRunResult(result) {
       postToScheduler({ type: "offpeak-dispatch-result", ...result });
+    },
+    handleContinuousWakeResult(result) {
+      postToScheduler({ type: "continuous-wake-result", ...result });
     },
     wake(automationId) {
       if (isDisposing) return;

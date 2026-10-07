@@ -41,6 +41,7 @@ import { ControlHintTooltip } from "@/ControlHintTooltip.js";
 import { AutomationScheduledTemplateIcon } from "@/settings/AutomationScheduledTemplateIcon.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { useServices } from "@/hooks/useServices.js";
+import { useContinuousAvailability } from "@/hooks/useContinuous.js";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog.js";
 import { usePlatform } from "@/hooks/usePlatform.js";
 import {
@@ -143,6 +144,10 @@ import {
   type SavedWorkflowsOpenTarget,
 } from "@/settings/saved-workflows/SavedWorkflowsSection.js";
 import { AutomationTemplateSkeletonGrid } from "@/settings/AutomationTemplateSkeletonGrid.js";
+import {
+  ContinuousSection,
+  type ContinuousOpenRunTarget,
+} from "@/settings/continuous/ContinuousSection.js";
 
 interface AutomationsSectionProps {
   workspacePath?: string | null;
@@ -170,6 +175,8 @@ interface AutomationsSectionProps {
     workspacePath: string;
     workspaceIdentity?: string;
   }) => void;
+  /** Continuous（CT-08）：Cycle → 复用 WorkflowRunSidePane 的 Run 展示（附 Cycle 摘要）。 */
+  onOpenContinuousRun?: (target: ContinuousOpenRunTarget) => void;
 }
 
 export const AUTOMATIONS_TOAST_ANCHOR_ID = "automations-main-toast-anchor";
@@ -524,10 +531,12 @@ export function AutomationsSection({
   openWorkflow,
   onOpenWorkflowConsumed,
   onOpenSession,
+  onOpenContinuousRun,
 }: AutomationsSectionProps) {
   const { intl, locale } = useZCodeIntl();
   const platform = usePlatform();
-  const { clientScenesService, offPeakTaskService, zcodeAgentService } = useServices();
+  const { clientScenesService, offPeakTaskService, zcodeAgentService, continuousService } =
+    useServices();
   const confirmDialog = useConfirmDialog();
   const { openCodingPlanUpgrade } = useCodingPlanUpgradeDialog();
   const providerSettingsRead = useProviderSettingsView();
@@ -605,14 +614,28 @@ export function AutomationsSection({
   // 页面退回单一的「自动化」。快照未就绪时 enabled 为 false，宁可标题晚半拍长出切换，也不先闪
   // 一个标签再收起——中枢很少是用户进 app 后第一眼看的东西。
   const { enabled: dynamicWorkflowEnabled } = useDynamicWorkflowAvailability();
-  // 顶级标签「自动化 / 工作流」：页标题即切换。中枢已是跨项目视图，记忆不再按项目分桶，用 app 级单 key。
+  // Continuous（CT-08）：第三个顶级 tab 的门是 capability 探测结果（评审修复：原判据
+  // `continuousService !== undefined` 恒真——RemoteServiceAccess 的 lazy getter 对未注册
+  // channel 也返回 ProxyChannel 代理，Host 未装配时 tab 仍会渲染 unsupported 页，破坏
+  // 「默认关闭 = 隐藏」回滚位）。现在：ready/unsupported 才显示 tab（unsupported 进 tab
+  // 后由 ContinuousSection 展示旧 CLI/远程的解释页）；checking（版本错配探测未决）、
+  // disabled（关闭态 stub 的「未开启」应答，一期未决 4 修复）与 service_missing 都隐藏。
+  const continuousAvailability = useContinuousAvailability(continuousService);
+  const continuousTabEnabled =
+    continuousAvailability.status === "ready" || continuousAvailability.status === "unsupported";
+  // 顶级标签「自动化 / 工作流 / Continuous」：页标题即切换。中枢已是跨项目视图，记忆不再按项目
+  // 分桶，用 app 级单 key。
   const [storedPageTab, setPageTabState] = useState<AutomationsPageTab>(() =>
     readAutomationsPageTab(),
   );
   // 灰度关时忽略 sessionStorage 里记住的「工作流」：只收窄读出来的值，记忆本身不清，
-  // 灰度再开时用户仍然回到上次那一页。中枢只在 `pageTab === "workflow"` 分支挂载，
-  // 收窄 pageTab 等于 SavedWorkflowsSection 永不挂载，不会有一帧的误挂载去发查询。
-  const pageTab: AutomationsPageTab = dynamicWorkflowEnabled ? storedPageTab : "automation";
+  // 灰度再开时用户仍然回到上次那一页。Continuous 服务缺席同理收窄。
+  const pageTab: AutomationsPageTab =
+    storedPageTab === "workflow" && !dynamicWorkflowEnabled
+      ? "automation"
+      : storedPageTab === "continuous" && !continuousTabEnabled
+        ? "automation"
+        : storedPageTab;
   const setPageTab = useCallback((next: AutomationsPageTab) => {
     setPageTabState(next);
     writeAutomationsPageTab(next);
@@ -734,6 +757,12 @@ export function AutomationsSection({
       onOpenAutomationConsumed?.();
       return;
     }
+    // Continuous（CT-08）：第三个 tab 的深链；服务缺席（tab 不存在）时同样落到「自动化」。
+    if (openAutomationTab === "continuous") {
+      setPageTab(continuousTabEnabled ? "continuous" : "automation");
+      onOpenAutomationConsumed?.();
+      return;
+    }
     // 闲时详情导航由下方 offpeak 分支统一 setTab("idle") + 消费；这里若先按
     // 当前（可能尚未加载的）可见 tab 回退到 scheduled 并消费，会把 pending 的详情导航一并清掉。
     if (isOffPeakDetailNavigationId(openAutomationId)) return;
@@ -753,6 +782,7 @@ export function AutomationsSection({
     if (result.tab !== tab) setTab(result.tab);
     onOpenAutomationConsumed?.();
   }, [
+    continuousTabEnabled,
     dynamicWorkflowEnabled,
     loadedWorkspaceKey,
     offPeakStoreLoading,
@@ -1451,12 +1481,13 @@ export function AutomationsSection({
     );
   }
 
-  // 页标题即顶级切换：「自动化 / 工作流」两个标题词
+  // 页标题即顶级切换：「自动化 / 工作流 / Continuous」标题词
   // 并排，30/34 沿用 h1 的页面标题层级；副标题随标签换。
   const pageHeader = (
     <div className="flex flex-col gap-3">
       <AutomationsPageTitle
         workflowTabEnabled={dynamicWorkflowEnabled}
+        continuousTabEnabled={continuousTabEnabled}
         value={pageTab}
         onValueChange={setPageTab}
       />
@@ -1465,9 +1496,11 @@ export function AutomationsSection({
           id:
             pageTab === "workflow"
               ? "workflows.hub.description"
-              : hasAnyTasks
-                ? "automations.description.populated"
-                : "automations.description",
+              : pageTab === "continuous"
+                ? "continuous.page.description"
+                : hasAnyTasks
+                  ? "automations.description.populated"
+                  : "automations.description",
         })}
       </p>
     </div>
@@ -1485,6 +1518,18 @@ export function AutomationsSection({
         onOpenWorkflowArtifact={onOpenWorkflowArtifact}
         openWorkflow={openWorkflow}
         onOpenWorkflowConsumed={onOpenWorkflowConsumed}
+      />
+    );
+  }
+
+  // Continuous 第三个 tab（CT-08）：独立内容面，不与定时/闲时任务混排。
+  if (pageTab === "continuous") {
+    return (
+      <ContinuousSection
+        workspacePath={workspacePath}
+        workspaceIdentity={workspaceIdentity}
+        header={pageHeader}
+        onOpenRun={onOpenContinuousRun}
       />
     );
   }

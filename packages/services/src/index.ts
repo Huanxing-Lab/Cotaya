@@ -309,3 +309,29 @@ export type {
   FeedbackTicketType,
 } from "@zcode/shared";
 export { IClientConfigService } from "./client-config/clientConfig.js";
+
+// Continuous（长期自主改进）受控模块公开入口；实现细节在 src/continuous 内部（CT-00 锁定契约）。
+// IContinuousService 同时是类型与 RPC 描述符（Host register / renderer ProxyChannel 共用）；
+// IContinuousServiceFacade = 命令面 + 查询面（contract-interfaces.ts）的注册形状。
+// 修复 browser-safe（回归）：根入口会被 renderer/web 经 value import 拉进浏览器包（见上方
+// conversation share / onboarding 的同一约定），而 contract.ts 还会 value 再导出应用服务与
+// ContinuousWakeSource（node:crypto / node:fs / node:sqlite 链）——经根入口 value 导出会把这些
+// node:* 模块拉进 renderer 图、破坏 web/desktop renderer 构建（esbuild --platform=browser 实测
+// 17 处不可解析）。因此根入口只从叶子 contract-interfaces.ts（无 Node 依赖）导出描述符与接口
+// 类型，domain 类型经 type-only 再导出（编译期擦除，不拉模块图）；完整契约（含实现类）从
+// `@zcode/services/continuous` 子路径或 `@zcode/services/node` 消费，测试走模块内相对路径。
+export { IContinuousService } from "./continuous/contract-interfaces.js";
+export type {
+  IContinuousQueryService,
+  IContinuousServiceFacade,
+} from "./continuous/contract-interfaces.js";
+export type {
+  Candidate,
+  ContinuationRequest,
+  Cycle,
+  CycleHealthState,
+  CycleResult,
+  Decision,
+  Program,
+  WorkspaceLease,
+} from "./continuous/contract.js";

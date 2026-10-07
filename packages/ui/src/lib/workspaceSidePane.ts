@@ -239,8 +239,22 @@ export interface WorkflowRunSidePaneTab {
   runId: string;
   /** 打开时冻结的展示名，仅作投影缺席（run 被淘汰 / 冷启动）时的标题兜底。 */
   workflowName?: string;
-  /** 落点：展开这一站、列出全部、节头滚到顶。缺席即停在原处。 */
+  /** 落点：展开这一站、列出全部、滚到节头。缺席即停在原处。 */
   focusPhaseId?: string;
+  /**
+   * Continuous Cycle 摘要（CT-08，规格 §3「复用 Run 展示，新增 Cycle 摘要」）：
+   * managed cycle 的 run 没有会话内工具行（toolCallId 为空串），因果图按缺席处理；
+   * 这份冻结摘要让详情页顶部仍有 Cycle 事实（序号/状态/目标），不依赖会话投影。
+   */
+  continuousCycle?: ContinuousCycleSummary;
+}
+
+/** Continuous Cycle 的冻结摘要（打开时从服务 detail 读面带出；不在此推导业务状态）。 */
+export interface ContinuousCycleSummary {
+  cycleId: string;
+  sequence: number;
+  status: string;
+  programGoal: string;
 }
 
 export interface OpenWorkflowRunSideTabRequest {
@@ -250,6 +264,8 @@ export interface OpenWorkflowRunSideTabRequest {
   workflowName?: string;
   /** 落点：详情页展开这一站、列出全部、滚到节头。缺席即停在原处。 */
   phaseId?: string;
+  /** Continuous Cycle 摘要（CT-08）；普通 workflow run 不带。 */
+  continuousCycle?: ContinuousCycleSummary;
   /**
    * 「配置」之后面板跟着工作流走：
    * 把显示这个 run 的 tab **原地**换成新 run 的 tab——同一个位置、沿用它的名字与归属。没有这样的
@@ -821,6 +837,7 @@ function createWorkflowRunSidePaneTab(
     runId: options.runId,
     ...(options.workflowName ? { workflowName: options.workflowName } : {}),
     ...(options.phaseId ? { focusPhaseId: options.phaseId } : {}),
+    ...(options.continuousCycle ? { continuousCycle: options.continuousCycle } : {}),
   };
 }
 

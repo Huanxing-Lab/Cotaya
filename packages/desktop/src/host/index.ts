@@ -24,6 +24,19 @@ import {
   NetworkTelemetryChannelServer,
 } from "@zcode/rpc";
 import { registerHostNetworkTelemetry, stopHostNetworkTelemetry } from "./hostNetworkTelemetry.js";
+import {
+  clearContinuousWakeHandler,
+  dispatchContinuousWake,
+  registerContinuousWakeHandler,
+} from "./continuousWakeRouter.js";
+// CT-12：Continuous Host 装配（默认关闭；env 开启后构造 services 栈并注册 channel/wake）。
+import {
+  createContinuousHostRuntime,
+  isContinuousHostEnabled,
+  type ContinuousHostRuntime,
+} from "./continuousHost.js";
+// 一期未决 4 修复：关闭态 capability stub（实现类经 /continuous 子路径消费，根入口只导类型）。
+import { ContinuousDisabledService } from "@zcode/services/continuous";
 import { registerHostServiceResourceTelemetry } from "./hostServiceResourceTelemetry.js";
 import { resolveResourceTelemetryEnvironmentKey } from "./hostResourceTelemetryEnvironment.js";
 import { reportHostSessionCreate } from "./hostSessionCreateTelemetry.js";
@@ -44,6 +57,7 @@ import {
   IZCodeTaskService,
   IZCodeSessionService,
   ICuaPipSessionService,
+  IContinuousService,
   createZCodeAgentConnectionScope,
   type ZCodeAgentV4ClientMode,
   collectServiceMemoryDiagnostics,
@@ -1586,6 +1600,8 @@ console.error = (...args: unknown[]) => {
 let databaseStartup: ReturnType<typeof createHostDatabaseStartup> | undefined;
 const pendingStartupAttachments = new Map<string, () => void>();
 let activeServices: ServiceCollection | null = null;
+// CT-12：Continuous Host 装配态（env 开启才构造；装配失败保持 null = 功能关闭）。
+let continuousHostRuntime: ContinuousHostRuntime | null = null;
 let activeHostApiNetworkTransport: HostApiNetworkTransport | null = null;
 /** 本地 host services 的资源遥测订阅；远端连接的订阅由各自的 connection handle 持有。 */
 let activeLocalResourceTelemetry: IDisposable | null = null;
@@ -2162,10 +2178,43 @@ async function disposeHostResources(reason: string): Promise<HostShutdownResult>
     }
 
     const servicesToDispose = activeServices;
-    activeServices = null;
+    // 修复依据（CT-15 真实 E2E 实测）：interrupt 的 wire 命令经 late-bound agentRef
+    // （activeServices?.getOptional(IZCodeAgentService)）发出；原先在这里（shutdown
+    // phases 运行前）就置空 activeServices，正常退出的 continuous-interrupt 必然报
+    // 「zcodeAgentService 尚未初始化（continuous transport）」而无法 interrupt 在飞
+    // Cycle。改为 phases 完成后再清引用——service 资源释放仍由 servicesToDispose 在
+    // service-dispose 阶段执行， dispose 顺序语义不变。
+    // CT-12：退出收口用的装配引用先取（下方随即清空——中断命令要经 agent service 发出，
+    // 必须发生在 service-dispose 之前）。
+    const continuousRuntimeForShutdown = continuousHostRuntime;
+    // 装配态收口：先停新 wake（重复 wake 由 trigger key UNIQUE 幂等吸收），再清处理器与
+    // 装配引用；数据库/worktree/历史不删除（§3 回滚）。
+    continuousHostRuntime?.assembled.stop();
+    continuousHostRuntime = null;
+    clearContinuousWakeHandler();
     // Registry 是全部远端 connection 的唯一 owner；释放失败不能阻塞本地服务继续收口。
+    // CT-12：正常退出的 Continuous 收口——先停新 wake（handleWake 之后抛错）、interrupt
+    // 全部开放轮（保存 interrupted、suspended 确认保留）并等待工具收尾；interrupt 的 wire
+    // 命令经 agent service 发出，必须排在 service-dispose 之前。
+    const continuousShutdownPhases = continuousRuntimeForShutdown
+      ? [
+          {
+            name: "continuous-interrupt",
+            run: async () => {
+              const interrupted =
+                await continuousRuntimeForShutdown.assembled.interruptForShutdown("*");
+              logger.info("continuous cycles interrupted for shutdown", {
+                count: interrupted.length,
+                cycleIds: interrupted,
+              });
+            },
+            timeoutMs: 8_000,
+          },
+        ]
+      : [];
     const shutdownResult = await runHostShutdownPhases(
       [
+        ...continuousShutdownPhases,
         {
           name: "remote-registry-dispose",
           run: () => windowRemoteConnectionRegistry.dispose(),
@@ -2193,6 +2242,9 @@ async function disposeHostResources(reason: string): Promise<HostShutdownResult>
         timedOutPhases: shutdownResult.timedOutPhases,
       });
     }
+    // 见上方修复依据：phases（含 continuous-interrupt 的 wire 命令）完成后再清 services
+    // 引用；这里统一收口，后续路径继续读到 null。
+    activeServices = null;
     activeHostApiNetworkTransport = null;
     return shutdownResult;
   })();
@@ -2423,6 +2475,37 @@ parentPort.on("message", async (e: Electron.MessageEvent) => {
           // 确定性模型/凭证配置错误重试不会自愈；交给 scheduler 转 failed，
           // 未知及生命周期错误仍按 transient 保持原退避语义。
           failureKind: error instanceof OffPeakPermanentDispatchError ? "permanent" : "transient",
+        });
+      }
+    })();
+    return;
+  }
+
+  if (msg.type === HostMessageTypes.ContinuousWake) {
+    // Continuous 到期唤醒（CT-07）：Host 只路由到已装配的处理器（supervisor/恢复服务的
+    // 唤醒入口），不在这里做业务判断；无处理器（功能默认关闭）回执失败，scheduler 在仍
+    // 到期时重发——绝不退回普通 prompt 自主执行。
+    void (async () => {
+      try {
+        await dispatchContinuousWake({
+          programId: msg.programId,
+          workspacePath: msg.workspacePath,
+          ...(msg.workspaceIdentity ? { workspaceIdentity: msg.workspaceIdentity } : {}),
+          dueAt: msg.dueAt,
+        });
+        parentPort.postMessage({
+          type: HostResponseTypes.ContinuousWakeResult,
+          programId: msg.programId,
+          dueAt: msg.dueAt,
+          ok: true,
+        });
+      } catch (error) {
+        parentPort.postMessage({
+          type: HostResponseTypes.ContinuousWakeResult,
+          programId: msg.programId,
+          dueAt: msg.dueAt,
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
         });
       }
     })();
@@ -2878,6 +2961,11 @@ parentPort.on("message", async (e: Electron.MessageEvent) => {
               // CUA 顶部提示属于物理 Windows 桌面投影；非 Windows 和远端 authority 都不得上报。
               cuaOperationStateReporter:
                 process.platform === "win32" ? cuaOperationStateReporter : undefined,
+              // CT-12：CLI→Host 反向请求（预算/结算/拒绝通知/决策）经 agent client 拦截。
+              continuousAgentRequestHandler: (method, params) =>
+                continuousHostRuntime
+                  ? continuousHostRuntime.handleAgentClientRequest(method, params)
+                  : Promise.resolve({ handled: false }),
             });
             activeServices = initializedServices;
             activeHostApiNetworkTransport = hostApiNetworkTransport;
@@ -2895,6 +2983,65 @@ parentPort.on("message", async (e: Electron.MessageEvent) => {
           services.register(IZCodeTaskService, reportingZCodeTaskService);
         }
         wireLocalResourceTelemetry(services);
+        // CT-12：Continuous Host 装配（env 门，默认关闭）。装配失败只记日志并保持功能
+        // 关闭（capability 应答 supported:false → tab 隐藏，E-24/E-27 形态）；agent
+        // service 经 late-bound ref 在首次执行命令时解析。
+        if (isContinuousHostEnabled()) {
+          try {
+            const runtime = await createContinuousHostRuntime({
+              get: () => activeServices?.getOptional(IZCodeAgentService) ?? undefined,
+            });
+            services.register(IContinuousService, runtime.assembled.commandService);
+            // wake 路由（CT-07 的注册制处理器）：stopped 后抛错 → main 回执失败 →
+            // scheduler 重发；不另起执行者。
+            registerContinuousWakeHandler(async (wake) => {
+              if (!continuousHostRuntime) {
+                throw new Error("continuous host runtime missing (feature disabled)");
+              }
+              await continuousHostRuntime.assembled.handleWake(wake.programId);
+            });
+            continuousHostRuntime = runtime;
+            logger.info("continuous host assembled (ServiceChannels.Continuous registered)");
+            // CT-16 修复：Host 启动核对（规格 §10 恢复顺序 / D2「重启先核对未结束轮」）。
+            // 修复依据：装配此前只有 wake/interrupt 入口，重启后未结束 Cycle（如退出发的
+            // interrupted）要等下一次 cadence wake（数小时后）才被核对，违反「重启先核对
+            // 未结束轮，再调度未来轮」。这里在装配完成后立即核对全部 workspace；恢复含
+            // wire IO（可能复活执行会话），不阻塞 Host init，失败记 warn——wake 链路仍在，
+            // 核对本身幂等（open cycle 约束 + trigger key 唯一吸收重复）。
+            void runtime.assembled
+              .recoverAllOnStartup()
+              .then((reports) => {
+                logger.info("continuous startup recovery reconciled", {
+                  workspaces: reports.length,
+                  reconciled: reports.reduce(
+                    (total, report) => total + report.reconciled.length,
+                    0,
+                  ),
+                });
+              })
+              .catch((error: unknown) => {
+                logger.warn("continuous startup recovery failed; wake path remains", {
+                  errorMessage: error instanceof Error ? error.message : String(error),
+                });
+              });
+          } catch (error) {
+            continuousHostRuntime = null;
+            logger.warn("continuous host assembly failed; feature stays disabled", {
+              errorMessage: error instanceof Error ? error.message : String(error),
+            });
+            // 装配失败同样回落关闭态 stub（与 else 分支同语义），不留沉默 channel。
+            services.register(IContinuousService, new ContinuousDisabledService());
+          }
+        } else {
+          // 一期未决 4 修复：关闭态注册静态 stub——capability 立即以 continuous_not_enabled
+          // 拒绝（UI 落 disabled 隐藏态）、其余命令 fail closed，取代「channel 未注册」的
+          // 沉默关闭位。未注册 channel 的 renderer 请求会在 ChannelServer 的
+          // pendingRequests 里永久排队（每次打开 Automations 页新增 1-2 条，无上界）；
+          // 注册 stub 后探测立即落定，堆积从源头消失。tab 隐藏行为不变（E-24/E-27；
+          // 「未开启」disabled ≠ 「不支持」unsupported——后者才进 tab 展示解释面），
+          // stub 零业务状态，「功能默认关闭」语义不变——只是把「沉默」换成「明确说不」。
+          services.register(IContinuousService, new ContinuousDisabledService());
+        }
         hasDisposedHostResources = false;
         disposeHostResourcesInFlight = null;
         const agentWarmupTargets =

@@ -157,6 +157,7 @@ export function launchDynamicWorkflowRun(
     toolCallId,
   } = input;
   const childSpawn = dynamicWorkflowChildSpawn();
+  const worldPorts = deps.worldPortsFor?.(runId);
   // 本 run 自己上界的**第二个**执行点：调度器管「还能不能再派一个 ask」，闸门管「已经在跑的那些下一次请求能不能发出去」。
   // 起点就是这次启动的 caps（submit 是钳过的请求值，resume 是 journal 行里的那一份），所以一个
   // 从未被 retune 过的 run 永远走闸门的快路径——不发事件、不持票、与从前逐字相同。
@@ -218,8 +219,8 @@ export function launchDynamicWorkflowRun(
         });
       }
     },
-    executionPort: deps.executionPort,
-    fileSystemPort: deps.fileSystemPort,
+    executionPort: worldPorts?.executionPort ?? deps.executionPort,
+    fileSystemPort: worldPorts?.fileSystemPort ?? deps.fileSystemPort,
     escalationRegistry,
     cwd,
     // 用户面产物的落点。会话作用域取**本服务
@@ -264,6 +265,16 @@ export function launchDynamicWorkflowRun(
       submitProfile,
       modelRequestAdmission,
     }) => {
+      // CT-04 准入包装点（见 DynamicWorkflowRunServiceDeps.wrapModelRequestAdmission）：
+      // driver 组装好的准入端口（治理器 + 座位）在这里按 runId 交给他方包装。缺席或返回
+      // 原值时逐字不变；返回 undefined 也合法（本就没有治理器的装配）。
+      const wrappedAdmission =
+        deps.wrapModelRequestAdmission?.({ runId, admission: modelRequestAdmission }) ??
+        modelRequestAdmission;
+      // CT-06 升级端口包装点（见 DynamicWorkflowRunServiceDeps.wrapEscalatePort）：同一
+      // 论证——缺席或返回原端口时普通 Workflow 的 escalation 逐字不变；只有 managed cycle
+      // 登记过的 runId 拿到决策闸门包装（escalate → 持久化决策 + 结构化 defer，不停驻）。
+      const wrappedEscalatePort = deps.wrapEscalatePort?.({ runId, escalatePort }) ?? escalatePort;
       const runtime = deps.createActorRuntime({
         runId,
         sessionId,
@@ -272,10 +283,10 @@ export function launchDynamicWorkflowRun(
         submitPort,
         // 工厂据 profile 决定端口是否注入、声明是否 typed（create-app.ts 的 createActorRuntime）。
         submitProfile,
-        // 请求级准入端口与两个工具端口同路下传到 runtime deps。
-        ...(modelRequestAdmission === undefined ? {} : { modelRequestAdmission }),
+        // 请求级准入端口与两个工具端口同路下传到 runtime deps（可能已带预算闸门）。
+        ...(wrappedAdmission === undefined ? {} : { modelRequestAdmission: wrappedAdmission }),
         // 升级端口与 submit 端口同路下传：core 侧的注册门以端口存在为准，所以恒传。
-        escalatePort,
+        escalatePort: wrappedEscalatePort,
         // resume 的 pin：这个 actor 上一次跑在哪个模型上。必须在**造 runtime 之前**读，
         // 因为下面那行 journalActorResolvedModel 会把这一轮的解析结果写回同一个字段。
         //
@@ -470,6 +481,14 @@ async function persistActorSession(input: {
   const title = `workflow subagent ${refToString(actor)}`;
 
   await runtime.ensureSessionPersistedForExternalActivity(title);
+
+  // CT-15 修复依据：parent_session_id 对 session(id) 有 FK；managed run 的父会话
+  // （Host 受控创建、无用户轮）尚未落库时先补落——ensureSessionPersisted 对已持久化
+  // 会话是 no-op，普通 Workflow 路径行为零变化。不补落则 link 插入报
+  // FOREIGN KEY constraint failed，整个 managed run 在首个 actor 会话处失败。
+  if (parentSessionId !== undefined && deps.taskLinkStore !== undefined) {
+    await deps.ensureParentSessionPersisted?.();
+  }
 
   if (deps.taskLinkStore) {
     await deps.taskLinkStore.createSessionTaskLink({

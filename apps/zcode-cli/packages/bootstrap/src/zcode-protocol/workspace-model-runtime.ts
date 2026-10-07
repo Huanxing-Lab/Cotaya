@@ -15,6 +15,10 @@ import {
 } from "./server-types.js";
 import { runSessionModelConfigMutation } from "../zcode-protocol-v4/model-config-mutation.js";
 import { createProviderRuntimeHeadersPort } from "./provider-runtime-headers.js";
+import {
+  continuousManagedCyclesOptionFor,
+  createContinuousManagedRunStore,
+} from "../app/continuous-registration.js";
 
 export async function readWorkspacePresentation(
   context: ZCodeProtocolAgentServerContext,
@@ -73,10 +77,19 @@ export async function createWorkspaceZCodeApp(
 ): Promise<ZCodeApp> {
   const providerRuntimeHeadersPort =
     options.providerRuntimeHeadersPort ?? createProviderRuntimeHeadersPort(context, workspace);
+  // CT-12：managed run 登记处——持有 CLI→Host 反向请求面（context.requestClient），在
+  // submitOnce 前由 Host 的登记命令填充（预算/决策/IO 端口按 Run ID 就位）。store 在场
+  // 即暴露登记与执行命令面；未登记的 run 被 requireContinuousManagedGuards 拒绝（fail
+  // closed），普通 Workflow/Automation 不受影响——回滚位在 Host（停止装配/停止发命令）。
+  const continuousManagedRunStore = createContinuousManagedRunStore({
+    request: (method, params, resultSchema) =>
+      context.requestClient(method as never, params, resultSchema as never),
+  });
   return context.deps.createZCodeApp({
     ...options,
     platform: context.deps.platform,
     providerRuntimeHeadersPort,
+    continuousManagedCycles: continuousManagedCyclesOptionFor(continuousManagedRunStore),
     runtimeConfig: {
       ...options.runtimeConfig,
       // createZCodeApp 会把 workingDirectory 规范化为执行 cwd。把协议入口的

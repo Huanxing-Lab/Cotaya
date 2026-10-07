@@ -62,6 +62,8 @@ export {
   getZCodeDataRootDir,
   getConversationWorkspaceDir,
   getAppConfigDir,
+  // CT-12：桌面 Continuous 装配与 TaskIndexRepo 共用 tasks-index 路径（迁移幂等 additive）。
+  getTasksIndexDatabasePath,
   getExportLogStageDir,
   getExportLogDir,
   getFeedbackRootDir,
@@ -85,6 +87,10 @@ export {
 export { createCredentialService } from "./credential/credentialService.js";
 export { createBroadcastService } from "./broadcast/broadcastService.js";
 export { createZCodeAgentService } from "./zcode-agent/zcodeAgentService.js";
+// CT-12：桌面 Continuous 装配需要 host 侧 v4 命令信封（continuousManagedCycle/Register）与
+// tasks-index 迁移入口；均为既有实现的可选再导出，不新增行为。
+export { createHostCommandEnvelope } from "./zcode-agent/zcodeV4HostCommand.js";
+export { TaskIndexRepo } from "./session/taskIndexRepo.js";
 export { createZCodeTaskServiceAdapter } from "./zcode-agent/zcodeTaskServiceAdapter.js";
 export { createZCodeSessionService } from "./zcode-session/zcodeSessionService.js";
 export {
@@ -257,6 +263,8 @@ export {
 export { AutomationService, InvalidCronExprError } from "./session/automationService.js";
 // 闲时任务与 automation 同库不同表；类型/常量全独立。
 export { OffPeakTaskRepo, OFF_PEAK_CLAIM_STALE_MS } from "./session/offPeakTaskRepo.js";
+// Continuous 到期唤醒的只读查询面（scheduler 只查询和唤醒，不派发；CT-07）。
+export { ContinuousWakeSource, type ContinuousDueProgram } from "./continuous/contract.js";
 // host 域终态回填 files_changed 复用现有 task diff 汇总。
 export { buildTaskChangeSummary } from "./session/taskChangeSummary.js";
 export { OffPeakTaskService } from "./session/offPeakTaskService.js";
@@ -1375,6 +1383,14 @@ export function createLocalServices(options: {
   };
   /** Windows desktop-local Host 的 CUA turn 状态投影；其它 authority 会在装配层拒绝。 */
   cuaOperationStateReporter?: CuaOperationStateReporter;
+  /**
+   * CT-12：Continuous CLI→Host 反向请求的宿主侧拦截（desktop host 装配 continuous 栈后
+   * 注入）。缺席 = 功能未装配，这组 method 走默认 method-not-found（零行为变化）。
+   */
+  continuousAgentRequestHandler?: (
+    method: string,
+    params: unknown,
+  ) => Promise<{ handled: boolean; result?: unknown; error?: { code: number; message: string } }>;
 }): ServiceCollection {
   const isDesktopAttachedRemote = options?.serviceAuthorityMode === "desktop-attached-remote";
   // host / remote server 以前直接沿用当前进程环境启动后续服务。
@@ -2147,6 +2163,10 @@ export function createLocalServices(options: {
     spawnFallbackCwd: options?.zcodeAgentSpawnFallbackCwd,
     // browser-use：host→main 执行桥透传给 agent service 的 onRequest browserExecute 路由。
     browserControlExecutor: options?.browserControlExecutor,
+    // CT-12：Continuous 反向请求（预算/结算/拒绝通知/决策）经 agent client 的 onRequest 拦截。
+    ...(options?.continuousAgentRequestHandler
+      ? { continuousAgentRequestHandler: options.continuousAgentRequestHandler }
+      : {}),
     // 官方 Server MCP 身份头：host 是唯一身份权威，Agent 经反向请求索取。
     // Provider 存在性读取正式 Model Selection View；不恢复旧 Provider Snapshot。
     officialMcpAuthHeadersResolver: createOfficialMcpAuthHeadersResolver({
